@@ -1,4 +1,4 @@
-CFLAGS = -target x86_64-pc-none-elf -mcpu=x86_64 -ffreestanding -masm=intel -mcmodel=large -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -fno-PIC -O2 -Wall -Wextra
+CFLAGS = -target x86_64-pc-none-elf -mcpu=x86_64 -ffreestanding -masm=intel -mcmodel=kernel -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -fno-PIC -O2 -Wall -Wextra
 LDFLAGS = -target x86_64-pc-none-elf -mcpu=x86_64 -ffreestanding -static -nostdlib -O2
 
 HEADERS = $(wildcard *.h)
