@@ -1,6 +1,10 @@
 extern kernel_main
 
+extern KERNEL_LMA
 extern kernel_sector_count
+extern kernel_text_page_end
+extern kernel_rodata_page_end
+extern kernel_data_page_end
 
 ; Initial page for kernel stack
 stack equ 0x7F000
@@ -13,8 +17,11 @@ pd_id equ 0x7C000
 pdpt_stack equ 0x7B000
 pd_stack equ 0x7A000
 pt_stack equ 0x79000
-boot_page_tables_start equ 0x79000
-boot_page_tables_length equ 0x6000
+pdpt_kernel equ 0x78000
+pd_kernel equ 0x77000
+pt_kernel equ 0x76000
+boot_page_tables_start equ 0x76000
+boot_page_tables_length equ 0x9000
 
 ; Addresses of variables used by the bootloader
 
@@ -46,6 +53,7 @@ VBE_SET_LINEAR_FB equ 1 << 14
 
 ; CPU constants
 
+CPUID_NX equ 1 << 20
 CPUID_LONG_MODE equ 1 << 29
 CR0_PE equ 1 << 0
 CR0_PG equ 1 << 31
@@ -53,6 +61,7 @@ CR4_PAE equ 1 << 5
 CR4_PGE equ 1 << 7
 EFER_MSR equ 0xC0000080
 EFER_MSR_LME equ 1 << 8
+EFER_MSR_NXE equ 1 << 11
 
 GDT_RW equ 1 << 1
 GDT_EXECUTABLE equ 1 << 3
@@ -66,6 +75,7 @@ PAGE_PRESENT equ 1 << 0
 PAGE_WRITE equ 1 << 1
 PAGE_LARGE equ 1 << 7
 PAGE_GLOBAL equ 1 << 8
+PAGE_NX equ 1 << 63
 
 ; Kernel constants
 
@@ -87,6 +97,7 @@ section .boot
 ; 6 - VBE version is less than 2.0
 ; 7 - Failed to find appropriate video mode
 ; 8 - Failed to set video mode
+; 9 - No NX bit
 
 bits 16
 
@@ -102,22 +113,28 @@ bits 16
   ; Store drive index in memory
   mov [drive_index], dl
 
-; Check if long mode is available
-test_long_mode:
+; Check if long mode and NX bit is available
+test_cpuid:
   ; CPUID EAX=80000000h - Get Highest Extended Function Implemented
-  ; Check if CPUID EAX=80000001h can be called - if not, long mode is not available
+  ; Check if CPUID EAX=80000001h can be called - if not, long mode is not available.
   mov eax, 0x80000000
   cpuid
   cmp eax, 0x80000001
-  jb .fail
+  jb .no_long_mode
   ; CPUID EAX=80000001h - Extended Processor Info and Feature Bits
-  ; Long mode is available if bit CPUID_LONG_MODE is set
+  ; Each feature has a corresponding bit set if it's available.
   mov eax, 0x80000001
   cpuid
   test edx, CPUID_LONG_MODE
-  jnz .end
-.fail:
+  jz .no_long_mode
+  test edx, CPUID_NX
+  jz .no_nx
+  jmp .end
+.no_long_mode:
   mov dl, '0'
+  jmp error
+.no_nx:
+  mov dl, '9'
   jmp error
 .end:
 
@@ -344,6 +361,31 @@ int13_dap:
   dw 0x07E0 ; segment of load buffer
   dq 1 ; first sector to load
 
+error_msg: db `Error \0`
+
+; Halts with error code in dl displayed
+error:
+  cld
+  mov si, error_msg
+  mov ah, 0x0E
+.loop:
+  lodsb
+  test al, al
+  jz .end
+  int 0x10
+  jmp .loop
+.end:
+  mov al, dl
+  int 0x10
+.halt:
+  cli
+  hlt
+  jmp .halt
+
+; Fill the rest of the boot sector with zeroes and place the boot signature at the end.
+times 510 - ($-$$) db 0
+dw 0xAA55
+
 ; Global Descriptor Table for use in protected mode
 ; The only difference is that the flags in the kernel code segment field has the DB flag set instead of the L flag.
 align 8
@@ -397,31 +439,6 @@ gdtr:
   dw gdt_length - 1
   dq gdt
 
-error_msg: db `Error \0`
-
-; Halts with error code in dl displayed
-error:
-  cld
-  mov si, error_msg
-  mov ah, 0x0E
-.loop:
-  lodsb
-  test al, al
-  jz .end
-  int 0x10
-  jmp .loop
-.end:
-  mov al, dl
-  int 0x10
-.halt:
-  cli
-  hlt
-  jmp .halt
-
-; Fill the rest of the boot sector with zeroes and place the boot signature at the end.
-times 510 - ($-$$) db 0
-dw 0xAA55
-
 enter_protected_mode:
   cli
   ; Load GDT
@@ -453,14 +470,48 @@ protected_mode_start:
   rep stosd
   ; Set up basic paging
   ; Identity map the lowest 2 MiB with a large page
-  mov dword [pml4], pdpt_id + (PAGE_WRITE | PAGE_PRESENT)
-  mov dword [pdpt_id], pd_id + (PAGE_WRITE | PAGE_PRESENT)
-  mov dword [pd_id], 0 + PAGE_GLOBAL | PAGE_LARGE | PAGE_WRITE | PAGE_PRESENT
-  ; Put bottom of stack at last page in PML4E number STACK_PML4E
-  mov dword [pml4 + STACK_PML4E * 8], pdpt_stack + (PAGE_WRITE | PAGE_PRESENT)
-  mov dword [pdpt_stack + 0x1FF * 8], pd_stack + (PAGE_WRITE | PAGE_PRESENT)
-  mov dword [pd_stack + 0x1FF * 8], pt_stack + (PAGE_WRITE | PAGE_PRESENT)
-  mov dword [pt_stack + 0x1FF * 8], stack + (PAGE_GLOBAL | PAGE_WRITE | PAGE_PRESENT)
+  mov dword [pml4], pdpt_id | PAGE_WRITE | PAGE_PRESENT
+  mov dword [pdpt_id], pd_id | PAGE_WRITE | PAGE_PRESENT
+  mov dword [pd_id], 0 | PAGE_GLOBAL | PAGE_LARGE | PAGE_WRITE | PAGE_PRESENT
+  ; Map bottom of stack at last page in PML4E number STACK_PML4E
+  mov dword [pml4 + STACK_PML4E * 8], pdpt_stack | PAGE_WRITE | PAGE_PRESENT
+  mov dword [pdpt_stack + 0x1FF * 8], pd_stack | PAGE_WRITE | PAGE_PRESENT
+  mov dword [pd_stack + 0x1FF * 8], pt_stack | PAGE_WRITE | PAGE_PRESENT
+  mov dword [pt_stack + 0x1FF * 8], stack | PAGE_GLOBAL | PAGE_WRITE | PAGE_PRESENT
+  mov dword [pt_stack + 0x1FF * 8 + 4], PAGE_NX >> 32
+  ; Map kernel contents at the beginning of the last PDPTE (top 1 GB of address space)
+  ; Each segment is mapped with the appropriate permissions.
+  mov dword [pml4 + 0x1FF * 8], pdpt_kernel | PAGE_WRITE | PAGE_PRESENT
+  mov dword [pdpt_kernel + 0x1FF * 8], pd_kernel | PAGE_WRITE | PAGE_PRESENT
+  mov dword [pd_kernel], pt_kernel | PAGE_WRITE | PAGE_PRESENT
+  mov eax, KERNEL_LMA + (PAGE_GLOBAL | PAGE_LARGE | PAGE_PRESENT)
+  mov ecx, 0
+.text_loop:
+  cmp ecx, kernel_text_page_end
+  jae .text_loop_end
+  mov dword [pt_kernel + ecx * 8], eax
+  add eax, 0x1000
+  add ecx, 1
+.text_loop_end:
+.rodata_loop:
+  cmp ecx, kernel_rodata_page_end
+  jae .rodata_loop_end
+  mov dword [pt_kernel + ecx * 8], eax
+  mov dword [pt_kernel + ecx * 8 + 4], PAGE_NX >> 32
+  add eax, 0x1000
+  add ecx, 1
+  jmp .rodata_loop
+.rodata_loop_end:
+  or eax, PAGE_WRITE
+.data_loop:
+  cmp ecx, kernel_data_page_end
+  jae .data_loop_end
+  mov dword [pt_kernel + ecx * 8], eax
+  mov dword [pt_kernel + ecx * 8 + 4], PAGE_NX >> 32
+  add eax, 0x1000
+  add ecx, 1
+  jmp .data_loop
+.data_loop_end:
 
   ; Enable PAE and PGE in CR4
   mov eax, cr4
@@ -469,10 +520,10 @@ protected_mode_start:
   ; Set CR3 to address of PML4
   mov eax, pml4
   mov cr3, eax
-  ; Set LME in EFER MSR
+  ; Set LME and NXE in EFER MSR
   mov ecx, EFER_MSR
   rdmsr
-  or eax, EFER_MSR_LME
+  or eax, EFER_MSR_LME | EFER_MSR_NXE
   wrmsr
   ; Set PG in CR0
   mov eax, cr0
