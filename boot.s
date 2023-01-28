@@ -79,6 +79,7 @@ PAGE_NX equ 1 << 63
 
 ; Kernel constants
 
+RECURSIVE_PML4E equ 0x100
 STACK_PML4E equ 0x1FE
 STACK_BOTTOM_VIRTUAL equ (0xFFFF << 48) | (STACK_PML4E << 39) | 0x7FFFFFFFFF
 
@@ -479,6 +480,10 @@ protected_mode_start:
   mov dword [pd_stack + 0x1FF * 8], pt_stack | PAGE_WRITE | PAGE_PRESENT
   mov dword [pt_stack + 0x1FF * 8], stack | PAGE_GLOBAL | PAGE_WRITE | PAGE_PRESENT
   mov dword [pt_stack + 0x1FF * 8 + 4], PAGE_NX >> 32
+  ; Set PML4E number RECURSIVE_PML4E to point at the PML4
+  ; This allows access to the page tables through memory.
+  mov dword [pml4 + RECURSIVE_PML4E * 8], pml4 | PAGE_WRITE | PAGE_PRESENT
+  mov dword [pml4 + RECURSIVE_PML4E * 8 + 4], PAGE_NX >> 32
   ; Map kernel contents at the beginning of the last PDPTE (top 1 GB of address space)
   ; Each segment is mapped with the appropriate permissions.
   mov dword [pml4 + 0x1FF * 8], pdpt_kernel | PAGE_WRITE | PAGE_PRESENT
