@@ -6,6 +6,8 @@ extern kernel_text_page_end
 extern kernel_rodata_page_end
 extern kernel_data_page_end
 
+global vbe_mode_info
+
 ; Initial page for kernel stack
 stack equ 0x7F000
 stack_top equ stack + 0x1000
@@ -20,8 +22,10 @@ pt_stack equ 0x79000
 pdpt_kernel equ 0x78000
 pd_kernel equ 0x77000
 pt_kernel equ 0x76000
-boot_page_tables_start equ 0x76000
-boot_page_tables_length equ 0x9000
+pdpt_fb equ 0x75000
+pd_fb equ 0x74000
+boot_page_tables_start equ 0x74000
+boot_page_tables_length equ 0xB000
 
 ; Addresses of variables used by the bootloader
 
@@ -29,10 +33,10 @@ controller_info equ 0x0500
 vbe_version equ controller_info + 0x04
 video_modes_ptr equ controller_info + 0x0E
 
-mode_info equ 0x0600
-mode_res equ mode_info + 0x12
-mode_bpp equ mode_info + 0x19
-mode_memory_model equ mode_info + 0x21
+vbe_mode_info equ 0x0600
+vbe_mode_res equ vbe_mode_info + 0x12
+vbe_mode_bpp equ vbe_mode_info + 0x19
+vbe_mode_memory_model equ vbe_mode_info + 0x21
 
 drive_index equ 0x07FC
 memory_ranges_length equ 0x07FE
@@ -80,6 +84,7 @@ PAGE_NX equ 1 << 63
 ; Kernel constants
 
 RECURSIVE_PML4E equ 0x100
+FB_PML4E equ 0x1FD
 STACK_PML4E equ 0x1FE
 STACK_BOTTOM_VIRTUAL equ (0xFFFF << 48) | (STACK_PML4E << 39) | 0x7FFFFFFFFF
 
@@ -291,35 +296,38 @@ get_video_mode:
   ; VBE Function 01h - Return VBE Mode Information
   ; CX holds the mode number.
   ; DI holds address of 256-byte buffer to store mode info.
+  ; We store bp on the stack because some BIOSes may overwrite it.
+  push bp
   mov cx, ax
   mov ax, 0x4F01
-  mov di, mode_info
+  mov di, vbe_mode_info
   int 0x10
+  pop bp
   cmp ax, 0x004F
   jne .loop
   ; The first word of the mode info structure contains the attributes.
   ; We require some of the attributes to be set - otherwise we skip the mode.
-  mov eax, [mode_info]
+  mov eax, [vbe_mode_info]
   not eax
   test eax, VBE_MODE_ATTR_SUPPORTED | VBE_MODE_ATTR_COLOR | VBE_MODE_ATTR_GRAPHICS | VBE_MODE_ATTR_LINEAR_FB
   jnz .loop
   ; Get the mode's resolution and compare it to that of the current best mode.
   ; We swap the horizontal and vertical resolution so the horizontal resolution is the upper 16 bits.
-  mov eax, [mode_res]
+  mov eax, [vbe_mode_res]
   ror eax, 16
   cmp eax, edx
   jb .loop
   ; Check if the memory model is direct color.
-  cmp byte [mode_memory_model], VBE_MODE_DIRECT_COLOR
+  cmp byte [vbe_mode_memory_model], VBE_MODE_DIRECT_COLOR
   jne .loop
   ; Compare bits per pixel to that of the current best mode.
-  cmp [mode_bpp], bl
+  cmp [vbe_mode_bpp], bl
   jb .loop
   ; If we reach this point, we have found the new best mode.
   ; Update all the registers to reflect this fact.
   mov bp, cx
   mov edx, eax
-  mov bl, [mode_bpp]
+  mov bl, [vbe_mode_bpp]
   jmp .loop
 .loop_end:
   ; If BP is still the defualt value then we haven't found a single appropriate mode.
@@ -329,16 +337,16 @@ get_video_mode:
   ; After finding the best mode, we load its mode information for the kernel to use.
   mov cx, bp
   mov ax, 0x4F01
-  mov di, mode_info
+  mov di, vbe_mode_info
   int 0x10
   mov dl, '7'
   cmp ax, 0x004F
   jne error
-.got_mode_info:
+.got_vbe_mode_info:
   ; VBE Function 02h - Set VBE Mode
   ; BX holds the mode number together with some option bits.
   ; We set the bit to get a linear framebuffer.
-  mov bx, bp
+  mov bx, cx
   or bx, VBE_SET_LINEAR_FB
   mov ax, 0x4F02
   int 0x10
@@ -484,6 +492,10 @@ protected_mode_start:
   ; This allows access to the page tables through memory.
   mov dword [pml4 + RECURSIVE_PML4E * 8], pml4 | PAGE_WRITE | PAGE_PRESENT
   mov dword [pml4 + RECURSIVE_PML4E * 8 + 4], PAGE_NX >> 32
+  ; Set up mapping for framebuffer
+  ; The pd_fb be filled in by the kernel.
+  mov dword [pml4 + FB_PML4E * 8], pdpt_fb | PAGE_WRITE | PAGE_PRESENT
+  mov dword [pdpt_fb], pd_fb | PAGE_WRITE | PAGE_PRESENT
   ; Map kernel contents at the beginning of the last PDPTE (top 1 GB of address space)
   ; Each segment is mapped with the appropriate permissions.
   mov dword [pml4 + 0x1FF * 8], pdpt_kernel | PAGE_WRITE | PAGE_PRESENT
