@@ -10,5 +10,5 @@ kernel.bin: $(OBJECTS) linker.ld
 %.s.o: %.s
 	nasm $< -f elf64 -o $@
 
-%.c.o: %.c $(HEADERS)
-	clang -c $(CFLAGS) -o $@
+%.o: %.c $(HEADERS)
+	clang $< -c $(CFLAGS) -o $@
