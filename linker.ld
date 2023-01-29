@@ -20,9 +20,13 @@ SECTIONS {
     kernel_rodata_page_end = (ALIGN(4K) - KERNEL_VMA) / 4K;
     .data ALIGN(4K) : AT(ADDR(.data) - KERNEL_VMA + KERNEL_LMA) {
         *(.data)
+    }
+    kernel_sector_count = (ALIGN(512) - KERNEL_VMA + KERNEL_LMA - BOOT_LMA) / 512;
+    kernel_bss_lma_start = ALIGN(16) - KERNEL_VMA + KERNEL_LMA;
+    .bss ALIGN(16) : AT(ADDR(.bss) - KERNEL_VMA + KERNEL_LMA) {
         *(.bss)
         *(COMMON)
     }
+    kernel_bss_length_dwords = (ALIGN(4) - ADDR(.bss)) / 4;
     kernel_data_page_end = (ALIGN(4K) - KERNEL_VMA) / 4K;
-    kernel_sector_count = (. - KERNEL_VMA + KERNEL_LMA - BOOT_LMA + 511) / 512;
 }

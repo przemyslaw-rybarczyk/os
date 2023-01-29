@@ -1,10 +1,13 @@
 extern kernel_main
 
+; Variables declared by linker script
 extern KERNEL_LMA
 extern kernel_sector_count
 extern kernel_text_page_end
 extern kernel_rodata_page_end
 extern kernel_data_page_end
+extern kernel_bss_lma_start
+extern kernel_bss_length_dwords
 
 global vbe_mode_info
 
@@ -529,6 +532,11 @@ protected_mode_start:
   add ecx, 1
   jmp .data_loop
 .data_loop_end:
+  ; Clear .bss
+  xor eax, eax
+  mov edi, kernel_bss_lma_start
+  mov ecx, kernel_bss_length_dwords
+  rep stosd
 
   ; Enable PAE and PGE in CR4
   mov eax, cr4
