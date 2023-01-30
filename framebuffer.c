@@ -2,6 +2,7 @@
 #include "framebuffer.h"
 
 #include "page.h"
+#include "string.h"
 
 #define FB_PML4E 0x1FDull
 
@@ -80,13 +81,15 @@ void framebuffer_init(void) {
     framebuffer = (u8 *)fb_virt_addr;
     u64 *pde_fb = PDE_PTR(fb_virt_addr);
     u64 first_page = fb_phys_addr >> 21;
-    u64 last_page = (fb_phys_addr + fb_pitch * fb_height - 1) >> 21;
+    u64 last_page = (fb_phys_addr + fb_height * fb_pitch - 1) >> 21;
     u64 num_pages = last_page - first_page + 1;
     // Make sure mapping fits in 1 GiB, although the frambuffer shouldn't ever be this large
     if (num_pages > 0x200)
         num_pages = 0x200;
     for (u64 i = 0; i < num_pages; i++)
         pde_fb[i] = (first_page + i) << 21 | PAGE_NX | PAGE_GLOBAL | PAGE_LARGE | PAGE_WRITE | PAGE_PRESENT;
+    // Clear frambuffer to black
+    memset(framebuffer, 0x00, fb_height * fb_pitch);
 }
 
 u32 get_framebuffer_width(void) {
