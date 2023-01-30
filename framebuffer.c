@@ -76,7 +76,7 @@ void framebuffer_init(void) {
 
     // Map the framebuffer at the beginning of PML4E number FB_PML4E using large pages
     u32 fb_phys_addr = vbe_mode_info.phys_base_ptr;
-    u64 fb_virt_addr = (0xFFFFull << 48) | (FB_PML4E << 39) | (fb_phys_addr & 0x1FFFFFF);
+    u64 fb_virt_addr = ASSEMBLE_ADDR_PDE(FB_PML4E, 0, 0, fb_phys_addr);
     framebuffer = (u8 *)fb_virt_addr;
     u64 *pde_fb = PDE_PTR(fb_virt_addr);
     u64 first_page = fb_phys_addr >> 21;
