@@ -1,5 +1,5 @@
-CFLAGS = -target x86_64-pc-none-elf -mcpu=x86_64 -ffreestanding -masm=intel -mcmodel=kernel -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -fno-PIC -O2 -Wall -Wextra
-LDFLAGS = -target x86_64-pc-none-elf -mcpu=x86_64 -ffreestanding -static -nostdlib -O2
+CFLAGS = -target x86_64-pc-none-elf -ffreestanding -masm=intel -mcmodel=kernel -mno-red-zone -mno-x87 -mno-mmx -mno-sse -mno-sse2 -fno-PIC -O2 -Wall -Wextra
+LDFLAGS = -target x86_64-pc-none-elf -ffreestanding -static -nostdlib -O2
 
 HEADERS = $(wildcard *.h)
 OBJECTS = $(patsubst %.c,%.o,$(wildcard *.c)) $(patsubst %.s,%.s.o,$(wildcard *.s))
