@@ -4,6 +4,8 @@
 #include "page.h"
 #include "string.h"
 
+#include "font.h"
+
 #define FB_PML4E 0x1FDull
 
 typedef struct VBEModeInfo {
@@ -107,4 +109,48 @@ void put_pixel(u32 x, u32 y, u8 r, u8 g, u8 b) {
     u32 color = ((r >> r_cut) << r_pos) | ((g >> g_cut) << g_pos) | ((b >> b_cut) << b_pos);
     for (u8 i = 0; i < fb_bytes_per_pixel; i++)
         framebuffer[y * fb_pitch + x * fb_bytes_per_pixel + i] = (u8)(color >> (8 * i));
+}
+
+// X position in characters to print the next character at
+// There is no Y position because characters are always printed at the bottom of the screen.
+static u32 cursor_x = 0;
+
+static void print_newline(void) {
+    // Scroll screen upwards by FONT_HEIGHT pixels
+    memmove(framebuffer, framebuffer + FONT_HEIGHT * fb_pitch, (fb_height - FONT_HEIGHT) * fb_pitch);
+    // Fill the new line with black
+    memset(framebuffer + (fb_height - FONT_HEIGHT) * fb_pitch, 0x00, FONT_HEIGHT * fb_pitch);
+    // Move the cursor to the start
+    cursor_x = 0;
+}
+
+void print_char(char c) {
+    if (c == '\n') {
+        print_newline();
+    } else {
+        if (FONT_WIDTH * cursor_x >= fb_width) {
+            // If we're past the end of the line, move to a new one
+            print_newline();
+        }
+        // If the character is valid, print it
+        if (FONT_CHAR_LOWEST <= c && c <= FONT_CHAR_HIGHEST) {
+            for (size_t y = 0; y < FONT_HEIGHT; y++) {
+                for (size_t x = 0; x < FONT_WIDTH; x++) {
+                    for (size_t i = 0; i < fb_bytes_per_pixel; i++) {
+                        size_t fb_x = fb_height - FONT_HEIGHT + y;
+                        size_t fb_y = (cursor_x * FONT_WIDTH + x) * fb_bytes_per_pixel + i;
+                        u8 color_byte = (font_chars[c - FONT_CHAR_LOWEST][y] << x) & 0x80 ? 0xFF : 0x00;
+                        framebuffer[fb_x * fb_pitch + fb_y] = color_byte;
+                    }
+                }
+            }
+        }
+        // Move cursor into position for the next character
+        cursor_x += 1;
+    }
+}
+
+void print_string(const char *str) {
+    for (const char *c = str; *c != '\0'; c++)
+        print_char(*c);
 }
