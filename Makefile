@@ -6,6 +6,8 @@ OBJECTS = $(patsubst %.c,%.o,$(wildcard *.c)) $(patsubst %.s,%.s.o,$(wildcard *.
 
 kernel.bin: $(OBJECTS) linker.ld
 	clang $(LDFLAGS) -T linker.ld $(OBJECTS) -o $@
+# Pad the file so its size is a multiple of 512 (sector size)
+	./pad_to_multiple.sh $@ 512
 
 %.s.o: %.s
 	nasm $< -f elf64 -o $@
