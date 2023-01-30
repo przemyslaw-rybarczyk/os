@@ -324,8 +324,13 @@ get_video_mode:
   cmp byte [vbe_mode_memory_model], VBE_MODE_DIRECT_COLOR
   jne .loop
   ; Compare bits per pixel to that of the current best mode.
-  cmp [vbe_mode_bpp], bl
+  mov al, [vbe_mode_bpp]
+  cmp al, bl
   jb .loop
+  ; We require the bits per pixel to be a multiple of 8 not greater than 32 (that is, either 8, 16, 24, or 32).
+  ror al, 3
+  cmp al, 4
+  ja .loop
   ; If we reach this point, we have found the new best mode.
   ; Update all the registers to reflect this fact.
   mov bp, cx
