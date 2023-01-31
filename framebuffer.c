@@ -154,3 +154,13 @@ void print_string(const char *str) {
     for (const char *c = str; *c != '\0'; c++)
         print_char(*c);
 }
+
+// Print the last `digits` digits of a number in hexadecimal
+void print_hex(u64 n, u64 digits) {
+    print_char('0');
+    print_char('x');
+    for (u64 i = 0; i < digits; i++) {
+        u64 digit = (n >> (4 * (digits - 1 - i))) & 0xF;
+        print_char(digit < 10 ? digit + '0' : digit - 10 + 'A');
+    }
+}
