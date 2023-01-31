@@ -11,13 +11,13 @@ void kernel_main(void) {
     for (u32 y = 0; y < fb_height; y++)
         for (u32 x = 0; x < fb_width; x++)
             put_pixel(x, y, (u8)x, (u8)y, (u8)(x + y));
-    print_char('\n');
+    print_newline();
     print_string("Hello, world!\n");
-    print_char('\n');
+    print_newline();
     print_string("Font test:\n");
     for (char c = ' '; c <= '~'; c++)
         print_char(c);
-    print_char('\n');
+    print_newline();
     asm volatile ("int 0x1F");
     while (1)
         asm volatile("hlt");

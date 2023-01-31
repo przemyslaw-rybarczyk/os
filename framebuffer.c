@@ -115,7 +115,7 @@ void put_pixel(u32 x, u32 y, u8 r, u8 g, u8 b) {
 // There is no Y position because characters are always printed at the bottom of the screen.
 static u32 cursor_x = 0;
 
-static void print_newline(void) {
+void print_newline(void) {
     // Scroll screen upwards by FONT_HEIGHT pixels
     memmove(framebuffer, framebuffer + FONT_HEIGHT * fb_pitch, (fb_height - FONT_HEIGHT) * fb_pitch);
     // Fill the new line with black
