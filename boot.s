@@ -517,6 +517,7 @@ protected_mode_start:
   mov dword [pt_kernel + ecx * 8], eax
   add eax, 0x1000
   add ecx, 1
+  jmp .text_loop
 .text_loop_end:
 .rodata_loop:
   cmp ecx, kernel_rodata_page_end
