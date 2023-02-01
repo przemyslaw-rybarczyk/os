@@ -7,7 +7,7 @@
 #define IDT_GATE_PRESENT 0x80
 #define IDT_GATE_INTERRUPT 0x0E
 
-#define IDT_ENTRIES_NUM 0x20
+#define IDT_ENTRIES_NUM 0x30
 
 extern u64 interrupt_handlers[IDT_ENTRIES_NUM];
 

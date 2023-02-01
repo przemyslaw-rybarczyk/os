@@ -2,10 +2,12 @@
 
 #include "framebuffer.h"
 #include "interrupt.h"
+#include "pic.h"
 
 void kernel_main(void) {
     framebuffer_init();
     interrupt_init();
+    pic_init();
     u32 fb_width = get_framebuffer_width();
     u32 fb_height = get_framebuffer_height();
     for (u32 y = 0; y < fb_height; y++)
@@ -18,7 +20,6 @@ void kernel_main(void) {
     for (char c = ' '; c <= '~'; c++)
         print_char(c);
     print_newline();
-    asm volatile ("int 0x1F");
     while (1)
         asm volatile("hlt");
 }

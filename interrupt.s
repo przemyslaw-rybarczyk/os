@@ -2,7 +2,7 @@ global interrupt_handlers
 
 extern general_exception_handler
 
-IDT_ENTRIES_NUM equ 0x20
+IDT_ENTRIES_NUM equ 0x30
 
 ; Define a handler for each interrupt
 ; The handler saves the scratch registers and calls the actual handler function (written in C).
