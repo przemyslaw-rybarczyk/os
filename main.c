@@ -2,6 +2,7 @@
 
 #include "framebuffer.h"
 #include "interrupt.h"
+#include "keyboard.h"
 #include "pic.h"
 #include "ps2.h"
 
@@ -23,6 +24,10 @@ void kernel_main(void) {
     for (char c = ' '; c <= '~'; c++)
         print_char(c);
     print_newline();
-    while (1)
-        asm volatile ("hlt");
+    while (1) {
+        KeyEvent event = keyboard_read();
+        print_string("Key ");
+        print_hex(event.keycode, 2);
+        print_string(event.pressed ? " was pressed\n" : " was released\n");
+    }
 }

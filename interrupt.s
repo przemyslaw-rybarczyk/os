@@ -1,13 +1,20 @@
 global interrupt_handlers
 
 extern general_exception_handler
+extern keyboard_irq_handler
 
 IDT_ENTRIES_NUM equ 0x30
+IDT_EXCEPTIONS_NUM equ 0x20
 
-; Define a handler for each interrupt
+IDT_KEYBOARD_IRQ equ 0x21
+
+%define interrupt_has_handler(i) ((i) < IDT_EXCEPTIONS_NUM || (i) == IDT_KEYBOARD_IRQ)
+
+; Define a wrapper handler for each interrupt that has a handler function
 ; The handler saves the scratch registers and calls the actual handler function (written in C).
 %assign i 0
 %rep IDT_ENTRIES_NUM
+%if interrupt_has_handler(i)
 interrupt_handler_%+i:
   ; Save all scratch registers - they may be overwritten by the C function
   push rax
@@ -19,11 +26,15 @@ interrupt_handler_%+i:
   push r9
   push r10
   push r11
-  ; Call the handler function with two arguments: the number of the interrupt
+%if i < IDT_EXCEPTIONS_NUM
+  ; For exceptions we call the handler function with two arguments: the number of the interrupt
   ; and the value the stack pointer had at the start of the interrupt handler.
   mov rdi, i
   lea rsi, [rsp - 9 * 8]
   call general_exception_handler
+%elif i == IDT_KEYBOARD_IRQ
+  call keyboard_irq_handler
+%endif
   ; Restore the scratch registers and return
   pop r11
   pop r10
@@ -35,14 +46,20 @@ interrupt_handler_%+i:
   pop rcx
   pop rax
   iretq
+%endif
 %assign i i+1
 %endrep
 
 ; Put the address of each interrupt handler in a table
 ; These addresses will be placed into the IDT by the initialization code.
+; Interrupts without handlers are represented as 0.
 interrupt_handlers:
 %assign i 0
 %rep IDT_ENTRIES_NUM
+%if interrupt_has_handler(i)
   dq interrupt_handler_%+i
+%else
+  dq 0
+%endif
 %assign i i+1
 %endrep

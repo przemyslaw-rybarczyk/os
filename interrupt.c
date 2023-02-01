@@ -44,8 +44,11 @@ static void idt_set_entry(u64 i, u64 addr) {
 
 void interrupt_init(void) {
     // Fill the IDT entries with the handlers defined in `interrupt.s`
-    for (u64 i = 0; i < IDT_ENTRIES_NUM; i++)
-        idt_set_entry(i, interrupt_handlers[i]);
+    // Interrupts with handler address given as 0 don't have a handler.
+    for (u64 i = 0; i < IDT_ENTRIES_NUM; i++) {
+        if (interrupt_handlers[i] != 0)
+            idt_set_entry(i, interrupt_handlers[i]);
+    }
     // Load the IDT Descriptor
     asm volatile ("lidt [%0]" : : "i"(&idtr));
 }
