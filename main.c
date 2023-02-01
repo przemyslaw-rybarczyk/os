@@ -3,11 +3,14 @@
 #include "framebuffer.h"
 #include "interrupt.h"
 #include "pic.h"
+#include "ps2.h"
 
 void kernel_main(void) {
     framebuffer_init();
     interrupt_init();
     pic_init();
+    ps2_init();
+    asm volatile ("sti");
     u32 fb_width = get_framebuffer_width();
     u32 fb_height = get_framebuffer_height();
     for (u32 y = 0; y < fb_height; y++)
@@ -21,5 +24,5 @@ void kernel_main(void) {
         print_char(c);
     print_newline();
     while (1)
-        asm volatile("hlt");
+        asm volatile ("hlt");
 }

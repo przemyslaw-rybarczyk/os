@@ -7,8 +7,11 @@ PIC2_DATA equ 0xA1
 
 ICW1_ICW4 equ 1 << 0
 ICW1_INIT equ 1 << 4
-SLAVE_LINE equ 2
 ICW4_8086 equ 1 << 0
+
+PIC1_KEYBOARD_LINE equ 1
+PIC1_SLAVE_LINE equ 2
+PIC2_MOUSE_LINE equ 4
 
 ; Vector offsets are set so that IRQ interrupt numbers immediately follow those of the exceptions.
 PIC1_VECTOR_OFFSET equ 0x20
@@ -26,16 +29,18 @@ pic_init:
   mov al, PIC2_VECTOR_OFFSET
   out PIC2_DATA, al
   ; Send ICW3
-  mov al, 1 << SLAVE_LINE
+  mov al, 1 << PIC1_SLAVE_LINE
   out PIC1_DATA, al
-  mov al, SLAVE_LINE
+  mov al, PIC1_SLAVE_LINE
   out PIC2_DATA, al
   ; Send ICW4
   mov al, ICW4_8086
   out PIC1_DATA, al
   out PIC2_DATA, al
-  ; Set the masks - for now we mask all IRQs
-  mov al, 0xFF
+  ; Set the masks
+  ; For now we only enable IRQs from the keyboard.
+  mov al, ~(1 << PIC1_KEYBOARD_LINE)
   out PIC1_DATA, al
+  mov al, ~0
   out PIC2_DATA, al
   ret
