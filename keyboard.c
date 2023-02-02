@@ -86,7 +86,7 @@ static KeyboardState keyboard_state = KBST_START;
 
 // The buffer holds up to one KeyEvent.
 // It is written to by the interrupt handler.
-static volatile bool keyboard_buffer_full = false;
+static volatile atomic_bool keyboard_buffer_full = false;
 static volatile KeyEvent keyboard_buffer;
 
 // Wait for a key event to occur and return it
