@@ -7,6 +7,8 @@
 #include "pic.h"
 #include "ps2.h"
 
+extern bool mouse_has_scroll_wheel;
+
 void kernel_main(void) {
     framebuffer_init();
     interrupt_init();
@@ -24,6 +26,11 @@ void kernel_main(void) {
     print_string("Font test:\n");
     for (char c = ' '; c <= '~'; c++)
         print_char(c);
+    print_newline();
+    if (mouse_has_scroll_wheel)
+        print_string("Mouse has a scroll wheel");
+    else
+        print_string("Mouse has no scroll wheel");
     print_newline();
     print_string("Starting keyboard test.\nPress the F12 key to enter the mouse test.\n");
     while (1) {

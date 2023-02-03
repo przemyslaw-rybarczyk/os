@@ -2,6 +2,7 @@ global ps2_init
 global ps2_wait_for_read
 global ps2_wait_for_write
 global ps2_wait_for_write_to_port_2
+global ps2_flush_buffer
 
 extern keyboard_init
 extern mouse_init
