@@ -5,6 +5,7 @@
 #include "keyboard.h"
 #include "mouse.h"
 #include "pic.h"
+#include "pit.h"
 #include "ps2.h"
 
 extern bool mouse_has_scroll_wheel;
@@ -13,6 +14,7 @@ void kernel_main(void) {
     framebuffer_init();
     interrupt_init();
     pic_init();
+    pit_init();
     ps2_init();
     asm volatile ("sti");
     u32 fb_width = get_framebuffer_width();

@@ -9,6 +9,7 @@ ICW1_ICW4 equ 1 << 0
 ICW1_INIT equ 1 << 4
 ICW4_8086 equ 1 << 0
 
+PIC1_PIT_LINE equ 0
 PIC1_KEYBOARD_LINE equ 1
 PIC1_SLAVE_LINE equ 2
 PIC2_MOUSE_LINE equ 4
@@ -38,8 +39,8 @@ pic_init:
   out PIC1_DATA, al
   out PIC2_DATA, al
   ; Set the masks
-  ; We enable IRQs from the keyboard and the mouse.
-  mov al, ~(1 << PIC1_KEYBOARD_LINE | 1 << PIC1_SLAVE_LINE)
+  ; We enable IRQs from the PIT, the keyboard, and the mouse.
+  mov al, ~(1 << PIC1_PIT_LINE | 1 << PIC1_KEYBOARD_LINE | 1 << PIC1_SLAVE_LINE)
   out PIC1_DATA, al
   mov al, ~(1 << PIC2_MOUSE_LINE)
   out PIC2_DATA, al
