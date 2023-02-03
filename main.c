@@ -37,10 +37,12 @@ void kernel_main(void) {
     print_string("Starting mouse test.\n");
     i32 mouse_x = fb_width / 2;
     i32 mouse_y = fb_height / 2;
+    i32 scroll_y = fb_height / 2;
     while (1) {
         MouseUpdate update = mouse_get_update();
         mouse_x += update.diff_x;
         mouse_y += update.diff_y;
+        scroll_y += update.diff_scroll;
         if (mouse_x < 0)
             mouse_x = 0;
         if (mouse_x >= fb_width)
@@ -49,6 +51,16 @@ void kernel_main(void) {
             mouse_y = 0;
         if (mouse_y >= fb_height)
             mouse_y = fb_height - 1;
+        if (scroll_y < 0)
+            scroll_y = 0;
+        if (scroll_y >= fb_height)
+            scroll_y = fb_height - 1;
+        for (u32 y = 0; y < fb_height; y++) {
+            if (y == scroll_y)
+                put_pixel(fb_width - 1, y, 255, 255, 255);
+            else
+                put_pixel(fb_width - 1, y, 0, 0, 0);
+        }
         put_pixel(mouse_x, mouse_y, update.left_button_pressed * 255, update.middle_button_pressed * 255, update.right_button_pressed * 255);
     }
 }
