@@ -2,13 +2,15 @@ global interrupt_handlers
 
 extern general_exception_handler
 extern keyboard_irq_handler
+extern mouse_irq_handler
 
 IDT_ENTRIES_NUM equ 0x30
 IDT_EXCEPTIONS_NUM equ 0x20
 
 IDT_KEYBOARD_IRQ equ 0x21
+IDT_MOUSE_IRQ equ 0x2C
 
-%define interrupt_has_handler(i) ((i) < IDT_EXCEPTIONS_NUM || (i) == IDT_KEYBOARD_IRQ)
+%define interrupt_has_handler(i) ((i) < IDT_EXCEPTIONS_NUM || (i) == IDT_KEYBOARD_IRQ || (i) == IDT_MOUSE_IRQ)
 
 ; Define a wrapper handler for each interrupt that has a handler function
 ; The handler saves the scratch registers and calls the actual handler function (written in C).
@@ -34,6 +36,8 @@ interrupt_handler_%+i:
   call general_exception_handler
 %elif i == IDT_KEYBOARD_IRQ
   call keyboard_irq_handler
+%elif i == IDT_MOUSE_IRQ
+  call mouse_irq_handler
 %endif
   ; Restore the scratch registers and return
   pop r11

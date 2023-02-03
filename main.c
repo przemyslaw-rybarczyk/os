@@ -3,6 +3,7 @@
 #include "framebuffer.h"
 #include "interrupt.h"
 #include "keyboard.h"
+#include "mouse.h"
 #include "pic.h"
 #include "ps2.h"
 
@@ -24,10 +25,30 @@ void kernel_main(void) {
     for (char c = ' '; c <= '~'; c++)
         print_char(c);
     print_newline();
+    print_string("Starting keyboard test.\nPress the F12 key to enter the mouse test.\n");
     while (1) {
         KeyEvent event = keyboard_read();
         print_string("Key ");
         print_hex(event.keycode, 2);
         print_string(event.pressed ? " was pressed\n" : " was released\n");
+        if (event.keycode == KEY_F12 && event.pressed == false)
+            break;
+    }
+    print_string("Starting mouse test.\n");
+    i32 mouse_x = fb_width / 2;
+    i32 mouse_y = fb_height / 2;
+    while (1) {
+        MouseUpdate update = mouse_get_update();
+        mouse_x += update.diff_x;
+        mouse_y += update.diff_y;
+        if (mouse_x < 0)
+            mouse_x = 0;
+        if (mouse_x >= fb_width)
+            mouse_x = fb_width - 1;
+        if (mouse_y < 0)
+            mouse_y = 0;
+        if (mouse_y >= fb_height)
+            mouse_y = fb_height - 1;
+        put_pixel(mouse_x, mouse_y, update.left_button_pressed * 255, update.middle_button_pressed * 255, update.right_button_pressed * 255);
     }
 }

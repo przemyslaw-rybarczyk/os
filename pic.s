@@ -38,9 +38,9 @@ pic_init:
   out PIC1_DATA, al
   out PIC2_DATA, al
   ; Set the masks
-  ; For now we only enable IRQs from the keyboard.
-  mov al, ~(1 << PIC1_KEYBOARD_LINE)
+  ; We enable IRQs from the keyboard and the mouse.
+  mov al, ~(1 << PIC1_KEYBOARD_LINE | 1 << PIC1_SLAVE_LINE)
   out PIC1_DATA, al
-  mov al, ~0
+  mov al, ~(1 << PIC2_MOUSE_LINE)
   out PIC2_DATA, al
   ret
