@@ -1,4 +1,10 @@
 global ps2_init
+global ps2_wait_for_read
+global ps2_wait_for_write
+global ps2_wait_for_write_to_port_2
+
+extern keyboard_init
+extern mouse_init
 
 PS2_DATA equ 0x60
 PS2_STATUS equ 0x64
@@ -19,14 +25,6 @@ PS2_CCB_PORT_1_INTERRUPT equ 1 << 0
 PS2_CCB_PORT_2_INTERRUPT equ 1 << 1
 PS2_CCB_PORT_1_TRANSLATION equ 1 << 6
 
-KEYBOARD_RESET equ 0xFF
-KEYBOARD_ENABLE_SCAN equ 0xF6
-
-MOUSE_RESET equ 0xFF
-MOUSE_ENABLE_STREAMING equ 0xF4
-
-MOUSE_RESET_ACK equ 0xAA
-
 ; Wait for the PS/2 output buffer to become full
 ; This function must be called before every read from the PS/2 data port.
 ps2_wait_for_read:
@@ -41,6 +39,14 @@ ps2_wait_for_write:
   in al, PS2_STATUS
   test al, PS2_STATUS_INPUT_BUFFER_FULL
   jnz ps2_wait_for_write
+  ret
+
+; Set up the PS/2 controller to write the next byte to the second data port
+ps2_wait_for_write_to_port_2:
+  call ps2_wait_for_write
+  mov al, PS2_COMMAND_WRITE_TO_PORT_2
+  out PS2_COMMAND, al
+  call ps2_wait_for_write
   ret
 
 ; Flush the PS/2 output buffer
@@ -85,19 +91,9 @@ ps2_init:
   call ps2_wait_for_write
   mov al, PS2_COMMAND_PORT_1_ENABLE
   out PS2_COMMAND, al
-  ; Reset keyboard
-  call ps2_wait_for_write
-  mov al, KEYBOARD_RESET
-  out PS2_DATA, al
-  call ps2_wait_for_read
-  in al, PS2_DATA
-  ; Enable keboard scanning
-  call ps2_wait_for_write
-  mov al, KEYBOARD_ENABLE_SCAN
-  out PS2_DATA, al
-  call ps2_wait_for_read
-  in al, PS2_DATA
-  ; Disable keybaord port to avoid interference with mouse initialization
+  ; Initialize the keyboard
+  call keyboard_init
+  ; Disable keyboard port to avoid interference with mouse initialization
   call ps2_wait_for_write
   mov al, PS2_COMMAND_PORT_1_DISABLE
   out PS2_COMMAND, al
@@ -106,26 +102,8 @@ ps2_init:
   mov al, PS2_COMMAND_PORT_2_ENABLE
   out PS2_COMMAND, al
   call ps2_flush_buffer
-  ; Reset mouse
-  call ps2_wait_for_write
-  mov al, PS2_COMMAND_WRITE_TO_PORT_2
-  out PS2_COMMAND, al
-  call ps2_wait_for_write
-  mov al, MOUSE_RESET
-  out PS2_DATA, al
-  ; Wait for mouse to send acknowledgement byte after reset
-.wait_for_reset
-  call ps2_wait_for_read
-  in al, PS2_DATA
-  cmp al, MOUSE_RESET_ACK
-  jnz .wait_for_reset
-  ; Enable mouse streaming
-  call ps2_wait_for_write
-  mov al, PS2_COMMAND_WRITE_TO_PORT_2
-  out PS2_COMMAND, al
-  call ps2_wait_for_write
-  mov al, MOUSE_ENABLE_STREAMING
-  out PS2_DATA, al
+  ; Initialize mouse
+  call mouse_init
   ; Re-enable keyboard port
   call ps2_wait_for_write
   mov al, PS2_COMMAND_PORT_1_ENABLE
