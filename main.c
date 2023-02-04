@@ -4,6 +4,7 @@
 #include "interrupt.h"
 #include "keyboard.h"
 #include "mouse.h"
+#include "page_alloc.h"
 #include "pic.h"
 #include "pit.h"
 #include "ps2.h"
@@ -13,6 +14,7 @@ extern bool mouse_has_scroll_wheel;
 void kernel_main(void) {
     framebuffer_init();
     interrupt_init();
+    page_alloc_init();
     pic_init();
     pit_init();
     ps2_init();
@@ -29,6 +31,9 @@ void kernel_main(void) {
     for (char c = ' '; c <= '~'; c++)
         print_char(c);
     print_newline();
+    print_string("There are ");
+    print_hex(get_free_memory_size(), 16);
+    print_string(" pages of free memory available\n");
     if (mouse_has_scroll_wheel)
         print_string("Mouse has a scroll wheel");
     else

@@ -10,6 +10,8 @@ extern kernel_bss_lma_start
 extern kernel_bss_length_dwords
 
 global vbe_mode_info
+global memory_ranges
+global memory_ranges_length
 
 ; Initial page for kernel stack
 stack equ 0x7F000
@@ -27,8 +29,9 @@ pd_kernel equ 0x77000
 pt_kernel equ 0x76000
 pdpt_fb equ 0x75000
 pd_fb equ 0x74000
-boot_page_tables_start equ 0x74000
-boot_page_tables_length equ 0xB000
+pdpt_page_stack equ 0x73000
+boot_page_tables_start equ 0x73000
+boot_page_tables_length equ 0xC000
 
 ; Addresses of variables used by the bootloader
 
@@ -50,6 +53,7 @@ memory_ranges_end equ 0x7000
 ; BIOS constants
 
 SMAP_MAGIC equ 'PAMS' ; in reverse because of endianness differences
+MEMORY_RANGE_ACPI_ATTRS equ 20
 
 VBE_MODE_ATTR_SUPPORTED equ 1 << 0
 VBE_MODE_ATTR_COLOR equ 1 << 3
@@ -90,6 +94,7 @@ RECURSIVE_PML4E equ 0x100
 FB_PML4E equ 0x1FD
 STACK_PML4E equ 0x1FE
 STACK_BOTTOM_VIRTUAL equ (0xFFFF << 48) | (STACK_PML4E << 39) | 0x7FFFFFFFFF
+PAGE_STACK_PML4E equ 0x1FC
 
 SEGMENT_KERNEL_CODE equ 0x08
 SEGMENT_KERNEL_DATA equ 0x10
@@ -197,8 +202,8 @@ detect_memory:
   mov si, .fail
 .loop:
   ; Since the value stored by BIOS may be only 20 bytes long rather than the 24 we expect,
-  ; we set the value at offset 20 to 1 for compatibility. This value indicates that the entry shouldn't be ignored.
-  mov [di + 20], dword 1
+  ; we set the ACPI attributes to 3 for compatibility. This value indicates that the entry shouldn't be ignored.
+  mov [di + MEMORY_RANGE_ACPI_ATTRS], dword 3
   mov eax, 0xE820
   ; ECX holds the size of the buffer.
   mov ecx, 24
@@ -500,10 +505,12 @@ protected_mode_start:
   ; This allows access to the page tables through memory.
   mov dword [pml4 + RECURSIVE_PML4E * 8], pml4 | PAGE_WRITE | PAGE_PRESENT
   mov dword [pml4 + RECURSIVE_PML4E * 8 + 4], PAGE_NX >> 32
-  ; Set up mapping for framebuffer
-  ; The pd_fb be filled in by the kernel.
+  ; Set up mapping for framebuffer and page stack
+  ; The pd_fb and pdpt_page_stack be filled in by the kernel.
   mov dword [pml4 + FB_PML4E * 8], pdpt_fb | PAGE_WRITE | PAGE_PRESENT
   mov dword [pdpt_fb], pd_fb | PAGE_WRITE | PAGE_PRESENT
+  mov dword [pml4 + PAGE_STACK_PML4E * 8], pdpt_page_stack | PAGE_WRITE | PAGE_PRESENT
+  mov dword [pml4 + PAGE_STACK_PML4E * 8 + 4], PAGE_NX >> 32
   ; Map kernel contents at the beginning of the last PDPTE (top 1 GB of address space)
   ; Each segment is mapped with the appropriate permissions.
   mov dword [pml4 + 0x1FF * 8], pdpt_kernel | PAGE_WRITE | PAGE_PRESENT

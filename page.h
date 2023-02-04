@@ -8,6 +8,16 @@
 #define PAGE_GLOBAL (1ull << 8)
 #define PAGE_NX (1ull << 63)
 
+#define PAGE_BITS 12
+#define PT_BITS 21
+#define PD_BITS 30
+#define PDPT_BITS 39
+
+#define PAGE_SIZE (1ull << PAGE_BITS)
+#define PT_SIZE (1ull << PT_BITS)
+#define PD_SIZE (1ull << PD_BITS)
+#define PDPT_SIZE (1ull << PDPT_BITS)
+
 #define SIGN_EXTEND_PML4E(pml4e) (((pml4e) >> 8) * (0xFFFFull << 9) + (pml4e))
 
 // These macros can be used to assemble addresses from their component parts - indices of page tables within other page tables,
@@ -22,7 +32,7 @@
 
 // These macros provide pointers that can be used to access page map entries of mapping a given virtual address.
 // They make use of the PML4E number RECURSIVE_PLM4E being mapped to the PML4.
-#define PTE_PTR(x) ((u64 *)ASSEMBLE_ADDR_PML4E(RECURSIVE_PLM4E, (x) >> 9))
-#define PDE_PTR(x) ((u64 *)ASSEMBLE_ADDR_PDPTE(RECURSIVE_PLM4E, RECURSIVE_PLM4E, (x) >> 18))
-#define PDPTE_PTR(x) ((u64 *)ASSEMBLE_ADDR_PDE(RECURSIVE_PLM4E, RECURSIVE_PLM4E, RECURSIVE_PLM4E, (x) >> 27))
-#define PML4E_PTR(x) ((u64 *)ASSEMBLE_ADDR(RECURSIVE_PLM4E, RECURSIVE_PLM4E, RECURSIVE_PLM4E, RECURSIVE_PLM4E, (x) >> 36))
+#define PTE_PTR(x) ((u64 *)ASSEMBLE_ADDR_PML4E(RECURSIVE_PLM4E, (u64)(x) >> 9))
+#define PDE_PTR(x) ((u64 *)ASSEMBLE_ADDR_PDPTE(RECURSIVE_PLM4E, RECURSIVE_PLM4E, (u64)(x) >> 18))
+#define PDPTE_PTR(x) ((u64 *)ASSEMBLE_ADDR_PDE(RECURSIVE_PLM4E, RECURSIVE_PLM4E, RECURSIVE_PLM4E, (u64)(x) >> 27))
+#define PML4E_PTR(x) ((u64 *)ASSEMBLE_ADDR(RECURSIVE_PLM4E, RECURSIVE_PLM4E, RECURSIVE_PLM4E, RECURSIVE_PLM4E, (u64)(x) >> 36))
