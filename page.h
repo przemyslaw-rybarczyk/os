@@ -18,15 +18,16 @@
 #define PD_SIZE (1ull << PD_BITS)
 #define PDPT_SIZE (1ull << PDPT_BITS)
 
-#define SIGN_EXTEND_PML4E(pml4e) (((pml4e) >> 8) * (0xFFFFull << 9) + (pml4e))
+// Takes an address and fills its first 16 bits with a sign extension of the lower 48 bits
+#define SIGN_EXTEND_ADDR(x) (((((x) >> 47) & 1) ? 0xFFFF000000000000ull : 0) | (x & 0x0000FFFFFFFFFFFFull))
 
 // These macros can be used to assemble addresses from their component parts - indices of page tables within other page tables,
 // and the offset of the address relative to the start of the page.
 // The offset can be larger than required, in which case it is truncated.
-#define ASSEMBLE_ADDR(pml4e, pdpte, pde, pte, i) ((SIGN_EXTEND_PML4E((pml4e)) << 39) | ((pdpte) << 30) | ((pde) << 21) | ((pte) << 12) | ((i) & 0x0000000000000FF8ull))
-#define ASSEMBLE_ADDR_PDE(pml4e, pdpte, pde, i) ((SIGN_EXTEND_PML4E((pml4e)) << 39) | ((pdpte) << 30) | ((pde) << 21) | ((i) & 0x00000000001FFFF8ull))
-#define ASSEMBLE_ADDR_PDPTE(pml4e, pdpte, i) ((SIGN_EXTEND_PML4E((pml4e)) << 39) | ((pdpte) << 30) | ((i) & 0x000000003FFFFFF8ull))
-#define ASSEMBLE_ADDR_PML4E(pml4e, i) ((SIGN_EXTEND_PML4E((pml4e)) << 39) | ((i) & 0x0000007FFFFFFFF8ull))
+#define ASSEMBLE_ADDR(pml4e, pdpte, pde, pte, i) (SIGN_EXTEND_ADDR(((u64)(pml4e) << 39) | ((u64)(pdpte) << 30) | ((u64)(pde) << 21) | ((u64)(pte) << 12) | ((u64)(i) & 0x0000000000000FF8ull)))
+#define ASSEMBLE_ADDR_PDE(pml4e, pdpte, pde, i) (SIGN_EXTEND_ADDR(((u64)(pml4e) << 39) | ((u64)(pdpte) << 30) | ((u64)(pde) << 21) | ((u64)(i) & 0x00000000001FFFF8ull)))
+#define ASSEMBLE_ADDR_PDPTE(pml4e, pdpte, i) (SIGN_EXTEND_ADDR(((u64)(pml4e) << 39) | ((u64)(pdpte) << 30) | ((u64)(i) & 0x000000003FFFFFF8ull)))
+#define ASSEMBLE_ADDR_PML4E(pml4e, i) (SIGN_EXTEND_ADDR(((u64)(pml4e) << 39) | ((u64)(i) & 0x0000007FFFFFFFF8ull)))
 
 #define RECURSIVE_PLM4E 0x100ull
 
@@ -36,3 +37,13 @@
 #define PDE_PTR(x) ((u64 *)ASSEMBLE_ADDR_PDPTE(RECURSIVE_PLM4E, RECURSIVE_PLM4E, (u64)(x) >> 18))
 #define PDPTE_PTR(x) ((u64 *)ASSEMBLE_ADDR_PDE(RECURSIVE_PLM4E, RECURSIVE_PLM4E, RECURSIVE_PLM4E, (u64)(x) >> 27))
 #define PML4E_PTR(x) ((u64 *)ASSEMBLE_ADDR(RECURSIVE_PLM4E, RECURSIVE_PLM4E, RECURSIVE_PLM4E, RECURSIVE_PLM4E, (u64)(x) >> 36))
+
+// Takes a pointer to a page map entry obtained through the recursive mapping,
+// and returns a virtual pointer to the page it has in its address field.
+#define DEREF_ENTRY_PTR(x) ((void *)SIGN_EXTEND_ADDR((u64)(x) << 9))
+
+void page_alloc_init(void);
+u64 page_alloc(void);
+void page_free(u64 page);
+u64 get_free_memory_size(void);
+bool map_page(u64 addr, bool global, bool write);

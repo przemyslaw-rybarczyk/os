@@ -4,7 +4,7 @@
 #include "interrupt.h"
 #include "keyboard.h"
 #include "mouse.h"
-#include "page_alloc.h"
+#include "page.h"
 #include "pic.h"
 #include "pit.h"
 #include "ps2.h"
@@ -34,6 +34,17 @@ void kernel_main(void) {
     print_string("There are ");
     print_hex(get_free_memory_size(), 16);
     print_string(" pages of free memory available\n");
+    u64 paging_test_addr = ASSEMBLE_ADDR(5, 6, 7, 8, 200);
+    u64 paging_test_val = 0x0123456789ABCDEF;
+    print_string("Paging test: mapping address\n");
+    map_page(paging_test_addr, true, true);
+    print_string("Paging test: writing value ");
+    print_hex(paging_test_val, 16);
+    print_newline();
+    *(volatile u64 *)paging_test_addr = paging_test_val;
+    print_string("Paging test: retrieved value ");
+    print_hex(*(volatile u64 *)paging_test_addr, 16);
+    print_newline();
     if (mouse_has_scroll_wheel)
         print_string("Mouse has a scroll wheel");
     else

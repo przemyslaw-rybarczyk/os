@@ -1,7 +1,6 @@
 #include "types.h"
-#include "page_alloc.h"
-
 #include "page.h"
+
 #include "string.h"
 
 #define MEMORY_RANGE_TYPE_USABLE 1
@@ -82,4 +81,34 @@ void page_free(u64 page) {
 // Returns the number of free pages.
 u64 get_free_memory_size(void) {
     return page_stack_top - PAGE_STACK_BOTTOM;
+}
+
+// If the page map entry is empty, fills it with a newly allocated page.
+// If `clear` is true, the page is cleared.
+// Returns true on success, false on failure.
+static bool ensure_page_map_entry_filled(u64 *entry, bool global, bool write, bool clear) {
+    if (!(*entry & PAGE_PRESENT)) {
+        u64 page = page_alloc();
+        if (page == 0)
+            return false;
+        *entry = page | (global ? PAGE_GLOBAL : 0) | (write ? PAGE_WRITE : 0) | PAGE_PRESENT;
+        if (clear)
+            memset(DEREF_ENTRY_PTR(entry), 0, PAGE_SIZE);
+    }
+    return true;
+}
+
+// Maps the page containing a given address, allocating any necessary page tables along the way.
+// If the page or any page tables containing it are already allocated, they are not modified.
+// Returns true on success, false on failure.
+bool map_page(u64 addr, bool global, bool write) {
+    if (!ensure_page_map_entry_filled(PML4E_PTR(addr), global, true, true))
+        return false;
+    if (!ensure_page_map_entry_filled(PDPTE_PTR(addr), global, true, true))
+        return false;
+    if (!ensure_page_map_entry_filled(PDE_PTR(addr), global, true, true))
+        return false;
+    if (!ensure_page_map_entry_filled(PTE_PTR(addr), global, write, false))
+        return false;
+    return true;
 }
