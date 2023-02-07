@@ -1,5 +1,6 @@
 #include "types.h"
 
+#include "alloc.h"
 #include "framebuffer.h"
 #include "interrupt.h"
 #include "keyboard.h"
@@ -15,6 +16,7 @@ void kernel_main(void) {
     framebuffer_init();
     interrupt_init();
     page_alloc_init();
+    alloc_init();
     pic_init();
     pit_init();
     ps2_init();
@@ -34,16 +36,19 @@ void kernel_main(void) {
     print_string("There are ");
     print_hex(get_free_memory_size(), 16);
     print_string(" pages of free memory available\n");
-    u64 paging_test_addr = ASSEMBLE_ADDR(5, 6, 7, 8, 200);
-    u64 paging_test_val = 0x0123456789ABCDEF;
-    print_string("Paging test: mapping address\n");
-    map_page(paging_test_addr, true, true);
-    print_string("Paging test: writing value ");
-    print_hex(paging_test_val, 16);
+    void *p1 = malloc(0x10000);
+    void *p2 = malloc(0x20000);
+    void *p3 = realloc(p2, 0x10000);
+    u64 *alloc_test_addr = (u64 *)malloc(8);
+    u64 alloc_test_val = 0x0123456789ABCDEF;
+    print_string("Allocation test: writing value ");
+    print_hex(alloc_test_val, 16);
     print_newline();
-    *(volatile u64 *)paging_test_addr = paging_test_val;
-    print_string("Paging test: retrieved value ");
-    print_hex(*(volatile u64 *)paging_test_addr, 16);
+    *(volatile u64 *)alloc_test_addr = alloc_test_val;
+    free(p1);
+    free(p3);
+    print_string("Allocation test: retrieved value ");
+    print_hex(*(volatile u64 *)alloc_test_addr, 16);
     print_newline();
     if (mouse_has_scroll_wheel)
         print_string("Mouse has a scroll wheel");
