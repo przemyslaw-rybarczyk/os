@@ -156,11 +156,27 @@ void print_string(const char *str) {
 }
 
 // Print the last `digits` digits of a number in hexadecimal
-void print_hex(u64 n, u64 digits) {
+static void print_hex(u64 n, u64 digits) {
     print_char('0');
     print_char('x');
     for (u64 i = 0; i < digits; i++) {
         u64 digit = (n >> (4 * (digits - 1 - i))) & 0xF;
         print_char(digit < 10 ? digit + '0' : digit - 10 + 'A');
     }
+}
+
+void print_hex_u64(u64 n) {
+    print_hex(n, 16);
+}
+
+void print_hex_u32(u32 n) {
+    print_hex((u64)n, 8);
+}
+
+void print_hex_u16(u16 n) {
+    print_hex((u64)n, 4);
+}
+
+void print_hex_u8(u8 n) {
+    print_hex((u64)n, 2);
 }

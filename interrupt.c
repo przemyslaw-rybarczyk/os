@@ -59,7 +59,7 @@ void interrupt_init(void) {
 void general_exception_handler(u8 interrupt_number, __attribute__((unused)) void *sp) {
     print_string("An exception has occurred.\n");
     print_string("Exception number: ");
-    print_hex(interrupt_number, 2);
+    print_hex_u8(interrupt_number);
     print_newline();
     while (1)
         asm volatile("hlt");
