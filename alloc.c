@@ -113,7 +113,7 @@ static size_t region_size(MemoryRegion *region) {
 static void *allocate_in_region(size_t n, FreeMemoryRegion *region) {
     // If there is enough space left to fit another unallocated region after the allocation, create one
     if (region_size((MemoryRegion *)region) >= n + sizeof(FreeMemoryRegion)) {
-        FreeMemoryRegion *new_region = (FreeMemoryRegion *)((char *)region + n);
+        FreeMemoryRegion *new_region = (FreeMemoryRegion *)((char *)region + sizeof(MemoryRegion) + n);
         new_region->header.allocated = false;
         insert_into_region_list((MemoryRegion *)new_region, (MemoryRegion *)region);
         insert_into_free_region_list(new_region);
@@ -132,7 +132,7 @@ void *malloc(size_t n) {
     // Go through every free region until finding one that can fit the allocation
     for (FreeMemoryRegion *region = dummy_region->next_free_region; region != dummy_region; region = region->next_free_region) {
         if (region_size((MemoryRegion *)region) >= n)
-            allocate_in_region(n, region);
+            return allocate_in_region(n, region);
     }
     // If we didn't find a free region, extend the heap and allocate a new one in the new space
     size_t heap_extend_size = n + sizeof(MemoryRegion);
@@ -147,10 +147,15 @@ void *malloc(size_t n) {
     insert_into_free_region_list(new_dummy_region);
     FreeMemoryRegion *old_dummy_region = dummy_region;
     dummy_region = new_dummy_region;
-    // Free the old dummy region
-    // This will turn it into a regular free region and coalesce it with the preceding region if possible.
-    free(old_dummy_region);
-    return allocate_in_region(n, dummy_region->prev_free_region);
+    // Turn the old dummy region into a regular free region and coalesce it with the preceding region if possible
+    if (!old_dummy_region->header.prev_region->allocated) {
+        remove_from_free_region_list(old_dummy_region);
+        remove_from_region_list((MemoryRegion *)old_dummy_region);
+    } else {
+        old_dummy_region->header.allocated = false;
+    }
+    // Allocate the memory in the final region
+    return allocate_in_region(n, (FreeMemoryRegion *)(dummy_region->header.prev_region));
 }
 
 void free(void *p) {
