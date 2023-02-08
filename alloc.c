@@ -1,6 +1,7 @@
 #include "types.h"
 #include "alloc.h"
 
+#include "framebuffer.h"
 #include "page.h"
 #include "string.h"
 
@@ -189,4 +190,35 @@ void *realloc(void *p, size_t n) {
     // Free the old memory area
     free(p);
     return np;
+}
+
+void print_debug_heap_info(void) {
+    print_string("Heap state:\n");
+    print_string("Address            Size               Status Prev free region   Next free region\n");
+    for (MemoryRegion *region = dummy_region->header.next_region;; region = region->next_region) {
+        print_hex_u64((u64)region);
+        print_char(' ');
+        if (region != (MemoryRegion *)dummy_region)
+            print_hex_u64(region_size(region));
+        else
+            print_string("                  ");
+        print_char(' ');
+        print_string(region->allocated ? "used" : "free");
+        print_string("   ");
+        if (!region->allocated || region == (MemoryRegion *)dummy_region) {
+            print_hex_u64((u64)((FreeMemoryRegion *)region)->prev_free_region);
+            print_char(' ');
+            print_hex_u64((u64)((FreeMemoryRegion *)region)->next_free_region);
+            print_char(' ');
+        }
+        if (region == (MemoryRegion *)dummy_region)
+            print_string("[dummy] ");
+        else if (region->next_region < region)
+            print_string("[broken order] ");
+        if (region->next_region->prev_region != region)
+            print_string("[broken backlink] ");
+        print_newline();
+        if (region == (MemoryRegion *)dummy_region)
+            break;
+    }
 }
