@@ -1,7 +1,9 @@
 #include "types.h"
 
 #include "alloc.h"
+#include "elf.h"
 #include "framebuffer.h"
+#include "included_programs.h"
 #include "interrupt.h"
 #include "keyboard.h"
 #include "mouse.h"
@@ -73,6 +75,13 @@ void kernel_main(void) {
     print_string("Allocation test: retrieved value ");
     print_hex_u64(*(volatile u64 *)alloc_test_addr);
     print_newline();
+    print_string("Loading ELF file\n");
+    u64 program_entry;
+    if (load_elf_file(included_file_program, included_file_program_end - included_file_program, &program_entry))
+        print_string("Loaded ELF file\n");
+    else
+        print_string("Failed to load ELF file\n");
+    ((void (*)())program_entry)();
     if (mouse_has_scroll_wheel)
         print_string("Mouse has a scroll wheel");
     else

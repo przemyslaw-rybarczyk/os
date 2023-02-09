@@ -1,0 +1,2 @@
+_start:
+  int 0x03

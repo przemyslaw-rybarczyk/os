@@ -86,12 +86,12 @@ u64 get_free_memory_size(void) {
 // If the page map entry is empty, fills it with a newly allocated page.
 // If `clear` is true, the page is cleared.
 // Returns true on success, false on failure.
-static bool ensure_page_map_entry_filled(u64 *entry, bool global, bool write, bool clear) {
+static bool ensure_page_map_entry_filled(u64 *entry, bool global, bool write, bool execute, bool clear) {
     if (!(*entry & PAGE_PRESENT)) {
         u64 page = page_alloc();
         if (page == 0)
             return false;
-        *entry = page | (global ? PAGE_GLOBAL : 0) | (write ? PAGE_WRITE : 0) | PAGE_PRESENT;
+        *entry = (page & PAGE_MASK) | (execute ? 0 : PAGE_NX) | (global ? PAGE_GLOBAL : 0) | (write ? PAGE_WRITE : 0) | PAGE_PRESENT;
         if (clear)
             memset(DEREF_ENTRY_PTR(entry), 0, PAGE_SIZE);
     }
@@ -101,14 +101,24 @@ static bool ensure_page_map_entry_filled(u64 *entry, bool global, bool write, bo
 // Maps the page containing a given address, allocating any necessary page tables along the way.
 // If the page or any page tables containing it are already allocated, they are not modified.
 // Returns true on success, false on failure.
-bool map_page(u64 addr, bool global, bool write) {
-    if (!ensure_page_map_entry_filled(PML4E_PTR(addr), global, true, true))
+bool map_page(u64 addr, bool global, bool write, bool execute) {
+    if (!ensure_page_map_entry_filled(PML4E_PTR(addr), global, true, true, true))
         return false;
-    if (!ensure_page_map_entry_filled(PDPTE_PTR(addr), global, true, true))
+    if (!ensure_page_map_entry_filled(PDPTE_PTR(addr), global, true, true, true))
         return false;
-    if (!ensure_page_map_entry_filled(PDE_PTR(addr), global, true, true))
+    if (!ensure_page_map_entry_filled(PDE_PTR(addr), global, true, true, true))
         return false;
-    if (!ensure_page_map_entry_filled(PTE_PTR(addr), global, write, false))
+    if (!ensure_page_map_entry_filled(PTE_PTR(addr), global, write, execute, false))
         return false;
+    return true;
+}
+
+// The same as map_page(), but maps an entire range of addresses
+bool map_pages(u64 start, u64 end, bool global, bool write, bool execute) {
+    u64 start_page = start / PAGE_SIZE * PAGE_SIZE;
+    u64 end_page = (end + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE;
+    for (u64 page = start_page; page < end_page; page += PAGE_SIZE)
+        if (!map_page(page, global, write, execute))
+            return false;
     return true;
 }
