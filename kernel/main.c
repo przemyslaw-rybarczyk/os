@@ -10,6 +10,7 @@
 #include "page.h"
 #include "pic.h"
 #include "pit.h"
+#include "process.h"
 #include "ps2.h"
 
 extern bool mouse_has_scroll_wheel;
@@ -17,6 +18,7 @@ extern bool mouse_has_scroll_wheel;
 void kernel_main(void) {
     framebuffer_init();
     gdt_init();
+    tss_init();
     interrupt_init();
     page_alloc_init();
     alloc_init();
