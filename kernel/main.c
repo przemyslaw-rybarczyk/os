@@ -85,7 +85,7 @@ void kernel_main(void) {
         print_string("Loaded ELF file\n");
     else
         print_string("Failed to load ELF file\n");
-    ((void (*)())program_entry)();
+    jump_to_program(program_entry);
     if (mouse_has_scroll_wheel)
         print_string("Mouse has a scroll wheel");
     else

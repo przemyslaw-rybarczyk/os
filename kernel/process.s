@@ -1,8 +1,15 @@
 global tss
 global tss_end
 global tss_init
+global jump_to_program
 
+SEGMENT_KERNEL_CODE equ 0x08
+SEGMENT_KERNEL_DATA equ 0x10
+SEGMENT_USER_CODE equ 0x18
+SEGMENT_USER_DATA equ 0x20
 TSS_DESCRIPTOR equ 0x28
+
+SEGMENT_RING_3 equ 0x03
 
 ; Task State Segment
 tss:
@@ -20,3 +27,14 @@ tss_init:
   mov ax, TSS_DESCRIPTOR
   ltr ax
   ret
+
+jump_to_program:
+  ; Set RSP0 in TSS
+  mov [tss.rsp0], rsp
+  ; Jump to the process by setting up the stack and executing an IRET
+  push SEGMENT_USER_DATA | SEGMENT_RING_3 ; SS
+  push 0 ; RSP
+  pushf ; RFLAGS
+  push SEGMENT_USER_CODE | SEGMENT_RING_3 ; CS
+  push rdi ; RIP
+  iretq
