@@ -4,6 +4,7 @@
 
 #define PAGE_PRESENT (1ull << 0)
 #define PAGE_WRITE (1ull << 1)
+#define PAGE_USER (1ull << 2)
 #define PAGE_LARGE (1ull << 7)
 #define PAGE_GLOBAL (1ull << 8)
 #define PAGE_NX (1ull << 63)
@@ -48,6 +49,6 @@ void page_alloc_init(void);
 u64 page_alloc(void);
 void page_free(u64 page);
 u64 get_free_memory_size(void);
-bool map_page(u64 addr, bool global, bool write, bool execute);
-bool map_pages(u64 start, u64 end, bool global, bool write, bool execute);
+bool map_page(u64 addr, bool user, bool global, bool write, bool execute);
+bool map_pages(u64 start, u64 end, bool user, bool global, bool write, bool execute);
 void remove_identity_mapping(void);

@@ -107,6 +107,7 @@ bool load_elf_file(u8 *file, size_t file_length, u64 *entry) {
             if (!map_pages(
                 program_header->vaddr,
                 program_header->vaddr + program_header->memory_size,
+                true,
                 false,
                 (program_header->flags & ELF_PT_FLAGS_W) != 0,
                 (program_header->flags & ELF_PT_FLAGS_X) != 0
