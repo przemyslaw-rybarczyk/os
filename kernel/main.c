@@ -16,6 +16,7 @@ extern bool mouse_has_scroll_wheel;
 
 void kernel_main(void) {
     framebuffer_init();
+    gdt_init();
     interrupt_init();
     page_alloc_init();
     alloc_init();
