@@ -50,3 +50,4 @@ void page_free(u64 page);
 u64 get_free_memory_size(void);
 bool map_page(u64 addr, bool global, bool write, bool execute);
 bool map_pages(u64 start, u64 end, bool global, bool write, bool execute);
+void remove_identity_mapping(void);

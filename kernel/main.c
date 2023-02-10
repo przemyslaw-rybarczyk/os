@@ -24,6 +24,7 @@ void kernel_main(void) {
     pit_init();
     ps2_init();
     asm volatile ("sti");
+    remove_identity_mapping();
     u32 fb_width = get_framebuffer_width();
     u32 fb_height = get_framebuffer_height();
     for (u32 y = 0; y < fb_height; y++)

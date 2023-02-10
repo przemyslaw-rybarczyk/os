@@ -122,3 +122,13 @@ bool map_pages(u64 start, u64 end, bool global, bool write, bool execute) {
             return false;
     return true;
 }
+
+// Removes the identity mapping created by the bootloader.
+// Should be called after the contents of low memory are no longer needed.
+void remove_identity_mapping(void) {
+    *PDE_PTR(0) = 0;
+    *PDPTE_PTR(0) = 0;
+    *PML4E_PTR(0) = 0;
+    for (size_t i = 0; i < PT_SIZE; i += PAGE_SIZE)
+        asm volatile ("invlpg [%0]" : : "r"(i));
+}
