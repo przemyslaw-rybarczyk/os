@@ -1,3 +1,5 @@
+global _start
+
 section .rodata
 
 hello: db `Hello, world!\0`
