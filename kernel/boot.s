@@ -71,6 +71,7 @@ CR0_PG equ 1 << 31
 CR4_PAE equ 1 << 5
 CR4_PGE equ 1 << 7
 EFER_MSR equ 0xC0000080
+EFER_MSR_SCE equ 1 << 0
 EFER_MSR_LME equ 1 << 8
 EFER_MSR_NXE equ 1 << 11
 
@@ -93,7 +94,7 @@ PAGE_NX equ 1 << 63
 RECURSIVE_PML4E equ 0x100
 FB_PML4E equ 0x1FD
 STACK_PML4E equ 0x1FE
-STACK_BOTTOM_VIRTUAL equ (0xFFFF << 48) | (STACK_PML4E << 39) | 0x8000000000
+STACK_BOTTOM_VIRTUAL equ (0xFFFF << 48) | ((STACK_PML4E + 1) << 39)
 PAGE_STACK_PML4E equ 0x1FC
 
 SEGMENT_KERNEL_CODE equ 0x08
@@ -558,10 +559,10 @@ protected_mode_start:
   ; Set CR3 to address of PML4
   mov eax, pml4
   mov cr3, eax
-  ; Set LME and NXE in EFER MSR
+  ; Set SCE, LME, and NXE in EFER MSR
   mov ecx, EFER_MSR
   rdmsr
-  or eax, EFER_MSR_LME | EFER_MSR_NXE
+  or eax, EFER_MSR_SCE | EFER_MSR_LME | EFER_MSR_NXE
   wrmsr
   ; Set PG in CR0
   mov eax, cr0

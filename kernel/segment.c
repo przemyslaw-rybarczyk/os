@@ -37,6 +37,10 @@ typedef struct GDTR {
     u64 offset;
 } __attribute__((packed)) GDTR;
 
+// Global Descriptor Table
+// The layout of the GDT is to a degree forced by the design of the SYSCALL instruction.
+// It requires the kernel data selector to come after the kernel code selector,
+// and the user code selector to come after the user data selector.
 static GDTEntry gdt[] = {
     // Entry 0x00 - unused
     (GDTEntry){},
@@ -58,22 +62,22 @@ static GDTEntry gdt[] = {
         .flags_limit2 = GDT_DB | GDT_GRANULAR | 0xF,
         .base3 = 0x00,
     },
-    // Entry 0x18 - user code
-    (GDTEntry){
-        .limit1 = 0xFFFF,
-        .base1 = 0x0000,
-        .base2 = 0x00,
-        .access = GDT_PRESENT | GDT_RING_3 | GDT_S | GDT_EXECUTABLE | GDT_RW,
-        .flags_limit2 = GDT_LONG_CODE | GDT_GRANULAR | 0xF,
-        .base3 = 0x00,
-    },
-    // Entry 0x20 - user data
+    // Entry 0x18 - user data
     (GDTEntry){
         .limit1 = 0xFFFF,
         .base1 = 0x0000,
         .base2 = 0x00,
         .access = GDT_PRESENT | GDT_RING_3 | GDT_S | GDT_RW,
         .flags_limit2 = GDT_DB | GDT_GRANULAR | 0xF,
+        .base3 = 0x00,
+    },
+    // Entry 0x20 - user code
+    (GDTEntry){
+        .limit1 = 0xFFFF,
+        .base1 = 0x0000,
+        .base2 = 0x00,
+        .access = GDT_PRESENT | GDT_RING_3 | GDT_S | GDT_EXECUTABLE | GDT_RW,
+        .flags_limit2 = GDT_LONG_CODE | GDT_GRANULAR | 0xF,
         .base3 = 0x00,
     },
     // Entry 0x28 - TSS descriptor
@@ -90,7 +94,7 @@ void gdt_init(void) {
         .limit1 = (u16)(tss_end - tss),
         .base1 = (u16)(u64)tss,
         .base2 = (u8)((u64)tss >> 16),
-        .access = GDT_PRESENT | GDT_RING_3 | GDT_TSS_TYPE_64_BIT_AVAILABLE,
+        .access = GDT_PRESENT | GDT_TSS_TYPE_64_BIT_AVAILABLE,
         .flags_limit2 = (u8)((u64)(tss_end - tss) >> 16),
         .base3 = (u8)((u64)tss >> 24),
     };
