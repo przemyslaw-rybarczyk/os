@@ -1,7 +1,7 @@
 global tss
 global tss_end
 global userspace_init
-global jump_to_program
+global jump_to_current_process
 
 SEGMENT_KERNEL_CODE equ 0x08
 SEGMENT_KERNEL_DATA equ 0x10
@@ -32,9 +32,39 @@ tss_end:
 
 section .text
 
+extern current_process
+
 extern print_char
 
+struc Process
+  .rax: resq 1
+  .rdx: resq 1
+  .rcx: resq 1
+  .rbx: resq 1
+  .rbp: resq 1
+  .rsp: resq 1
+  .rsi: resq 1
+  .rdi: resq 1
+  .r8: resq 1
+  .r9: resq 1
+  .r10: resq 1
+  .r11: resq 1
+  .r12: resq 1
+  .r13: resq 1
+  .r14: resq 1
+  .r15: resq 1
+  .rip: resq 1
+  .rflags: resq 1
+  .cs: resq 1
+  .ss: resq 1
+endstruc
+
+KERNEL_STACK_BOTTOM equ 0xFFFFFF8000000000
+
 syscall_handler:
+  ; Set up the kernel stack
+  ; We keep interrupts disabled while we do that to avoid an interrupt occurring with no stack set up.
+  mov rsp, KERNEL_STACK_BOTTOM
   sti
   ; Save all scratch registers
   push rax
@@ -89,30 +119,32 @@ userspace_init:
   wrmsr
   ret
 
-jump_to_program:
-  ; Set RSP0 in TSS
-  mov [tss.rsp0], rsp
-  ; Jump to the process by setting up the stack and executing an IRET
-  mov rax, rsp
-  push SEGMENT_USER_DATA | SEGMENT_RING_3 ; SS
-  push rax ; RSP
-  pushf ; RFLAGS
-  push SEGMENT_USER_CODE | SEGMENT_RING_3 ; CS
-  push rdi ; RIP
-  ; Clear all registers (except RSP)
-  xor rax, rax
-  xor rcx, rcx
-  xor rdx, rdx
-  xor rbx, rbx
-  xor rbp, rbp
-  xor rsi, rsi
-  xor rdi, rdi
-  xor r8, r8
-  xor r9, r9
-  xor r10, r10
-  xor r11, r11
-  xor r12, r12
-  xor r13, r13
-  xor r14, r14
-  xor r15, r15
+jump_to_current_process:
+  ; Set the address of the kernel stack in TSS
+  mov rax, KERNEL_STACK_BOTTOM
+  mov [tss.rsp0], rax
+  ; Set up the stack for an IRET
+  mov rax, [current_process]
+  push qword [rax + Process.ss]
+  push qword [rax + Process.rsp]
+  push qword [rax + Process.rflags]
+  push qword [rax + Process.cs]
+  push qword [rax + Process.rip]
+  ; Restore process registers
+  mov rcx, [rax + Process.rcx]
+  mov rdx, [rax + Process.rdx]
+  mov rbx, [rax + Process.rbx]
+  mov rbp, [rax + Process.rbp]
+  mov rsi, [rax + Process.rsi]
+  mov rdi, [rax + Process.rdi]
+  mov r8, [rax + Process.r8]
+  mov r9, [rax + Process.r9]
+  mov r10, [rax + Process.r10]
+  mov r11, [rax + Process.r11]
+  mov r12, [rax + Process.r12]
+  mov r13, [rax + Process.r13]
+  mov r14, [rax + Process.r14]
+  mov r15, [rax + Process.r15]
+  mov rax, [rax + Process.rax]
+  ; Jump to the process using an IRET
   iretq

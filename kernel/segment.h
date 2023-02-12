@@ -8,4 +8,6 @@
 #define SEGMENT_USER_CODE 0x20
 #define TSS_DESCRIPTOR 0x28
 
+#define SEGMENT_RING_3 0x03
+
 void gdt_init(void);

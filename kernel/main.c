@@ -12,6 +12,7 @@
 #include "pit.h"
 #include "process.h"
 #include "ps2.h"
+#include "segment.h"
 
 extern bool mouse_has_scroll_wheel;
 
@@ -38,7 +39,7 @@ void kernel_main(void) {
     if (load_elf_file(included_file_program, included_file_program_end - included_file_program, &program_entry)) {
         print_string("Loaded ELF file\n");
         print_string("Jumping to process\n");
-        jump_to_program(program_entry);
+        spawn_process(program_entry);
     } else {
         print_string("Failed to load ELF file\n");
     }
