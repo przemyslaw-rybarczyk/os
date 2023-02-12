@@ -57,9 +57,23 @@ struc Process
   .rflags: resq 1
   .cs: resq 1
   .ss: resq 1
+  .kernel_stack_phys: resq 1
 endstruc
 
-KERNEL_STACK_BOTTOM equ 0xFFFFFF8000000000
+PAGE_SIZE equ 1 << 12
+
+PAGE_PRESENT equ 1 << 0
+PAGE_WRITE equ 1 << 1
+PAGE_GLOBAL equ 1 << 8
+PAGE_NX equ 1 << 63
+
+KERNEL_STACK_PML4E equ 0x1FE
+RECURSIVE_PML4E equ 0x100
+
+KERNEL_STACK_BOTTOM equ (0xFFFF << 48) | ((KERNEL_STACK_PML4E + 1) << 39)
+KERNEL_SWAP_STACK_BOTTOM equ KERNEL_STACK_BOTTOM - 2 * PAGE_SIZE
+KERNEL_STACK_PTE equ (0xFFFF << 48) | (RECURSIVE_PML4E << 39) | (KERNEL_STACK_PML4E << 30) | 0x3FFFFFF8
+KERNEL_SWAP_STACK_PTE equ KERNEL_STACK_PTE - 2 * 8
 
 syscall_handler:
   ; Set up the kernel stack
@@ -120,11 +134,24 @@ userspace_init:
   ret
 
 jump_to_current_process:
-  ; Set the address of the kernel stack in TSS
-  mov rax, KERNEL_STACK_BOTTOM
-  mov [tss.rsp0], rax
-  ; Set up the stack for an IRET
   mov rax, [current_process]
+  ; Load the process kernel stack
+  ; Since the process expects its kernel stack to be in the same location as the currently loaded kernel stack,
+  ; we move the current kernel stack to a different location (the swap stack) before mapping the process kernel stack in its place.
+  mov rbx, KERNEL_STACK_PTE
+  mov rcx, KERNEL_SWAP_STACK_PTE
+  mov rdx, [rbx]
+  mov [rcx], rdx
+  invlpg [rcx]
+  add rsp, KERNEL_SWAP_STACK_BOTTOM - KERNEL_STACK_BOTTOM
+  mov rdx, [rax + Process.kernel_stack_phys]
+  or rdx, PAGE_NX | PAGE_GLOBAL | PAGE_WRITE | PAGE_PRESENT
+  mov [rbx], rdx
+  invlpg [rbx]
+  ; Set the address of the kernel stack in TSS
+  mov rdx, KERNEL_STACK_BOTTOM
+  mov [tss.rsp0], rdx
+  ; Set up the stack for an IRET
   push qword [rax + Process.ss]
   push qword [rax + Process.rsp]
   push qword [rax + Process.rflags]
