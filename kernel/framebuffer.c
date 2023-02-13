@@ -117,7 +117,8 @@ static u32 cursor_x = 0;
 
 void print_newline(void) {
     // Scroll screen upwards by FONT_HEIGHT pixels
-    memmove(framebuffer, framebuffer + FONT_HEIGHT * fb_pitch, (fb_height - FONT_HEIGHT) * fb_pitch);
+    for (u32 y = 0; y < fb_height - FONT_HEIGHT; y++)
+        memcpy(framebuffer + y * fb_pitch, framebuffer + (y + FONT_HEIGHT) * fb_pitch, fb_width * fb_bytes_per_pixel);
     // Fill the new line with black
     memset(framebuffer + (fb_height - FONT_HEIGHT) * fb_pitch, 0x00, FONT_HEIGHT * fb_pitch);
     // Move the cursor to the start
