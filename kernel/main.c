@@ -26,7 +26,6 @@ void kernel_main(void) {
     pic_init();
     pit_init();
     ps2_init();
-    asm volatile ("sti");
     remove_identity_mapping();
     u32 fb_width = get_framebuffer_width();
     u32 fb_height = get_framebuffer_height();
@@ -39,7 +38,12 @@ void kernel_main(void) {
     if (load_elf_file(included_file_program, included_file_program_end - included_file_program, &program_entry)) {
         print_string("Loaded ELF file\n");
         print_string("Jumping to process\n");
-        spawn_process(program_entry);
+        spawn_process(program_entry, 'A');
+        spawn_process(program_entry, 'B');
+        spawn_process(program_entry, 'C');
+        spawn_process(program_entry, 'D');
+        spawn_process(program_entry, 'E');
+        sched_start();
     } else {
         print_string("Failed to load ELF file\n");
     }

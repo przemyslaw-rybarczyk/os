@@ -129,7 +129,7 @@ void print_char(char c) {
     if (c == '\n') {
         print_newline();
     } else {
-        if (FONT_WIDTH * cursor_x >= fb_width) {
+        if (FONT_WIDTH * (cursor_x + 1) >= fb_width) {
             // If we're past the end of the line, move to a new one
             print_newline();
         }
@@ -149,6 +149,18 @@ void print_char(char c) {
         // Move cursor into position for the next character
         cursor_x += 1;
     }
+}
+
+static volatile atomic_bool fb_lock = false;
+
+// This is used for printing characters from a syscall.
+// The lock has a rare race condition, but it doesn't matter since it's only a temporary function for testing.
+void print_char_locked(char c) {
+    while (fb_lock)
+        ;
+    fb_lock = true;
+    print_char(c);
+    fb_lock = false;
 }
 
 void print_string(const char *str) {
