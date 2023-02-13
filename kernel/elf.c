@@ -18,7 +18,7 @@
 #define ELF_PT_FLAGS_R 4
 
 #define ELF_MAGIC_SIZE 4
-static u8 elf_magic[ELF_MAGIC_SIZE] = {0x7F, 0x45, 0x4C, 0x46};
+static const u8 elf_magic[ELF_MAGIC_SIZE] = {0x7F, 0x45, 0x4C, 0x46};
 
 // We don't allow programs to be loaded past the 4G threshold.
 // This is an arbitrary limit.
