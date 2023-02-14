@@ -2,6 +2,7 @@
 #include "framebuffer.h"
 
 #include "page.h"
+#include "spinlock.h"
 #include "string.h"
 
 #include "font.h"
@@ -151,16 +152,14 @@ void print_char(char c) {
     }
 }
 
-static volatile atomic_bool fb_lock = false;
+static spinlock_t fb_lock = SPINLOCK_FREE;
 
 // This is used for printing characters from a syscall.
 // The lock has a rare race condition, but it doesn't matter since it's only a temporary function for testing.
 void print_char_locked(char c) {
-    while (fb_lock)
-        ;
-    fb_lock = true;
+    spinlock_acquire(&fb_lock);
     print_char(c);
-    fb_lock = false;
+    spinlock_release(&fb_lock);
 }
 
 void print_string(const char *str) {
