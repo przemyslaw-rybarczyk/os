@@ -13,6 +13,7 @@ IDT_KEYBOARD_IRQ equ 0x21
 IDT_MOUSE_IRQ equ 0x2C
 
 %define interrupt_has_handler(i) ((i) < IDT_EXCEPTIONS_NUM || (i) == IDT_PIT_IRQ || (i) == IDT_KEYBOARD_IRQ || (i) == IDT_MOUSE_IRQ)
+%define interrupt_pushes_error_code(i) ((i) == 0x08 || (i) == 0x0A || (i) == 0x0B || (i) == 0x0C || (i) == 0x0D || (i) == 0x0E || (i) == 0x11 || (i) == 0x15 || (i) == 0x1D || (i) == 0x1E)
 
 ; Define a wrapper handler for each interrupt that has a handler function
 ; The handler saves the scratch registers and calls the actual handler function (written in C).
@@ -31,10 +32,13 @@ interrupt_handler_%+i:
   push r10
   push r11
 %if i < IDT_EXCEPTIONS_NUM
-  ; For exceptions we call the handler function with two arguments: the number of the interrupt
-  ; and the value the stack pointer had at the start of the interrupt handler.
+  ; For exceptions we call the handler function with three arguments: the number of the interrupt,
+  ; the value the stack pointer had at the start of the interrupt handler, and the error code if the interrupt pushes one.
+%if interrupt_pushes_error_code(i)
+  pop rdx
+%endif
   mov rdi, i
-  lea rsi, [rsp - 9 * 8]
+  lea rsi, [rsp + 9 * 8]
   call general_exception_handler
 %elif i == IDT_PIT_IRQ
   call pit_irq_handler
