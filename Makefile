@@ -40,7 +40,4 @@ $(BUILD)/program/%.o: program/%.c $(PROGRAM_HEADERS)
 	clang $< -c $(PROGRAM_CFLAGS) -o $@
 
 $(BUILD)/kernel $(BUILD)/program: | $(BUILD)
-	mkdir $@
-
-$(BUILD):
-	mkdir $@
+	mkdir -p $@
