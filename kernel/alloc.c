@@ -127,6 +127,9 @@ void *malloc(size_t n) {
         return NULL;
     // Round allocation size up to multiple of alignment
     n = ((n + MALLOC_ALIGNMENT - 1) / MALLOC_ALIGNMENT) * MALLOC_ALIGNMENT;
+    // Make sure allocation is large enough to fit a free region header when it's freed
+    if (n < sizeof(FreeMemoryRegion) - sizeof(MemoryRegion))
+        n = sizeof(FreeMemoryRegion) - sizeof(MemoryRegion);
     // Go through every free region until finding one that can fit the allocation
     for (FreeMemoryRegion *region = dummy_region->next_free_region; region != dummy_region; region = region->next_free_region) {
         if (region_size((MemoryRegion *)region) >= n)
