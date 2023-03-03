@@ -1,4 +1,6 @@
-extern kernel_main
+extern kernel_start
+extern kernel_start_ap
+extern last_kernel_stack
 
 ; Variables declared by linker script
 extern KERNEL_LMA
@@ -89,12 +91,14 @@ PAGE_LARGE equ 1 << 7
 PAGE_GLOBAL equ 1 << 8
 PAGE_NX equ 1 << 63
 
+PAGE_SIZE equ 1 << 12
+
 ; Kernel constants
 
 RECURSIVE_PML4E equ 0x100
 FB_PML4E equ 0x1FD
 STACK_PML4E equ 0x1FE
-STACK_BOTTOM_VIRTUAL equ (0xFFFF << 48) | ((STACK_PML4E + 1) << 39)
+STACK_BOTTOM_VIRTUAL equ (0xFFFF << 48) | (STACK_PML4E << 39) | PAGE_SIZE
 PAGE_STACK_PML4E equ 0x1FC
 
 SEGMENT_KERNEL_CODE equ 0x08
@@ -116,6 +120,7 @@ section .boot
 
 bits 16
 
+start:
   ; Set data segment registers
   mov ax, 0
   mov ds, ax
@@ -369,7 +374,15 @@ get_video_mode:
   jne error
 .end:
 
-jmp enter_protected_mode
+enter_protected_mode:
+  ; Load GDT
+  lgdt [gdtr32]
+  ; Set PE in CR0
+  mov eax, cr0
+  or eax, CR0_PE
+  mov cr0, eax
+  ; Jump to enter protected mode
+  jmp SEGMENT_KERNEL_CODE:protected_mode_start
 
 ; Disk Address Packet
 ; The segment is set so that the offset is 0.
@@ -406,7 +419,7 @@ error:
   jmp .halt
 
 ; Fill the rest of the boot sector with zeroes and place the boot signature at the end.
-times 510 - ($-$$) db 0
+times 0x1FE - ($-$$) db 0
 dw 0xAA55
 
 ; Global Descriptor Table for use in protected mode
@@ -462,17 +475,6 @@ gdtr:
   dw gdt_length - 1
   dq gdt
 
-enter_protected_mode:
-  cli
-  ; Load GDT
-  lgdt [gdtr32]
-  ; Set PE in CR0
-  mov eax, cr0
-  or eax, CR0_PE
-  mov cr0, eax
-  ; Jump to enter protected mode
-  jmp SEGMENT_KERNEL_CODE:protected_mode_start
-
 bits 32
 
 ; Set up paging and enter long mode
@@ -495,13 +497,13 @@ protected_mode_start:
   ; Identity map the lowest 2 MiB with a large page
   mov dword [pml4], pdpt_id | PAGE_WRITE | PAGE_PRESENT
   mov dword [pdpt_id], pd_id | PAGE_WRITE | PAGE_PRESENT
-  mov dword [pd_id], 0 | PAGE_GLOBAL | PAGE_LARGE | PAGE_WRITE | PAGE_PRESENT
-  ; Map bottom of stack at last page in PML4E number STACK_PML4E
+  mov dword [pd_id], 0 | PAGE_LARGE | PAGE_WRITE | PAGE_PRESENT
+  ; Map bottom of stack to first page in PML4E number STACK_PML4E
   mov dword [pml4 + STACK_PML4E * 8], pdpt_stack | PAGE_WRITE | PAGE_PRESENT
-  mov dword [pdpt_stack + 0x1FF * 8], pd_stack | PAGE_WRITE | PAGE_PRESENT
-  mov dword [pd_stack + 0x1FF * 8], pt_stack | PAGE_WRITE | PAGE_PRESENT
-  mov dword [pt_stack + 0x1FF * 8], stack | PAGE_GLOBAL | PAGE_WRITE | PAGE_PRESENT
-  mov dword [pt_stack + 0x1FF * 8 + 4], PAGE_NX >> 32
+  mov dword [pdpt_stack], pd_stack | PAGE_WRITE | PAGE_PRESENT
+  mov dword [pd_stack], pt_stack | PAGE_WRITE | PAGE_PRESENT
+  mov dword [pt_stack], stack | PAGE_GLOBAL | PAGE_WRITE | PAGE_PRESENT
+  mov dword [pt_stack + 4], PAGE_NX >> 32
   ; Set PML4E number RECURSIVE_PML4E to point at the PML4
   ; This allows access to the page tables through memory.
   mov dword [pml4 + RECURSIVE_PML4E * 8], pml4 | PAGE_WRITE | PAGE_PRESENT
@@ -586,7 +588,73 @@ long_mode_start:
   ; Set rsp to bottom of stack
   mov rsp, STACK_BOTTOM_VIRTUAL
   ; Finally, enter the kernel
-  call kernel_main
+  call kernel_start
+  ; Loop forever if kernel exits - this shouldn't happen
+.halt:
+  cli
+  hlt
+  jmp .halt
+
+; Pad so that AP initialization code starts at 0x8000
+times 0x400 - ($-$$) db 0
+
+bits 16
+
+start_ap:
+  cli
+  ; Set data segment register
+  mov ax, 0
+  mov ds, ax
+  ; Load GDT
+  lgdt [gdtr32]
+  ; Set PE in CR0
+  mov eax, cr0
+  or eax, CR0_PE
+  mov cr0, eax
+  ; Jump to enter protected mode
+  jmp SEGMENT_KERNEL_CODE:protected_mode_start_ap
+
+bits 32
+
+; Set up paging and enter long mode
+protected_mode_start_ap:
+  ; Enable PAE and PGE in CR4
+  mov eax, cr4
+  or eax, CR4_PAE | CR4_PGE
+  mov cr4, eax
+  ; Set CR3 to address of PML4
+  mov eax, pml4
+  mov cr3, eax
+  ; Set SCE, LME, and NXE in EFER MSR
+  mov ecx, EFER_MSR
+  rdmsr
+  or eax, EFER_MSR_SCE | EFER_MSR_LME | EFER_MSR_NXE
+  wrmsr
+  ; Set PG in CR0
+  mov eax, cr0
+  or eax, CR0_PG
+  mov cr0, eax
+  ; Load GDT
+  lgdt [gdtr]
+  ; Jump to enter long mode
+  jmp SEGMENT_KERNEL_CODE:long_mode_start_ap
+
+bits 64
+
+long_mode_start_ap:
+  ; Set data segment registers
+  mov ax, SEGMENT_KERNEL_DATA
+  mov ds, ax
+  mov es, ax
+  mov fs, ax
+  mov gs, ax
+  mov ss, ax
+  ; Load initial kernel stack
+  mov rax, 2 * PAGE_SIZE
+  lock xadd [last_kernel_stack], rax
+  lea rsp, [rax + 3 * PAGE_SIZE]
+  ; Finally, enter the kernel
+  call kernel_start_ap
   ; Loop forever if kernel exits - this shouldn't happen
 .halt:
   cli

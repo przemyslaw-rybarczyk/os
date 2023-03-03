@@ -18,7 +18,7 @@ spinlock_acquire:
   ; This is done instead of retrying the acquisition to avoid performace issues caused by locking memory repeatedly.
   cmp dword [rdi], 0
   pause
-  je .wait
+  jne .wait
   ; After the lock becomes free, try to acquire it again
   jmp .try_lock
 

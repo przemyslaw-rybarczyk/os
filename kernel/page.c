@@ -1,6 +1,7 @@
 #include "types.h"
 #include "page.h"
 
+#include "spinlock.h"
 #include "string.h"
 
 #define MEMORY_RANGE_TYPE_USABLE 1
@@ -10,6 +11,8 @@
 
 #define PAGE_STACK_PML4E 0x1FCull
 #define PAGE_STACK_BOTTOM (u64 *)ASSEMBLE_ADDR_PML4E(PAGE_STACK_PML4E, 0)
+
+static spinlock_t page_stack_lock = SPINLOCK_FREE;
 
 // Free pages are stored in a stack.
 static u64 *page_stack_top = PAGE_STACK_BOTTOM;
@@ -67,15 +70,22 @@ void page_alloc_init(void) {
 // Returns 0 on failure.
 // The page is not cleared.
 u64 page_alloc(void) {
-    if (page_stack_top == PAGE_STACK_BOTTOM)
+    spinlock_acquire(&page_stack_lock);
+    if (page_stack_top == PAGE_STACK_BOTTOM) {
+        spinlock_release(&page_stack_lock);
         return 0;
+    }
     page_stack_top--;
-    return *page_stack_top;
+    u64 page = *page_stack_top;
+    spinlock_release(&page_stack_lock);
+    return page;
 }
 
 void page_free(u64 page) {
+    spinlock_acquire(&page_stack_lock);
     *page_stack_top = page;
     page_stack_top++;
+    spinlock_release(&page_stack_lock);
 }
 
 // Returns the number of free pages.
@@ -131,9 +141,6 @@ bool map_pages(u64 start, u64 end, bool user, bool global, bool write, bool exec
 // Removes the identity mapping created by the bootloader.
 // Should be called after the contents of low memory are no longer needed.
 void remove_identity_mapping(void) {
-    *PDE_PTR(0) = 0;
-    *PDPTE_PTR(0) = 0;
     *PML4E_PTR(0) = 0;
-    for (size_t i = 0; i < PT_SIZE; i += PAGE_SIZE)
-        asm volatile ("invlpg [%0]" : : "r"(i));
+    asm volatile ("mov rax, cr3; mov cr3, rax");
 }

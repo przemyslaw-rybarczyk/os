@@ -1,6 +1,7 @@
 #include "types.h"
 #include "interrupt.h"
 
+#include "alloc.h"
 #include "framebuffer.h"
 #include "segment.h"
 
@@ -23,17 +24,13 @@ typedef struct IDTEntry {
     u32 reserved1;
 } __attribute__((packed)) IDTEntry;
 
-static IDTEntry idt[IDT_ENTRIES_NUM];
-
 typedef struct IDTR {
     u16 size;
     u64 offset;
 } __attribute__((packed)) IDTR;
 
-static const IDTR idtr = (IDTR){sizeof(idt) - 1, (u64)&idt};
-
-static void idt_set_entry(u64 i, u64 addr) {
-    idt[i] = (IDTEntry){
+static void idt_set_entry(IDTEntry *entry, u64 addr) {
+    *entry = (IDTEntry){
         .addr1 = (u16)addr,
         .segment = SEGMENT_KERNEL_CODE,
         .ist = 0,
@@ -44,15 +41,25 @@ static void idt_set_entry(u64 i, u64 addr) {
     };
 }
 
-void interrupt_init(void) {
+bool interrupt_init(void) {
+    // Allocate the IDT and IDTR
+    size_t idt_size = IDT_ENTRIES_NUM * sizeof(IDTEntry);
+    IDTEntry *idt = malloc(idt_size);
+    if (idt == NULL)
+        return false;
+    IDTR *idtr = malloc(sizeof(IDTR));
+    if (idtr == NULL)
+        return false;
+    *idtr = (IDTR){idt_size - 1, (u64)idt};
     // Fill the IDT entries with the handlers defined in `interrupt.s`
     // Interrupts with handler address given as 0 don't have a handler.
     for (u64 i = 0; i < IDT_ENTRIES_NUM; i++) {
         if (interrupt_handlers[i] != 0)
-            idt_set_entry(i, interrupt_handlers[i]);
+            idt_set_entry(&idt[i], interrupt_handlers[i]);
     }
     // Load the IDT Descriptor
-    asm volatile ("lidt [%0]" : : "i"(&idtr));
+    asm volatile ("lidt [%0]" : : "r"(idtr));
+    return true;
 }
 
 typedef struct InterruptFrame {
@@ -63,7 +70,7 @@ typedef struct InterruptFrame {
     u64 ss;
 } __attribute__((aligned)) InterruptFrame;
 
-bool interrupt_pushes_error_code(u8 i) {
+static bool interrupt_pushes_error_code(u8 i) {
     return i == 0x08 || i == 0x0A || i == 0x0B || i == 0x0C || i == 0x0D || i == 0x0E || i == 0x11 || i == 0x15 || i == 0x1D || i == 0x1E;
 }
 
@@ -71,6 +78,7 @@ bool interrupt_pushes_error_code(u8 i) {
 // It's called by the wrapper in `interrupt.s`.
 // It prints the exception information and halts.
 void general_exception_handler(u8 interrupt_number, InterruptFrame *interrupt_frame, u64 error_code) {
+    // We do not lock the framebuffer before printing, as it may be held by whatever code caused the exception to occur
     print_string("An exception has occurred.\n");
     print_string("Exception number: ");
     print_hex_u8(interrupt_number);

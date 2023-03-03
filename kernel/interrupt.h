@@ -1,3 +1,3 @@
 #pragma once
 
-void interrupt_init(void);
+bool interrupt_init(void);

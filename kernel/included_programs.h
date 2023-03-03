@@ -2,5 +2,5 @@
 
 #include "types.h"
 
-extern u8 included_file_program[];
-extern u8 included_file_program_end[];
+extern const u8 included_file_program[];
+extern const u8 included_file_program_end[];

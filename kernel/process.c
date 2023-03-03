@@ -3,7 +3,10 @@
 
 #include "alloc.h"
 #include "page.h"
+#include "percpu.h"
 #include "segment.h"
+#include "spinlock.h"
+#include "stack.h"
 #include "string.h"
 
 #define RFLAGS_IF (1ull << 9)
@@ -35,7 +38,7 @@ typedef struct RegisterState {
 
 typedef struct Process {
     RegisterState registers;
-    u64 kernel_stack_phys;
+    void *kernel_stack;
 } Process;
 
 typedef struct ProcessQueueNode {
@@ -43,12 +46,14 @@ typedef struct ProcessQueueNode {
     struct ProcessQueueNode *next;
 } ProcessQueueNode;
 
-ProcessQueueNode *current_process = NULL;
+static spinlock_t scheduler_lock = SPINLOCK_FREE;
+
+static ProcessQueueNode *process_queue_start = NULL;
 static ProcessQueueNode *process_queue_end = NULL;
 
 static void add_process_to_queue_end(ProcessQueueNode *pqn) {
     if (process_queue_end == NULL) {
-        current_process = pqn;
+        process_queue_start = pqn;
         process_queue_end = pqn;
     } else {
         process_queue_end->next = pqn;
@@ -69,21 +74,36 @@ bool spawn_process(u64 entry, u64 arg) {
     pqn->process.registers.rflags = RFLAGS_IF;
     pqn->process.registers.cs = SEGMENT_USER_CODE | SEGMENT_RING_3;
     pqn->process.registers.ss = SEGMENT_USER_DATA | SEGMENT_RING_3;
-    pqn->process.kernel_stack_phys = page_alloc();
-    if (pqn->process.kernel_stack_phys == 0)
+    pqn->process.kernel_stack = stack_alloc();
+    if (pqn->process.kernel_stack == NULL) {
+        free(pqn);
         return false;
+    }
+    spinlock_acquire(&scheduler_lock);
     add_process_to_queue_end(pqn);
+    spinlock_release(&scheduler_lock);
     return true;
 }
 
-// Set `current_process` to the next process in the queue
+// Same as schedule_next_process, but doesn't return the current process to the queue
+void schedule_first_process(void) {
+    spinlock_acquire(&scheduler_lock);
+    cpu_local->current_process = process_queue_start;
+    process_queue_start = process_queue_start->next;
+    spinlock_release(&scheduler_lock);
+}
+
+// Set `cpu_local->current_process` to the next process in the queue
 // The current scheduler is a basic round-robin scheduler.
 // When this function is called the current process is returned to the end of the queue.
 void schedule_next_process(void) {
-    if (current_process->next == NULL) {
+    spinlock_acquire(&scheduler_lock);
+    if (process_queue_start == NULL) {
+        spinlock_release(&scheduler_lock);
         return;
     }
-    ProcessQueueNode *next_pqn = current_process->next;
-    add_process_to_queue_end(current_process);
-    current_process = next_pqn;
+    add_process_to_queue_end(cpu_local->current_process);
+    cpu_local->current_process = process_queue_start;
+    process_queue_start = process_queue_start->next;
+    spinlock_release(&scheduler_lock);
 }

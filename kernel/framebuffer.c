@@ -103,6 +103,16 @@ u32 get_framebuffer_height(void) {
     return (u32)fb_height;
 }
 
+static spinlock_t fb_lock = SPINLOCK_FREE;
+
+void framebuffer_lock(void) {
+    spinlock_acquire(&fb_lock);
+}
+
+void framebuffer_unlock(void) {
+    spinlock_release(&fb_lock);
+}
+
 // Set the color of pixel at (x,y) to (r,g,b)
 void put_pixel(u32 x, u32 y, u8 r, u8 g, u8 b) {
     if (x >= fb_width || y >= fb_height)
@@ -150,16 +160,6 @@ void print_char(char c) {
         // Move cursor into position for the next character
         cursor_x += 1;
     }
-}
-
-static spinlock_t fb_lock = SPINLOCK_FREE;
-
-// This is used for printing characters from a syscall.
-// The lock has a rare race condition, but it doesn't matter since it's only a temporary function for testing.
-void print_char_locked(char c) {
-    spinlock_acquire(&fb_lock);
-    print_char(c);
-    spinlock_release(&fb_lock);
 }
 
 void print_string(const char *str) {

@@ -1,12 +1,21 @@
 global tss
 global tss_end
+global percpu_init
 global userspace_init
 global sched_yield
 global sched_start
 
-extern current_process
+extern malloc
+extern schedule_first_process
 extern schedule_next_process
-extern print_char_locked
+extern framebuffer_lock
+extern framebuffer_unlock
+extern print_char
+
+struc PerCPU
+  .current_process: resq 1
+  .tss: resq 1
+endstruc
 
 struc Process
   .rax: resq 1
@@ -29,7 +38,7 @@ struc Process
   .rflags: resq 1
   .cs: resq 1
   .ss: resq 1
-  .kernel_stack_phys: resq 1
+  .kernel_stack: resq 1
 endstruc
 
 SEGMENT_KERNEL_CODE equ 0x08
@@ -40,26 +49,14 @@ TSS_DESCRIPTOR equ 0x28
 
 SEGMENT_RING_3 equ 0x03
 
+TSS.rsp0 equ 4
+
 MSR_STAR equ 0xC0000081
 MSR_LSTAR equ 0xC0000082
 MSR_SFMASK equ 0xC0000084
+MSR_GS_BAS equ 0xC0000101
 
 RFLAGS_IF equ 1 << 9
-
-section .rodata
-
-; Task State Segment
-tss:
-  dd 0 ; unused
-.rsp0:
-  ; RSP0 - the only part of the TSS we actually use
-  ; Holds the ring 0 stack pointer so it can be restored when an interrupt occurs.
-  dq KERNEL_STACK_BOTTOM
-  times 90 db 0 ; various variable we don't use
-  dw tss_end - tss ; I/O Map Base Address - set to the size of the TSS to make it empty
-tss_end:
-
-section .text
 
 PAGE_SIZE equ 1 << 12
 
@@ -68,21 +65,11 @@ PAGE_WRITE equ 1 << 1
 PAGE_GLOBAL equ 1 << 8
 PAGE_NX equ 1 << 63
 
-KERNEL_STACK_PML4E equ 0x1FE
-RECURSIVE_PML4E equ 0x100
-
-KERNEL_STACK_BOTTOM equ (0xFFFF << 48) | ((KERNEL_STACK_PML4E + 1) << 39)
-KERNEL_STACK_TOP equ KERNEL_STACK_BOTTOM - PAGE_SIZE
-KERNEL_STACK_PTE equ (0xFFFF << 48) | (RECURSIVE_PML4E << 39) | (KERNEL_STACK_PML4E << 30) | 0x3FFFFFF8
-
-KERNEL_SWAP_STACK_BOTTOM equ KERNEL_STACK_BOTTOM - 2 * PAGE_SIZE
-KERNEL_SWAP_STACK_TOP equ KERNEL_SWAP_STACK_BOTTOM - PAGE_SIZE
-KERNEL_SWAP_STACK_PTE equ KERNEL_STACK_PTE - 2 * 8
-
 syscall_handler:
   ; Set up the kernel stack
   ; We keep interrupts disabled while we do that to avoid an interrupt occurring with no stack set up.
-  mov rsp, KERNEL_STACK_BOTTOM
+  mov rsp, [gs:PerCPU.current_process]
+  mov rsp, [rsp + Process.kernel_stack]
   sti
   ; Save all scratch registers
   push rax
@@ -94,9 +81,13 @@ syscall_handler:
   push r9
   push r10
   push r11
-  ; Call print_char with rdi as argument
+  ; Print character passed in RDI
+  push rdi
+  call framebuffer_lock
+  pop rdi
   and rdi, 0xFF
-  call print_char_locked
+  call print_char
+  call framebuffer_unlock
   ; Restore scratch registers and return
   pop r11
   pop r10
@@ -108,6 +99,22 @@ syscall_handler:
   pop rcx
   pop rax
   o64 sysret
+
+; Allocate per-CPU data and set the GS base so it can be used
+percpu_init:
+  mov rdi, PerCPU_size
+  call malloc
+  test rax, rax
+  jz .malloc_fail
+  mov ecx, MSR_GS_BAS
+  mov rdx, rax
+  shr rdx, 32
+  wrmsr
+  mov rax, 1
+  ret
+.malloc_fail:
+  xor rax, rax
+  ret
 
 userspace_init:
   ; Load the TSS
@@ -140,13 +147,14 @@ userspace_init:
 ; Start the scheduler
 ; This function is called at the end of kernel initialization.
 sched_start:
+  call schedule_first_process
   ; Skip the part of sched_yield where current process state is saved,
   ; since there is no current process yet.
   jmp sched_yield.start_next_process
 
 sched_yield:
   push rax
-  mov rax, [current_process]
+  mov rax, [gs:PerCPU.current_process]
   ; Save process state
   ; RIP and RSP are set so that when the process is returned to, it will be as if it returned from this function.
   pop qword [rax + Process.rax]
@@ -173,23 +181,11 @@ sched_yield:
   ; Set current_process to the next process to be run.
   call schedule_next_process
 .start_next_process:
-  mov rax, [current_process]
-  ; Load the process kernel stack
-  ; Since the process expects its kernel stack to be in the same location as the currently loaded kernel stack,
-  ; we move the current kernel stack to a different location (the swap stack) before mapping the process kernel stack in its place.
-  mov rbx, KERNEL_STACK_PTE
-  mov rcx, KERNEL_SWAP_STACK_PTE
-  mov r8, KERNEL_STACK_TOP
-  mov r9, KERNEL_SWAP_STACK_TOP
-  mov rdx, [rbx]
-  mov [rcx], rdx
-  invlpg [r9]
-  add rsp, KERNEL_SWAP_STACK_BOTTOM - KERNEL_STACK_BOTTOM
-  mov rdx, [rax + Process.kernel_stack_phys]
-  mov rsi, PAGE_NX | PAGE_GLOBAL | PAGE_WRITE | PAGE_PRESENT
-  or rdx, rsi
-  mov [rbx], rdx
-  invlpg [r8]
+  mov rax, [gs:PerCPU.current_process]
+  ; Set the RSP0 in the TSS
+  mov rdx, [gs:PerCPU.tss]
+  mov rcx, [rax + Process.kernel_stack]
+  mov [rdx + TSS.rsp0], rcx
   ; Set up the stack for an IRET
   push qword [rax + Process.ss]
   push qword [rax + Process.rsp]

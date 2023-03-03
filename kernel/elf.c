@@ -61,7 +61,7 @@ typedef struct ELFProgramHeader {
 // Loads an ELF file stored in a buffer into memory.
 // Returns true on success, false on failure.
 // On success `*entry` is set to the entry point.
-bool load_elf_file(u8 *file, size_t file_length, u64 *entry) {
+bool load_elf_file(const u8 *file, size_t file_length, u64 *entry) {
     // Verify the ELF header
     if (sizeof(ELFHeader) > file_length)
         return false;

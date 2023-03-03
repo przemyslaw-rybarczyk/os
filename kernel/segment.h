@@ -10,4 +10,4 @@
 
 #define SEGMENT_RING_3 0x03
 
-void gdt_init(void);
+bool gdt_init(void);

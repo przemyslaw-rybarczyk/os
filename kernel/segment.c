@@ -1,6 +1,8 @@
 #include "types.h"
 #include "segment.h"
 
+#include "alloc.h"
+#include "percpu.h"
 #include "process.h"
 
 #define GDT_RW (1 << 1)
@@ -14,6 +16,8 @@
 #define GDT_LONG_CODE (1 << 5)
 #define GDT_DB (1 << 6)
 #define GDT_GRANULAR (1 << 7)
+
+#define GDT_ENTRIES_NUM 7
 
 typedef union GDTEntry {
     // Normal segment descriptor
@@ -37,71 +41,91 @@ typedef struct GDTR {
     u64 offset;
 } __attribute__((packed)) GDTR;
 
-// Global Descriptor Table
-// The layout of the GDT is to a degree forced by the design of the SYSCALL instruction.
-// It requires the kernel data selector to come after the kernel code selector,
-// and the user code selector to come after the user data selector.
-static GDTEntry gdt[] = {
-    // Entry 0x00 - unused
-    (GDTEntry){},
-    // Entry 0x08 - kernel code
-    (GDTEntry){
+typedef struct TSS {
+    u32 reserved1;
+    u64 rsp0;
+    u64 rsp1;
+    u64 rsp2;
+    u64 reserved2;
+    u64 ist1;
+    u64 ist2;
+    u64 ist3;
+    u64 ist4;
+    u64 ist5;
+    u64 ist6;
+    u64 ist7;
+    u64 reserved3;
+    u16 reserved4;
+    u16 iopb;
+} __attribute__((packed)) TSS;
+
+bool gdt_init(void) {
+    // Allocate the GDT, GDTR, and TSS
+    size_t gdt_size = GDT_ENTRIES_NUM * sizeof(GDTEntry);
+    GDTEntry *gdt = malloc(gdt_size);
+    if (gdt == NULL)
+        return false;
+    GDTR *gdtr = malloc(sizeof(GDTR));
+    if (gdtr == NULL)
+        return false;
+    *gdtr = (GDTR){gdt_size - 1, (u64)gdt};
+    TSS *tss = malloc(sizeof(TSS));
+    if (tss == NULL)
+        return false;
+    // Fill the GDT
+    // The layout of the GDT is to a degree forced by the design of the SYSCALL instruction.
+    // It requires the kernel data selector to come after the kernel code selector,
+    // and the user code selector to come after the user data selector.
+    // Entry 0 is unused.
+    gdt[0] = (GDTEntry){};
+    gdt[SEGMENT_KERNEL_CODE / sizeof(GDTEntry)] = (GDTEntry){
         .limit1 = 0xFFFF,
         .base1 = 0x0000,
         .base2 = 0x00,
         .access = GDT_PRESENT | GDT_S | GDT_EXECUTABLE | GDT_RW,
         .flags_limit2 = GDT_LONG_CODE | GDT_GRANULAR | 0xF,
         .base3 = 0x00,
-    },
-    // Entry 0x10 - kernel data
-    (GDTEntry){
+    };
+    gdt[SEGMENT_KERNEL_DATA / sizeof(GDTEntry)] = (GDTEntry){
         .limit1 = 0xFFFF,
         .base1 = 0x0000,
         .base2 = 0x00,
         .access = GDT_PRESENT | GDT_S | GDT_RW,
         .flags_limit2 = GDT_DB | GDT_GRANULAR | 0xF,
         .base3 = 0x00,
-    },
-    // Entry 0x18 - user data
-    (GDTEntry){
+    };
+    gdt[SEGMENT_USER_DATA / sizeof(GDTEntry)] = (GDTEntry){
         .limit1 = 0xFFFF,
         .base1 = 0x0000,
         .base2 = 0x00,
         .access = GDT_PRESENT | GDT_RING_3 | GDT_S | GDT_RW,
         .flags_limit2 = GDT_DB | GDT_GRANULAR | 0xF,
         .base3 = 0x00,
-    },
-    // Entry 0x20 - user code
-    (GDTEntry){
+    };
+    gdt[SEGMENT_USER_CODE / sizeof(GDTEntry)] = (GDTEntry){
         .limit1 = 0xFFFF,
         .base1 = 0x0000,
         .base2 = 0x00,
         .access = GDT_PRESENT | GDT_RING_3 | GDT_S | GDT_EXECUTABLE | GDT_RW,
         .flags_limit2 = GDT_LONG_CODE | GDT_GRANULAR | 0xF,
         .base3 = 0x00,
-    },
-    // Entry 0x28 - TSS descriptor
-    // Filled by the initialization function.
-    (GDTEntry){},
-    (GDTEntry){},
-};
-
-static const GDTR gdtr = (GDTR){sizeof(gdt) - 1, (u64)&gdt};
-
-void gdt_init(void) {
-    // Fill the TSS descriptor
+    };
     gdt[TSS_DESCRIPTOR / sizeof(GDTEntry)] = (GDTEntry){
-        .limit1 = (u16)(tss_end - tss),
+        .limit1 = (u16)sizeof(TSS),
         .base1 = (u16)(u64)tss,
         .base2 = (u8)((u64)tss >> 16),
         .access = GDT_PRESENT | GDT_TSS_TYPE_64_BIT_AVAILABLE,
-        .flags_limit2 = (u8)((u64)(tss_end - tss) >> 16),
+        .flags_limit2 = (u8)(sizeof(TSS) >> 16),
         .base3 = (u8)((u64)tss >> 24),
     };
     gdt[TSS_DESCRIPTOR / sizeof(GDTEntry) + 1] = (GDTEntry){
         .base4 = (u32)((u64)tss >> 32),
         .reserved1 = 0,
     };
+    // Fill the TSS
+    *tss = (TSS){.iopb = sizeof(TSS)};
+    cpu_local->tss = tss;
     // Load the GDT
-    asm volatile ("lgdt [%0]" : : "i"(&gdtr));
+    asm volatile ("lgdt [%0]" : : "r"(gdtr));
+    return true;
 }

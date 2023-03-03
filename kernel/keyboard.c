@@ -3,6 +3,7 @@
 
 #include "framebuffer.h"
 #include "keycodes.h"
+#include "smp.h"
 
 #define KEY_NONE (Keycode)(-1)
 
@@ -205,6 +206,5 @@ void keyboard_irq_handler(void) {
         keyboard_state = KBST_START;
         break;
     }
-    // Write EOI to master PIC data port
-    asm volatile ("out 0x20, al" : : "a"(0x20));
+    apic_eoi();
 }

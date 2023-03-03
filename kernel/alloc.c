@@ -4,6 +4,7 @@
 #include "framebuffer.h"
 #include "page.h"
 #include "string.h"
+#include "spinlock.h"
 
 #define MALLOC_ALIGNMENT 8
 #define INIT_HEAP_SIZE (1ull << 20)
@@ -63,7 +64,9 @@ typedef struct AllocatedMemoryRegion {
     char data[];
 } AllocatedMemoryRegion;
 
-FreeMemoryRegion *dummy_region;
+static FreeMemoryRegion *dummy_region;
+
+static spinlock_t alloc_lock = SPINLOCK_FREE;
 
 bool alloc_init(void) {
     // Allocate the initlial heap
@@ -125,6 +128,7 @@ static void *allocate_in_region(size_t n, FreeMemoryRegion *region) {
 void *malloc(size_t n) {
     if (n == 0)
         return NULL;
+    spinlock_acquire(&alloc_lock);
     // Round allocation size up to multiple of alignment
     n = ((n + MALLOC_ALIGNMENT - 1) / MALLOC_ALIGNMENT) * MALLOC_ALIGNMENT;
     // Make sure allocation is large enough to fit a free region header when it's freed
@@ -132,15 +136,20 @@ void *malloc(size_t n) {
         n = sizeof(FreeMemoryRegion) - sizeof(MemoryRegion);
     // Go through every free region until finding one that can fit the allocation
     for (FreeMemoryRegion *region = dummy_region->next_free_region; region != dummy_region; region = region->next_free_region) {
-        if (region_size((MemoryRegion *)region) >= n)
-            return allocate_in_region(n, region);
+        if (region_size((MemoryRegion *)region) >= n) {
+            void *ret = allocate_in_region(n, region);
+            spinlock_release(&alloc_lock);
+            return ret;
+        }
     }
     // If we didn't find a free region, extend the heap and allocate a new one in the new space
     size_t heap_extend_size = n + sizeof(MemoryRegion);
     if (heap_extend_size < MIN_HEAP_EXTEND_SIZE)
         heap_extend_size = MIN_HEAP_EXTEND_SIZE;
-    if (!extend_kernel_heap(heap_extend_size))
+    if (!extend_kernel_heap(heap_extend_size)) {
+        spinlock_release(&alloc_lock);
         return NULL;
+    }
     // Create a new dummy region at the end of the extended heap
     FreeMemoryRegion *new_dummy_region = (FreeMemoryRegion *)((char *)kernel_heap_end - sizeof(FreeMemoryRegion));
     new_dummy_region->header.allocated = true;
@@ -156,12 +165,15 @@ void *malloc(size_t n) {
         old_dummy_region->header.allocated = false;
     }
     // Allocate the memory in the final region
-    return allocate_in_region(n, (FreeMemoryRegion *)(dummy_region->header.prev_region));
+    void *ret = allocate_in_region(n, (FreeMemoryRegion *)(dummy_region->header.prev_region));
+    spinlock_release(&alloc_lock);
+    return ret;
 }
 
 void free(void *p) {
     if (p == NULL)
         return;
+    spinlock_acquire(&alloc_lock);
     FreeMemoryRegion *region = (FreeMemoryRegion *)((char *)p - sizeof(MemoryRegion));
     // If the next region is free, coalesce with it
     if (!region->header.next_region->allocated) {
@@ -172,12 +184,14 @@ void free(void *p) {
     // Since this removes the freed region, we return from the function in this case.
     if (!region->header.prev_region->allocated) {
         remove_from_region_list((MemoryRegion *)region);
+        spinlock_release(&alloc_lock);
         return;
     }
     // Mark the region as free
     region->header.allocated = false;
     // Place the region at the start of the free region list
     insert_into_free_region_list(region);
+    spinlock_release(&alloc_lock);
 }
 
 void *realloc(void *p, size_t n) {
@@ -199,6 +213,8 @@ void *realloc(void *p, size_t n) {
 }
 
 void print_debug_heap_info(void) {
+    spinlock_acquire(&alloc_lock);
+    framebuffer_lock();
     print_string("Heap state:\n");
     print_string("Address            Size               Status Prev free region   Next free region\n");
     for (MemoryRegion *region = dummy_region->header.next_region;; region = region->next_region) {
@@ -227,4 +243,6 @@ void print_debug_heap_info(void) {
         if (region == (MemoryRegion *)dummy_region)
             break;
     }
+    framebuffer_unlock();
+    spinlock_release(&alloc_lock);
 }

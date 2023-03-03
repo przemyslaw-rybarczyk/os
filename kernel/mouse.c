@@ -1,6 +1,8 @@
 #include "types.h"
 #include "mouse.h"
 
+#include "smp.h"
+
 #define MOUSE_PACKET_LEFT_BUTTON (1 << 0)
 #define MOUSE_PACKET_RIGHT_BUTTON (1 << 1)
 #define MOUSE_PACKET_MIDDLE_BUTTON (1 << 2)
@@ -72,10 +74,5 @@ void mouse_irq_handler(void) {
         }
         bytes_received = 0;
     }
-    // Write EOI to slave and master PIC data ports
-    asm volatile (
-        "out 0xA0, al;"
-        "out 0x20, al;"
-        : : "a"(0x20)
-    );
+    apic_eoi();
 }
