@@ -7,37 +7,11 @@
 #include "segment.h"
 #include "spinlock.h"
 #include "stack.h"
-#include "string.h"
 
 #define RFLAGS_IF (1ull << 9)
 
-extern void jump_to_current_process(void);
-
-typedef struct RegisterState {
-    u64 rax;
-    u64 rcx;
-    u64 rdx;
-    u64 rbx;
-    u64 rbp;
-    u64 rsp;
-    u64 rsi;
-    u64 rdi;
-    u64 r8;
-    u64 r9;
-    u64 r10;
-    u64 r11;
-    u64 r12;
-    u64 r13;
-    u64 r14;
-    u64 r15;
-    u64 rip;
-    u64 rflags;
-    u64 cs;
-    u64 ss;
-} RegisterState;
-
 typedef struct Process {
-    RegisterState registers;
+    void *rsp;
     void *kernel_stack;
 } Process;
 
@@ -45,6 +19,9 @@ typedef struct ProcessQueueNode {
     Process process;
     struct ProcessQueueNode *next;
 } ProcessQueueNode;
+
+extern void process_initialize_state(Process *process, u64 entry, u64 arg, void *kernel_stack);
+extern void jump_to_current_process(void);
 
 static spinlock_t scheduler_lock = SPINLOCK_FREE;
 
@@ -68,17 +45,12 @@ bool spawn_process(u64 entry, u64 arg) {
     ProcessQueueNode *pqn = malloc(sizeof(ProcessQueueNode));
     if (pqn == NULL)
         return false;
-    memset(pqn, 0, sizeof(ProcessQueueNode));
-    pqn->process.registers.rdi = arg;
-    pqn->process.registers.rip = entry;
-    pqn->process.registers.rflags = RFLAGS_IF;
-    pqn->process.registers.cs = SEGMENT_USER_CODE | SEGMENT_RING_3;
-    pqn->process.registers.ss = SEGMENT_USER_DATA | SEGMENT_RING_3;
-    pqn->process.kernel_stack = stack_alloc();
-    if (pqn->process.kernel_stack == NULL) {
+    void *kernel_stack = stack_alloc();
+    if (kernel_stack == NULL) {
         free(pqn);
         return false;
     }
+    process_initialize_state(&pqn->process, entry, arg, kernel_stack);
     spinlock_acquire(&scheduler_lock);
     add_process_to_queue_end(pqn);
     spinlock_release(&scheduler_lock);

@@ -2,6 +2,7 @@ global tss
 global tss_end
 global percpu_init
 global userspace_init
+global process_initialize_state
 global sched_yield
 global sched_start
 
@@ -18,26 +19,7 @@ struc PerCPU
 endstruc
 
 struc Process
-  .rax: resq 1
-  .rdx: resq 1
-  .rcx: resq 1
-  .rbx: resq 1
-  .rbp: resq 1
   .rsp: resq 1
-  .rsi: resq 1
-  .rdi: resq 1
-  .r8: resq 1
-  .r9: resq 1
-  .r10: resq 1
-  .r11: resq 1
-  .r12: resq 1
-  .r13: resq 1
-  .r14: resq 1
-  .r15: resq 1
-  .rip: resq 1
-  .rflags: resq 1
-  .cs: resq 1
-  .ss: resq 1
   .kernel_stack: resq 1
 endstruc
 
@@ -144,6 +126,26 @@ userspace_init:
   wrmsr
   ret
 
+; Initialize the process's state and stack
+; Arguments:
+; rdi - process
+; rsi - entry
+; rdx - arg
+; rcx - kernel_stack
+process_initialize_state:
+  ; Set up the stack to contain the saved registers and RSP, the way sched_yield() excepts it to be
+  mov qword [rcx - 8 * 1], process_enter ; return address
+  mov qword [rcx - 8 * 2], rsi ; RBX - set to the entry point
+  mov qword [rcx - 8 * 3], rdx ; RBP - set to the process argument
+  mov qword [rcx - 8 * 4], 0
+  mov qword [rcx - 8 * 5], 0
+  mov qword [rcx - 8 * 6], 0
+  mov qword [rcx - 8 * 7], 0
+  mov [rdi + Process.kernel_stack], rcx
+  sub rcx, 8 * 7
+  mov [rdi + Process.rsp], rcx
+  ret
+
 ; Start the scheduler
 ; This function is called at the end of kernel initialization.
 sched_start:
@@ -152,32 +154,19 @@ sched_start:
   ; since there is no current process yet.
   jmp sched_yield.start_next_process
 
+; Preempt the current process and run a different one
 sched_yield:
-  push rax
   mov rax, [gs:PerCPU.current_process]
-  ; Save process state
-  ; RIP and RSP are set so that when the process is returned to, it will be as if it returned from this function.
-  pop qword [rax + Process.rax]
-  pop qword [rax + Process.rip]
-  mov [rax + Process.rcx], rcx
-  mov [rax + Process.rdx], rdx
-  mov [rax + Process.rbx], rbx
-  mov [rax + Process.rbp], rbp
+  ; Save process state on the stack
+  ; Since this function will only be called from kernel code, we only need to save the non-scratch registers.
+  ; The instruction pointer was already saved on the stack when this function was called.
+  push rbx
+  push rbp
+  push r12
+  push r13
+  push r14
+  push r15
   mov [rax + Process.rsp], rsp
-  mov [rax + Process.rsi], rsi
-  mov [rax + Process.rdi], rdi
-  mov [rax + Process.r8], r8
-  mov [rax + Process.r9], r9
-  mov [rax + Process.r10], r10
-  mov [rax + Process.r11], r11
-  mov [rax + Process.r12], r12
-  mov [rax + Process.r13], r13
-  mov [rax + Process.r14], r14
-  mov [rax + Process.r15], r15
-  pushfq
-  pop qword [rax + Process.rflags]
-  mov [rax + Process.cs], cs
-  mov [rax + Process.ss], ss
   ; Set current_process to the next process to be run.
   call schedule_next_process
 .start_next_process:
@@ -186,27 +175,41 @@ sched_yield:
   mov rdx, [gs:PerCPU.tss]
   mov rcx, [rax + Process.kernel_stack]
   mov [rdx + TSS.rsp0], rcx
+  ; Restore process state
+  mov rsp, [rax + Process.rsp]
+  pop r15
+  pop r14
+  pop r13
+  pop r12
+  pop rbp
+  pop rbx
+  ; Return to the process
+  ret
+
+; Enter a process
+; When a process is created, its instruction pointer is set to the start of this function,
+; which finishes initializing process state and jumps to the actual entry point.
+; The entry point address is passed in the RBX register.
+process_enter:
   ; Set up the stack for an IRET
-  push qword [rax + Process.ss]
-  push qword [rax + Process.rsp]
-  push qword [rax + Process.rflags]
-  push qword [rax + Process.cs]
-  push qword [rax + Process.rip]
-  ; Restore process registers
-  mov rcx, [rax + Process.rcx]
-  mov rdx, [rax + Process.rdx]
-  mov rbx, [rax + Process.rbx]
-  mov rbp, [rax + Process.rbp]
-  mov rsi, [rax + Process.rsi]
-  mov rdi, [rax + Process.rdi]
-  mov r8, [rax + Process.r8]
-  mov r9, [rax + Process.r9]
-  mov r10, [rax + Process.r10]
-  mov r11, [rax + Process.r11]
-  mov r12, [rax + Process.r12]
-  mov r13, [rax + Process.r13]
-  mov r14, [rax + Process.r14]
-  mov r15, [rax + Process.r15]
-  mov rax, [rax + Process.rax]
+  push SEGMENT_USER_DATA | SEGMENT_RING_3
+  push 0 ; initialize RSP to 0 - it is the responsibility of user code to allocate a stack
+  push RFLAGS_IF ; keep interrupts enabled
+  push SEGMENT_USER_CODE | SEGMENT_RING_3
+  push rbx ; set RIP to the process entry point
+  ; Set the process argument
+  mov rdi, rbp
+  ; Initialize all registers to zero
+  ; We only need to clear the scratch registers, RBX, and RBP, as the other registers were set to zero when the thread was created.
+  xor rax, rax
+  xor rcx, rcx
+  xor rdx, rdx
+  xor rsi, rsi
+  xor r8, r8
+  xor r9, r9
+  xor r10, r10
+  xor r11, r11
+  xor rbx, rbx
+  xor rbp, rbp
   ; Jump to the process using an IRET
   iretq
