@@ -209,7 +209,7 @@ detect_memory:
 .loop:
   ; Since the value stored by BIOS may be only 20 bytes long rather than the 24 we expect,
   ; we set the ACPI attributes to 3 for compatibility. This value indicates that the entry shouldn't be ignored.
-  mov [di + MEMORY_RANGE_ACPI_ATTRS], dword 3
+  mov [di + MEMORY_RANGE_ACPI_ATTRS], dword 1
   mov eax, 0xE820
   ; ECX holds the size of the buffer.
   mov ecx, 24
