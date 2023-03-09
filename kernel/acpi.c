@@ -115,12 +115,12 @@ typedef struct MADTRecord {
 // Returns NULL on failure.
 static const RSDP *find_rsdp(void) {
     // The EBDA segment address is located at address 0x040E
-    const u8 *ebda = (u8 *)PHYS_ADDR((u64)(*(u16 *)PHYS_ADDR(0x040E)) << 4);
+    u64 ebda_start = (u64)(*(u16 *)PHYS_ADDR(0x040E)) << 4;
     // Search through the first 1 KiB of the EBDA for the RSDP
     // It always starts with the "RSD PTR " signature aligned to a 16-byte boundary.
     for (size_t i = 0; i < 1024; i += 16)
-        if (memcmp(ebda + i, rsdp_signature, sizeof(rsdp_signature)) == 0)
-            return (const RSDP *)PHYS_ADDR(ebda + i);
+        if (memcmp((const void *)PHYS_ADDR(ebda_start + i), rsdp_signature, sizeof(rsdp_signature)) == 0)
+            return (const RSDP *)PHYS_ADDR(ebda_start + i);
     // Search through the area from 0xE0000 to 0x100000
     for (size_t i = 0xE0000; i < 0x100000; i += 16)
         if (memcmp((u8 *)PHYS_ADDR(i), rsdp_signature, sizeof(rsdp_signature)) == 0)

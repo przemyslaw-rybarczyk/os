@@ -2,7 +2,6 @@
 
 #include "acpi.h"
 #include "alloc.h"
-#include "elf.h"
 #include "framebuffer.h"
 #include "included_programs.h"
 #include "interrupt.h"
@@ -60,29 +59,12 @@ void kernel_start(void) {
     framebuffer_unlock();
     smp_init_sync_1();
     remove_identity_mapping();
-    framebuffer_lock();
-    print_string("Loading ELF file\n");
-    framebuffer_unlock();
-    u64 program_entry;
-    if (load_elf_file(included_file_program, included_file_program_end - included_file_program, &program_entry)) {
-        framebuffer_lock();
-        print_string("Loaded ELF file\n");
-        framebuffer_unlock();
-        spawn_process(program_entry, 'A');
-        spawn_process(program_entry, 'B');
-        spawn_process(program_entry, 'C');
-        spawn_process(program_entry, 'D');
-        spawn_process(program_entry, 'E');
-        spawn_process(program_entry, 'F');
-        spawn_process(program_entry, 'G');
-        spawn_process(program_entry, 'H');
-        smp_init_sync_2();
-        sched_start();
-    } else {
-        framebuffer_lock();
-        print_string("Failed to load ELF file\n");
-        framebuffer_unlock();
-    }
+    for (u64 arg = 'A'; arg <= 'H'; arg++)
+        spawn_process(included_file_program1, included_file_program1_end - included_file_program1, arg);
+    for (u64 arg = 'a'; arg <= 'h'; arg++)
+        spawn_process(included_file_program2, included_file_program2_end - included_file_program2, arg);
+    smp_init_sync_2();
+    sched_start();
 halt:
     asm volatile ("cli");
     while (1)

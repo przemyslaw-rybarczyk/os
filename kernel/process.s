@@ -2,13 +2,14 @@ global tss
 global tss_end
 global percpu_init
 global userspace_init
-global process_initialize_state
 global sched_yield
 global sched_start
+global process_start
 
 extern malloc
 extern schedule_first_process
 extern schedule_next_process
+extern load_elf_file
 extern framebuffer_lock
 extern framebuffer_unlock
 extern print_char
@@ -21,6 +22,7 @@ endstruc
 struc Process
   .rsp: resq 1
   .kernel_stack: resq 1
+  .page_map: resq 1
 endstruc
 
 SEGMENT_KERNEL_CODE equ 0x08
@@ -126,26 +128,6 @@ userspace_init:
   wrmsr
   ret
 
-; Initialize the process's state and stack
-; Arguments:
-; rdi - process
-; rsi - entry
-; rdx - arg
-; rcx - kernel_stack
-process_initialize_state:
-  ; Set up the stack to contain the saved registers and RSP, the way sched_yield() excepts it to be
-  mov qword [rcx - 8 * 1], process_enter ; return address
-  mov qword [rcx - 8 * 2], rsi ; RBX - set to the entry point
-  mov qword [rcx - 8 * 3], rdx ; RBP - set to the process argument
-  mov qword [rcx - 8 * 4], 0
-  mov qword [rcx - 8 * 5], 0
-  mov qword [rcx - 8 * 6], 0
-  mov qword [rcx - 8 * 7], 0
-  mov [rdi + Process.kernel_stack], rcx
-  sub rcx, 8 * 7
-  mov [rdi + Process.rsp], rcx
-  ret
-
 ; Start the scheduler
 ; This function is called at the end of kernel initialization.
 sched_start:
@@ -183,24 +165,36 @@ sched_yield:
   pop r12
   pop rbp
   pop rbx
+  ; Load process page map
+  mov rdx, [rax + Process.page_map]
+  mov cr3, rdx
   ; Return to the process
   ret
 
 ; Enter a process
 ; When a process is created, its instruction pointer is set to the start of this function,
 ; which finishes initializing process state and jumps to the actual entry point.
-; The entry point address is passed in the RBX register.
-process_enter:
-  ; Set up the stack for an IRET
+; Takes the following arugments from the stack (listed top to bottom):
+; const u8 *file, size_t file_length, u64 arg
+process_start:
+  ; Load the process
+  pop rdi
+  pop rsi
+  push rax
+  mov rdx, rsp
+  call load_elf_file
+  ; Get process entry point
+  pop rax
+  ; Set the process argument
+  pop rdi
+  ; Set up the kernel stack for an IRET
   push SEGMENT_USER_DATA | SEGMENT_RING_3
   push 0 ; initialize RSP to 0 - it is the responsibility of user code to allocate a stack
   push RFLAGS_IF ; keep interrupts enabled
   push SEGMENT_USER_CODE | SEGMENT_RING_3
-  push rbx ; set RIP to the process entry point
-  ; Set the process argument
-  mov rdi, rbp
+  push rax ; set RIP to the process entry point
   ; Initialize all registers to zero
-  ; We only need to clear the scratch registers, RBX, and RBP, as the other registers were set to zero when the thread was created.
+  ; We only need to clear the scratch registers, as the other registers were set to zero when the thread was created.
   xor rax, rax
   xor rcx, rcx
   xor rdx, rdx
@@ -209,7 +203,5 @@ process_enter:
   xor r9, r9
   xor r10, r10
   xor r11, r11
-  xor rbx, rbx
-  xor rbp, rbp
   ; Jump to the process using an IRET
   iretq

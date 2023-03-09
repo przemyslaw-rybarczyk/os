@@ -53,10 +53,10 @@ void page_alloc_init(void) {
             // we use the current page to extend the mapping.
             // Otherwise, we just push the page on top of the stack.
             if ((u64)page_stack_top % PD_SIZE == 0 && *PDPTE_PTR(page_stack_top) == 0) {
-                *PDPTE_PTR(page_stack_top) = page | PAGE_GLOBAL | PAGE_WRITE | PAGE_PRESENT;
+                *PDPTE_PTR(page_stack_top) = page | PAGE_WRITE | PAGE_PRESENT;
                 memset(PDE_PTR(page_stack_top), 0, PAGE_SIZE);
             } else if ((u64)page_stack_top % PT_SIZE == 0 && *PDE_PTR(page_stack_top) == 0) {
-                *PDE_PTR(page_stack_top) = page | PAGE_GLOBAL | PAGE_WRITE | PAGE_PRESENT;
+                *PDE_PTR(page_stack_top) = page | PAGE_WRITE | PAGE_PRESENT;
                 memset(PTE_PTR(page_stack_top), 0, PAGE_SIZE);
             } else if ((u64)page_stack_top % PAGE_SIZE == 0 && *PTE_PTR(page_stack_top) == 0) {
                 *PTE_PTR(page_stack_top) = page | PAGE_GLOBAL | PAGE_WRITE | PAGE_PRESENT;
@@ -148,11 +148,11 @@ static bool ensure_page_map_entry_filled(u64 *entry, bool user, bool global, boo
 // If the page or any page tables containing it are already allocated, they are not modified.
 // Returns true on success, false on failure.
 bool map_page(u64 addr, bool user, bool global, bool write, bool execute) {
-    if (!ensure_page_map_entry_filled(PML4E_PTR(addr), user, global, true, true, true))
+    if (!ensure_page_map_entry_filled(PML4E_PTR(addr), user, false, true, true, true))
         return false;
-    if (!ensure_page_map_entry_filled(PDPTE_PTR(addr), user, global, true, true, true))
+    if (!ensure_page_map_entry_filled(PDPTE_PTR(addr), user, false, true, true, true))
         return false;
-    if (!ensure_page_map_entry_filled(PDE_PTR(addr), user, global, true, true, true))
+    if (!ensure_page_map_entry_filled(PDE_PTR(addr), user, false, true, true, true))
         return false;
     if (!ensure_page_map_entry_filled(PTE_PTR(addr), user, global, write, execute, false))
         return false;
