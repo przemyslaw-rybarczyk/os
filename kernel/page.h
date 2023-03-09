@@ -47,7 +47,15 @@
 // and returns a virtual pointer to the page it has in its address field.
 #define DEREF_ENTRY_PTR(x) ((void *)SIGN_EXTEND_ADDR((u64)(x) << 9))
 
+#define IDENTITY_MAPPING_PML4E 0x102ull
+#define IDENTITY_MAPPING_SIZE PDPT_SIZE
+
+// Used to access physical memory directly
+// x must be less than IDENTITY_MAPPING_SIZE.
+#define PHYS_ADDR(x) (ASSEMBLE_ADDR_PML4E(IDENTITY_MAPPING_PML4E, 0) + (x))
+
 void page_alloc_init(void);
+bool identity_mapping_init(void);
 u64 page_alloc(void);
 void page_free(u64 page);
 u64 get_free_memory_size(void);

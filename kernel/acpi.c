@@ -4,13 +4,6 @@
 #include "string.h"
 #include "page.h"
 
-#define DEVICES_PML4E 0x1FDull
-#define LAPIC_PDPTE 0x001ull
-#define TEMP_PDPTE 0x1FEull
-#define TEMP_AREA_RSDT 0
-#define TEMP_AREA_MADT 3
-#define TEMP_AREA_IOAPIC 6
-
 #define MADT_LAPIC 0x00
 #define MADT_IO_APIC 0x01
 #define MADT_INT_SOURCE_OVERRIDE 0x02
@@ -118,76 +111,53 @@ typedef struct MADTRecord {
     };
 } __attribute__((packed)) MADTRecord;
 
-// Map a temporary area
-// This function is used to temporarily map ACPI tables and the I/O APIC.
-// Each temporary mapping is done using two large pages and is therefore at least 2 MiB long.
-// This size should be enough for any table.
-// `temp_area` is the PDE number of the first page to be mapped.
-// The function returns the virtuals address of the mapped area.
-static void *map_temporary(u64 phys_addr, u64 temp_area) {
-    u64 virt_addr = ASSEMBLE_ADDR_PDE(DEVICES_PML4E, TEMP_PDPTE, temp_area, phys_addr);
-    u64 *pde = PDE_PTR(virt_addr);
-    pde[0] = ((phys_addr >> LARGE_PAGE_BITS) << LARGE_PAGE_BITS) | PAGE_NX | PAGE_LARGE | PAGE_WRITE | PAGE_PRESENT;
-    pde[1] = (((phys_addr >> LARGE_PAGE_BITS) + 1) << LARGE_PAGE_BITS) | PAGE_NX | PAGE_LARGE | PAGE_WRITE | PAGE_PRESENT;
-    return (void *)virt_addr;
-}
-
-// Unmap a temporary area and invalidate the mapping
-static void unmap_temporary(u64 temp_area) {
-    u64 virt_addr = ASSEMBLE_ADDR_PDE(DEVICES_PML4E, TEMP_PDPTE, temp_area, 0);
-    asm volatile ("invlpg [%0]" : : "r"(virt_addr));
-    asm volatile ("invlpg [%0]" : : "r"(virt_addr + LARGE_PAGE_SIZE));
-}
-
-// Find the RSDP and return its address
-// Returns 0 on failure.
+// Find the RSDP and a pointer to it
+// Returns NULL on failure.
 static const RSDP *find_rsdp(void) {
     // The EBDA segment address is located at address 0x040E
-    u64 ebda_start = ((u64)(*(u16 *)0x040E) << 4);
+    const u8 *ebda = (u8 *)PHYS_ADDR((u64)(*(u16 *)PHYS_ADDR(0x040E)) << 4);
     // Search through the first 1 KiB of the EBDA for the RSDP
     // It always starts with the "RSD PTR " signature aligned to a 16-byte boundary.
     for (size_t i = 0; i < 1024; i += 16)
-        if (memcmp((u8 *)(ebda_start + i), rsdp_signature, sizeof(rsdp_signature)) == 0)
-            return (const RSDP *)ebda_start + i;
+        if (memcmp(ebda + i, rsdp_signature, sizeof(rsdp_signature)) == 0)
+            return (const RSDP *)PHYS_ADDR(ebda + i);
     // Search through the area from 0xE0000 to 0x100000
     for (size_t i = 0xE0000; i < 0x100000; i += 16)
-        if (memcmp((u8 *)i, rsdp_signature, sizeof(rsdp_signature)) == 0)
-            return (const RSDP *)i;
-    return 0;
+        if (memcmp((u8 *)PHYS_ADDR(i), rsdp_signature, sizeof(rsdp_signature)) == 0)
+            return (const RSDP *)PHYS_ADDR(i);
+    return NULL;
 }
 
-// Find the RSDT and XSDT and return its physical address
+// Find the RSDT and XSDT and return a pointer to it
 // `is_xsdt` is set depending on which table was found.
-static u64 find_rsdt(const RSDP *rsdp, bool *is_xsdt) {
+// Retuns NULL on failure.
+static const ACPIEntry *find_rsdt(const RSDP *rsdp, bool *is_xsdt) {
     // For ACPI versions below 2.0 we get the RSDT, and for version 2.0 and above we get the XSDT.
     if (rsdp->revision < 2) {
         *is_xsdt = false;
-        return rsdp->rsdt_address;
+        return (const ACPIEntry *)PHYS_ADDR(rsdp->rsdt_address);
     } else {
         *is_xsdt = true;
-        return rsdp->xsdt_address;
+        if (rsdp->xsdt_address >= IDENTITY_MAPPING_SIZE)
+            return NULL;
+        return (const ACPIEntry *)PHYS_ADDR(rsdp->xsdt_address);
     }
 }
 
 static bool parse_madt(const ACPIEntry *madt);
 
 // Parses the RSDT or XSDT and initializes the I/O APICs using the information found in the ACPI tables
-static bool parse_rsdt(u64 rsdt_phys, bool is_xsdt) {
-    const ACPIEntry *rsdt = map_temporary(rsdt_phys, TEMP_AREA_RSDT);
+static bool parse_rsdt(const ACPIEntry *rsdt, bool is_xsdt) {
     size_t num_entries = (rsdt->length - sizeof(ACPIEntry)) / (is_xsdt ? sizeof(u64) : sizeof(u32));
     const u8 *entries = rsdt->data;
     for (size_t i = 0; i < num_entries; i++) {
         u64 entry_phys = is_xsdt ? ((u64 *)entries)[i] : ((u32 *)entries)[i];
-        const ACPIEntry *entry = map_temporary(entry_phys, TEMP_AREA_MADT);
-        if (memcmp(entry->signature, "APIC", 4) == 0) {
-            bool success = parse_madt(entry);
-            unmap_temporary(TEMP_AREA_MADT);
-            unmap_temporary(TEMP_AREA_RSDT);
-            return success;
-        }
-        unmap_temporary(TEMP_AREA_MADT);
+        if (entry_phys >= IDENTITY_MAPPING_SIZE)
+            continue;
+        const ACPIEntry *entry = (const ACPIEntry *)PHYS_ADDR(entry_phys);
+        if (memcmp(entry->signature, "APIC", 4) == 0)
+            return parse_madt(entry);
     }
-    unmap_temporary(TEMP_AREA_RSDT);
     return false;
 }
 
@@ -286,7 +256,7 @@ static bool parse_madt(const ACPIEntry *madt) {
             break;
         case MADT_IO_APIC: {
             // Configure the I/O APIC, setting redirections according using the interrupt assignment information gathered earlier
-            IOAPIC *io_apic = map_temporary(madt_record->io_apic.addr, TEMP_AREA_IOAPIC);
+            IOAPIC *io_apic = (IOAPIC *)PHYS_ADDR(madt_record->io_apic.addr);
             u32 int_base = madt_record->io_apic.int_base;
             u32 max_redir = (io_apic_read(io_apic, IOAPICVER) & IOAPICVER_MAX_REDIR_MASK) >> IOAPICVER_MAX_REDIR_OFFSET;
             for (u32 i = int_base; i <= int_base + max_redir; i++) {
@@ -297,7 +267,6 @@ static bool parse_madt(const ACPIEntry *madt) {
                 else if (i == interrupt_assignment_mouse.gsi)
                     io_apic_set_redirection(io_apic, interrupt_assignment_mouse, false, int_base, INT_VECTOR_MOUSE);
             }
-            unmap_temporary(TEMP_AREA_IOAPIC);
             break;
         }
         case MADT_LAPIC_ADDR_OVERRIDE:
@@ -306,40 +275,21 @@ static bool parse_madt(const ACPIEntry *madt) {
         }
         i += madt_record->length;
     }
-    // Map the LAPIC
-    u64 *lapic_pte_ptr = PTE_PTR(ASSEMBLE_ADDR_PDPTE(DEVICES_PML4E, LAPIC_PDPTE, 0));
-    if (lapic_phys % PAGE_SIZE == 0) {
-        *lapic_pte_ptr = lapic_phys | PAGE_GLOBAL | PAGE_WRITE | PAGE_PRESENT;
-    } else {
-        u64 lapic_page = (lapic_phys >> PAGE_BITS) << PAGE_BITS;
-        lapic_pte_ptr[0] = lapic_page | PAGE_GLOBAL | PAGE_WRITE | PAGE_PRESENT;
-        lapic_pte_ptr[1] = (lapic_page + PAGE_SIZE) | PAGE_GLOBAL | PAGE_WRITE | PAGE_PRESENT;
-    }
-    lapic = (u64 *)(ASSEMBLE_ADDR_PDPTE(DEVICES_PML4E, LAPIC_PDPTE, 0) + lapic_phys % PAGE_SIZE);
+    // Save the LAPIC address
+    if (lapic_phys >= IDENTITY_MAPPING_SIZE)
+        return false;
+    lapic = (void *)PHYS_ADDR(lapic_phys);
     return true;
 }
 
 // Locate and parse the ACPI tables and set up the I/O APIC according to them
 bool acpi_init(void) {
-    // Set up page table structures used for mapping the ACPI tables and the LAPIC
-    u64 temp_pd_page = page_alloc();
-    u64 lapic_pd_page = page_alloc();
-    u64 lapic_pt_page = page_alloc();
-    if (temp_pd_page == 0 || lapic_pd_page == 0 || lapic_pt_page == 0)
-        return NULL;
-    *PDPTE_PTR(ASSEMBLE_ADDR_PDPTE(DEVICES_PML4E, TEMP_PDPTE, 0)) = temp_pd_page | PAGE_WRITE | PAGE_PRESENT;
-    memset(PDE_PTR(ASSEMBLE_ADDR_PDPTE(DEVICES_PML4E, TEMP_PDPTE, 0)), 0, PAGE_SIZE);
-    *PDPTE_PTR(ASSEMBLE_ADDR_PDPTE(DEVICES_PML4E, LAPIC_PDPTE, 0)) = lapic_pd_page | PAGE_WRITE | PAGE_PRESENT;
-    memset(PDE_PTR(ASSEMBLE_ADDR_PDPTE(DEVICES_PML4E, LAPIC_PDPTE, 0)), 0, PAGE_SIZE);
-    *PDE_PTR(ASSEMBLE_ADDR_PDPTE(DEVICES_PML4E, LAPIC_PDPTE, 0)) = lapic_pt_page | PAGE_WRITE | PAGE_PRESENT;
-    memset(PTE_PTR(ASSEMBLE_ADDR_PDPTE(DEVICES_PML4E, LAPIC_PDPTE, 0)), 0, PAGE_SIZE);
-    // Locate and parse the tables
-    const RSDP *rsdp_phys = find_rsdp();
-    if (rsdp_phys == NULL)
+    const RSDP *rsdp = find_rsdp();
+    if (rsdp == NULL)
         return false;
     bool is_xsdt;
-    u64 rsdt_phys = find_rsdt(rsdp_phys, &is_xsdt);
-    if (rsdt_phys == 0)
+    const ACPIEntry *rsdt = find_rsdt(rsdp, &is_xsdt);
+    if (rsdt == NULL)
         return false;
-    return parse_rsdt(rsdt_phys, is_xsdt);
+    return parse_rsdt(rsdt, is_xsdt);
 }

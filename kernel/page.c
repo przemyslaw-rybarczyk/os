@@ -39,8 +39,11 @@ void page_alloc_init(void) {
         u64 page_end = ((memory_ranges[i].start + memory_ranges[i].length) >> PAGE_BITS) << PAGE_BITS;
         // Add each page in the range to the page stack
         for (u64 page = page_start; page < page_end; page += PAGE_SIZE) {
-            // Discard low memory pages
+            // Discard low memory pages, as many of them are used by the bootloader
             if (page < (1ull << 20))
+                continue;
+            // Discard pages that would go outside the identity mapping
+            if (page >= IDENTITY_MAPPING_SIZE)
                 continue;
             // If we go exhaust all space in the PDPT, we end the loop prematurely.
             // This should never happen.
@@ -64,6 +67,28 @@ void page_alloc_init(void) {
             }
         }
     }
+}
+
+// Set up the indentity mapping within PML4E number IDENTITY_MAPPING_PML4E
+bool identity_mapping_init(void) {
+    // Set the PML4E for identity mapping
+    u64 pml4e_page = page_alloc();
+    if (pml4e_page == 0)
+        return false;
+    *PML4E_PTR(ASSEMBLE_ADDR_PML4E(IDENTITY_MAPPING_PML4E, 0)) = pml4e_page | PAGE_WRITE | PAGE_PRESENT;
+    // Set each PDPTE to a new page
+    for (size_t i = 0; i < 0x200; i++) {
+        u64 pdpte_page = page_alloc();
+        if (pdpte_page == 0)
+            return false;
+        *PDPTE_PTR(ASSEMBLE_ADDR_PDPTE(IDENTITY_MAPPING_PML4E, i, 0)) = pdpte_page | PAGE_WRITE | PAGE_PRESENT;
+        // Within the PD, set each entry to map a large page
+        for (size_t j = 0; j < 0x200; j++) {
+            u64 phys_addr = ASSEMBLE_ADDR_PDE(0, i, j, 0);
+            *PDE_PTR(ASSEMBLE_ADDR_PDE(IDENTITY_MAPPING_PML4E, i, j, 0)) = phys_addr | PAGE_NX | PAGE_GLOBAL | PAGE_LARGE | PAGE_WRITE | PAGE_PRESENT;
+        }
+    }
+    return true;
 }
 
 // Allocates a new page and returns its physical address.
