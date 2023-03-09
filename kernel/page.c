@@ -106,6 +106,14 @@ u64 page_alloc(void) {
     return page;
 }
 
+// Allocates a new page, clears it, and returns its physical address.
+// Returns 0 on failure.
+u64 page_alloc_clear(void) {
+    u64 page = page_alloc();
+    memset((void *)PHYS_ADDR(page), 0, PAGE_SIZE);
+    return page;
+}
+
 void page_free(u64 page) {
     spinlock_acquire(&page_stack_lock);
     *page_stack_top = page;
@@ -123,7 +131,7 @@ u64 get_free_memory_size(void) {
 // Returns true on success, false on failure.
 static bool ensure_page_map_entry_filled(u64 *entry, bool user, bool global, bool write, bool execute, bool clear) {
     if (!(*entry & PAGE_PRESENT)) {
-        u64 page = page_alloc();
+        u64 page = clear ? page_alloc() : page_alloc_clear();
         if (page == 0)
             return false;
         *entry = (page & PAGE_MASK)
@@ -132,8 +140,6 @@ static bool ensure_page_map_entry_filled(u64 *entry, bool user, bool global, boo
             | (user ? PAGE_USER : 0)
             | (write ? PAGE_WRITE : 0)
             | PAGE_PRESENT;
-        if (clear)
-            memset(DEREF_ENTRY_PTR(entry), 0, PAGE_SIZE);
     }
     return true;
 }
