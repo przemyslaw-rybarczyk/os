@@ -1,3 +1,3 @@
 #pragma once
 
-bool interrupt_init(void);
+bool interrupt_init(bool bsp);

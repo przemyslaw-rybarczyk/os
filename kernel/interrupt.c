@@ -41,13 +41,20 @@ static void idt_set_entry(IDTEntry *entry, u64 addr) {
     };
 }
 
-bool interrupt_init(void) {
+IDTEntry idt_bsp[IDT_ENTRIES_NUM];
+IDTR idtr_bsp;
+
+// Initialize the IDT
+// If `bsp` is set, the IDT and IDTR are set from the statically allocated variables `idt_bsp` and `idtr_bsp`, and not allocated dynamically.
+// This option so that interrupts can be initialized on the BSP before initializing the page allocator and memory allocator.
+// This way, if there's an issue with either of those it will produce an error message rather than a triple fault.
+bool interrupt_init(bool bsp) {
     // Allocate the IDT and IDTR
     size_t idt_size = IDT_ENTRIES_NUM * sizeof(IDTEntry);
-    IDTEntry *idt = malloc(idt_size);
+    IDTEntry *idt = bsp ? &idt_bsp : malloc(idt_size);
     if (idt == NULL)
         return false;
-    IDTR *idtr = malloc(sizeof(IDTR));
+    IDTR *idtr = bsp ? &idtr_bsp : malloc(sizeof(IDTR));
     if (idtr == NULL)
         return false;
     *idtr = (IDTR){idt_size - 1, (u64)idt};

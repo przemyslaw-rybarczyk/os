@@ -19,6 +19,10 @@
 
 void kernel_start(void) {
     framebuffer_init();
+    if (!interrupt_init(true)) {
+        print_string("Failed to initialize interrupt handlers\n");
+        goto halt;
+    }
     page_alloc_init();
     if (!identity_mapping_init()) {
         print_string("Failed to initialize identity mapping\n");
@@ -26,10 +30,6 @@ void kernel_start(void) {
     }
     if (!alloc_init()) {
         print_string("Failed to initialize memory allocator\n");
-        goto halt;
-    }
-    if (!interrupt_init()) {
-        print_string("Failed to initialize interrupt handlers\n");
         goto halt;
     }
     if (!percpu_init()) {
@@ -72,7 +72,7 @@ halt:
 }
 
 void kernel_start_ap(void) {
-    if (!interrupt_init()) {
+    if (!interrupt_init(false)) {
         framebuffer_lock();
         print_string("Failed to initialize interrupt handlers on AP\n");
         framebuffer_unlock();
