@@ -23,9 +23,8 @@ void kernel_start(void) {
         print_string("Failed to initialize interrupt handlers\n");
         goto halt;
     }
-    page_alloc_init();
-    if (!identity_mapping_init()) {
-        print_string("Failed to initialize identity mapping\n");
+    if (!page_alloc_init()) {
+        print_string("Failed to initialize paging structures\n");
         goto halt;
     }
     if (!alloc_init()) {

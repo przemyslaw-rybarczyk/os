@@ -1,6 +1,7 @@
 #include "types.h"
 #include "page.h"
 
+#include "framebuffer.h"
 #include "spinlock.h"
 #include "string.h"
 
@@ -11,6 +12,8 @@
 
 #define PAGE_STACK_PML4E 0x1FCull
 #define PAGE_STACK_BOTTOM (u64 *)ASSEMBLE_ADDR_PML4E(PAGE_STACK_PML4E, 0)
+
+#define ID_MAP_INIT_AREA ASSEMBLE_ADDR_PDPTE(0x1FD, 0x002, 0)
 
 static spinlock_t page_stack_lock = SPINLOCK_FREE;
 
@@ -26,8 +29,10 @@ typedef struct MemoryRange {
 
 extern MemoryRange memory_ranges[];
 extern u16 memory_ranges_length;
+extern u8 pt_id_map_init[];
 
-void page_alloc_init(void) {
+bool page_alloc_init(void) {
+    size_t filled_id_map_pages = 0;
     // Iterate over the memory ranges gathered by the bootloader
     for (u16 i = 0; i < memory_ranges_length / sizeof(MemoryRange); i++) {
         // If the memory type or ACPI attributes don't mark the memory range as valid, skip it
@@ -45,48 +50,47 @@ void page_alloc_init(void) {
             // Discard pages that would go outside the identity mapping
             if (page >= IDENTITY_MAPPING_SIZE)
                 continue;
+            // Fill part of the identity mapping
+            // The identity mapping page map consists of 0x200 PDs, each one mapping 0x200 large pages.
+            // We use the first 0x200 pages we find as PDs for this mapping.
+            // We first map them as regular pages so that we fill them with PD entries for the large pages.
+            if (filled_id_map_pages < 0x200) {
+                // Map the page in the initialization area
+                *PTE_PTR(ID_MAP_INIT_AREA + filled_id_map_pages * PAGE_SIZE) = page | PAGE_WRITE | PAGE_PRESENT;
+                filled_id_map_pages++;
+                // Once we got all the pages we need, we fill them with PD entries and map them as PDs.
+                if (filled_id_map_pages == 0x200) {
+                    for (size_t i = 0; i < 0x200 * 0x200; i++)
+                        *((u64 *)ID_MAP_INIT_AREA + i) = (i * LARGE_PAGE_SIZE) | PAGE_NX | PAGE_GLOBAL | PAGE_LARGE | PAGE_WRITE | PAGE_PRESENT;
+                    *PML4E_PTR(ASSEMBLE_ADDR_PML4E(IDENTITY_MAPPING_PML4E, 0)) = (u64)pt_id_map_init | PAGE_WRITE | PAGE_PRESENT;
+                }
+                continue;
+            }
             // If we go exhaust all space in the PDPT, we end the loop prematurely.
             // This should never happen.
             if (page_stack_top >= PAGE_STACK_BOTTOM + PDPT_SIZE / sizeof(u64))
-                return;
+                return true;
             // If we reach the end of the mapped part of the stack,
             // we use the current page to extend the mapping.
             // Otherwise, we just push the page on top of the stack.
             if ((u64)page_stack_top % PD_SIZE == 0 && *PDPTE_PTR(page_stack_top) == 0) {
+                memset((void *)PHYS_ADDR(page), 0, PAGE_SIZE);
                 *PDPTE_PTR(page_stack_top) = page | PAGE_WRITE | PAGE_PRESENT;
-                memset(PDE_PTR(page_stack_top), 0, PAGE_SIZE);
             } else if ((u64)page_stack_top % PT_SIZE == 0 && *PDE_PTR(page_stack_top) == 0) {
+                memset((void *)PHYS_ADDR(page), 0, PAGE_SIZE);
                 *PDE_PTR(page_stack_top) = page | PAGE_WRITE | PAGE_PRESENT;
-                memset(PTE_PTR(page_stack_top), 0, PAGE_SIZE);
             } else if ((u64)page_stack_top % PAGE_SIZE == 0 && *PTE_PTR(page_stack_top) == 0) {
+                memset((void *)PHYS_ADDR(page), 0, PAGE_SIZE);
                 *PTE_PTR(page_stack_top) = page | PAGE_GLOBAL | PAGE_WRITE | PAGE_PRESENT;
-                memset(page_stack_top, 0, PAGE_SIZE);
             } else {
                 *page_stack_top = page;
                 page_stack_top++;
             }
         }
     }
-}
-
-// Set up the indentity mapping within PML4E number IDENTITY_MAPPING_PML4E
-bool identity_mapping_init(void) {
-    // Set the PML4E for identity mapping
-    u64 pml4e_page = page_alloc();
-    if (pml4e_page == 0)
+    // If we didn't find enough pages to create the identity mapping, the initialization fails
+    if (filled_id_map_pages < 0x200) {
         return false;
-    *PML4E_PTR(ASSEMBLE_ADDR_PML4E(IDENTITY_MAPPING_PML4E, 0)) = pml4e_page | PAGE_WRITE | PAGE_PRESENT;
-    // Set each PDPTE to a new page
-    for (size_t i = 0; i < 0x200; i++) {
-        u64 pdpte_page = page_alloc();
-        if (pdpte_page == 0)
-            return false;
-        *PDPTE_PTR(ASSEMBLE_ADDR_PDPTE(IDENTITY_MAPPING_PML4E, i, 0)) = pdpte_page | PAGE_WRITE | PAGE_PRESENT;
-        // Within the PD, set each entry to map a large page
-        for (size_t j = 0; j < 0x200; j++) {
-            u64 phys_addr = ASSEMBLE_ADDR_PDE(0, i, j, 0);
-            *PDE_PTR(ASSEMBLE_ADDR_PDE(IDENTITY_MAPPING_PML4E, i, j, 0)) = phys_addr | PAGE_NX | PAGE_GLOBAL | PAGE_LARGE | PAGE_WRITE | PAGE_PRESENT;
-        }
     }
     return true;
 }
@@ -110,6 +114,8 @@ u64 page_alloc(void) {
 // Returns 0 on failure.
 u64 page_alloc_clear(void) {
     u64 page = page_alloc();
+    if (page == 0)
+        return 0;
     memset((void *)PHYS_ADDR(page), 0, PAGE_SIZE);
     return page;
 }

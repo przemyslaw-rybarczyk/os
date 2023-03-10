@@ -54,8 +54,7 @@
 // x must be less than IDENTITY_MAPPING_SIZE.
 #define PHYS_ADDR(x) (ASSEMBLE_ADDR_PML4E(IDENTITY_MAPPING_PML4E, 0) + (x))
 
-void page_alloc_init(void);
-bool identity_mapping_init(void);
+bool page_alloc_init(void);
 u64 page_alloc(void);
 u64 page_alloc_clear(void);
 void page_free(u64 page);
