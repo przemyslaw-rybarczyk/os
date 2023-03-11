@@ -52,6 +52,9 @@ static inline u64 get_pml4(void) {
 // x must be less than IDENTITY_MAPPING_SIZE.
 #define PHYS_ADDR(x) (ASSEMBLE_ADDR_PML4E(IDENTITY_MAPPING_PML4E, 0) + (x))
 
+// Largest address accessible to userspace
+#define USER_MAX_ADDR 0x00007FFFFFFFFFFF
+
 bool page_alloc_init(void);
 u64 page_alloc(void);
 u64 page_alloc_clear(void);

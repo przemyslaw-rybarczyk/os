@@ -20,10 +20,6 @@
 #define ELF_MAGIC_SIZE 4
 static const u8 elf_magic[ELF_MAGIC_SIZE] = {0x7F, 0x45, 0x4C, 0x46};
 
-// We don't allow programs to be loaded past the 4G threshold.
-// This is an arbitrary limit.
-#define PROGRAM_LOAD_MAX_ADDR (1ull << 32)
-
 typedef struct ELFHeader {
     u8 magic[ELF_MAGIC_SIZE];
     u8 class;
@@ -101,7 +97,7 @@ bool load_elf_file(const u8 *file, size_t file_length, u64 *entry) {
                 return false;
             if (program_header->vaddr + program_header->offset < program_header->vaddr)
                 return false;
-            if (program_header->vaddr + program_header->offset > PROGRAM_LOAD_MAX_ADDR)
+            if (program_header->vaddr + program_header->offset > USER_MAX_ADDR)
                 return false;
             // Map the memory range
             if (!map_pages(
