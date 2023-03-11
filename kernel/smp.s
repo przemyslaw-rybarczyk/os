@@ -8,7 +8,7 @@ extern cpus
 extern cpu_num
 extern lapic
 
-extern cycle_count
+extern pit_wait_before_sipi
 
 LAPIC_ID_REGISTER equ 0x020
 LAPIC_EOI_REGISTER equ 0x0B0
@@ -53,12 +53,10 @@ smp_init:
   ; Send INIT IPI to every AP
   mov dword [rax + LAPIC_INTERRUPT_COMMAND_REGISTER_HIGH], 0
   mov dword [rax + LAPIC_INTERRUPT_COMMAND_REGISTER_LOW], ICR_ALL_EXCLUDING_SELF | ICR_ASSERT | ICR_INIT
-  ; Wait around 10 ms
-  ; The busy-wait loop is only a temporary solution and will be changed later to use a proper timer.
-  mov rcx, 20000000
-.wait:
-  sub rcx, 1
-  jnz .wait
+  ; Wait before sending SIPI
+  push rax
+  call pit_wait_before_sipi
+  pop rax
   ; Send SIPI to every AP
   mov dword [rax + LAPIC_INTERRUPT_COMMAND_REGISTER_HIGH], 0
   mov dword [rax + LAPIC_INTERRUPT_COMMAND_REGISTER_LOW], ICR_ALL_EXCLUDING_SELF | ICR_ASSERT | ICR_SIPI | SIPI_VECTOR

@@ -41,7 +41,6 @@ void kernel_start(void) {
     }
     userspace_init();
     pic_disable();
-    pit_init();
     ps2_init();
     if (!acpi_init()) {
         print_string("Failed to read ACPI tables\n");
@@ -53,6 +52,7 @@ void kernel_start(void) {
     }
     apic_init();
     smp_init();
+    pit_init();
     framebuffer_lock();
     print_string("BSP finished initialization\n");
     framebuffer_unlock();
