@@ -57,7 +57,6 @@ void kernel_start(void) {
     print_string("BSP finished initialization\n");
     framebuffer_unlock();
     smp_init_sync_1();
-    remove_identity_mapping();
     for (u64 arg = 'A'; arg <= 'H'; arg++)
         spawn_process(included_file_program1, included_file_program1_end - included_file_program1, arg);
     for (u64 arg = 'a'; arg <= 'h'; arg++)

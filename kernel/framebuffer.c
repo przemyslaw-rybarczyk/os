@@ -64,6 +64,8 @@ static u8 g_pos;
 static u8 b_cut;
 static u8 b_pos;
 
+extern u64 pd_fb[0x200];
+
 // Set variables based on VBE mode information received from bootloader
 // Note that the original struct will become unusable after kernel initialization completes and the identity mapping is removed.
 void framebuffer_init(void) {
@@ -82,7 +84,6 @@ void framebuffer_init(void) {
     u32 fb_phys_addr = vbe_mode_info.phys_base_ptr;
     u64 fb_virt_addr = ASSEMBLE_ADDR_PDE(FB_PML4E, 0, 0, fb_phys_addr);
     framebuffer = (u8 *)fb_virt_addr;
-    u64 *pde_fb = PDE_PTR(fb_virt_addr);
     u64 first_page = fb_phys_addr >> 21;
     u64 last_page = (fb_phys_addr + fb_height * fb_pitch - 1) >> 21;
     u64 num_pages = last_page - first_page + 1;
@@ -90,7 +91,7 @@ void framebuffer_init(void) {
     if (num_pages > 0x200)
         num_pages = 0x200;
     for (u64 i = 0; i < num_pages; i++)
-        pde_fb[i] = (first_page + i) << 21 | PAGE_NX | PAGE_GLOBAL | PAGE_LARGE | PAGE_WRITE | PAGE_PRESENT;
+        pd_fb[i] = (first_page + i) << 21 | PAGE_NX | PAGE_GLOBAL | PAGE_LARGE | PAGE_WRITE | PAGE_PRESENT;
     // Clear frambuffer to black
     memset(framebuffer, 0x00, fb_height * fb_pitch);
 }

@@ -1,6 +1,8 @@
 extern kernel_start
 extern kernel_start_ap
 extern last_kernel_stack
+extern pd_fb
+extern pdpt_page_stack
 extern pt_id_map_init
 
 ; Variables declared by linker script
@@ -98,7 +100,6 @@ PAGE_SIZE equ 1 << 12
 
 ; Kernel constants
 
-RECURSIVE_PML4E equ 0x100
 DEVICES_PML4E equ 0x1FD
 FB_PDPTE equ 0x000
 ID_MAP_INIT_PDPTE equ 0x002
@@ -509,10 +510,6 @@ protected_mode_start:
   mov dword [pd_stack], pt_stack | PAGE_WRITE | PAGE_PRESENT
   mov dword [pt_stack], stack | PAGE_GLOBAL | PAGE_WRITE | PAGE_PRESENT
   mov dword [pt_stack + 4], PAGE_NX >> 32
-  ; Set PML4E number RECURSIVE_PML4E to point at the PML4
-  ; This allows access to the page tables through memory.
-  mov dword [pml4 + RECURSIVE_PML4E * 8], pml4 | PAGE_WRITE | PAGE_PRESENT
-  mov dword [pml4 + RECURSIVE_PML4E * 8 + 4], PAGE_NX >> 32
   ; Set up mapping for framebuffer, identity mapping initialization and page stack
   ; The pd_fb, pt_id_map_init, and pdpt_page_stack will be filled in by the kernel.
   mov dword [pml4 + DEVICES_PML4E * 8], pdpt_devices | PAGE_WRITE | PAGE_PRESENT

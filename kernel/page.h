@@ -9,7 +9,7 @@
 #define PAGE_GLOBAL (1ull << 8)
 #define PAGE_NX (1ull << 63)
 
-#define PAGE_MASK 0xFFFFFFFFFFFFF000ull
+#define PAGE_MASK 0x00FFFFFFFFFFF000ull
 
 #define PAGE_BITS 12
 #define LARGE_PAGE_BITS 21
@@ -34,18 +34,16 @@
 #define ASSEMBLE_ADDR_PDPTE(pml4e, pdpte, i) (SIGN_EXTEND_ADDR(((u64)(pml4e) << 39) | ((u64)(pdpte) << 30) | ((u64)(i) & 0x000000003FFFFFFFull)))
 #define ASSEMBLE_ADDR_PML4E(pml4e, i) (SIGN_EXTEND_ADDR(((u64)(pml4e) << 39) | ((u64)(i) & 0x0000007FFFFFFFFFull)))
 
-#define RECURSIVE_PLM4E 0x100ull
+#define ADDR_PML4E(x) (((u64)(x) >> PDPT_BITS) & 0x1FF)
+#define ADDR_PDPTE(x) (((u64)(x) >> PD_BITS) & 0x1FF)
+#define ADDR_PDE(x) (((u64)(x) >> PT_BITS) & 0x1FF)
+#define ADDR_PTE(x) (((u64)(x) >> PAGE_BITS) & 0x1FF)
 
-// These macros provide pointers that can be used to access page map entries of mapping a given virtual address.
-// They make use of the PML4E number RECURSIVE_PLM4E being mapped to the PML4.
-#define PTE_PTR(x) ((u64 *)(ASSEMBLE_ADDR_PML4E(RECURSIVE_PLM4E, (u64)(x) >> 9) & ~7ull))
-#define PDE_PTR(x) ((u64 *)(ASSEMBLE_ADDR_PDPTE(RECURSIVE_PLM4E, RECURSIVE_PLM4E, (u64)(x) >> 18) & ~7ull))
-#define PDPTE_PTR(x) ((u64 *)(ASSEMBLE_ADDR_PDE(RECURSIVE_PLM4E, RECURSIVE_PLM4E, RECURSIVE_PLM4E, (u64)(x) >> 27) & ~7ull))
-#define PML4E_PTR(x) ((u64 *)(ASSEMBLE_ADDR(RECURSIVE_PLM4E, RECURSIVE_PLM4E, RECURSIVE_PLM4E, RECURSIVE_PLM4E, (u64)(x) >> 36) & ~7ull))
-
-// Takes a pointer to a page map entry obtained through the recursive mapping,
-// and returns a virtual pointer to the page it has in its address field.
-#define DEREF_ENTRY_PTR(x) ((void *)SIGN_EXTEND_ADDR((u64)(x) << 9))
+static inline u64 get_pml4(void) {
+    u64 pml4;
+    asm ("mov %0, cr3" : "=r"(pml4));
+    return pml4;
+}
 
 #define IDENTITY_MAPPING_PML4E 0x102ull
 #define IDENTITY_MAPPING_SIZE PDPT_SIZE
@@ -61,4 +59,3 @@ void page_free(u64 page);
 u64 get_free_memory_size(void);
 bool map_page(u64 addr, bool user, bool global, bool write, bool execute);
 bool map_pages(u64 start, u64 end, bool user, bool global, bool write, bool execute);
-void remove_identity_mapping(void);

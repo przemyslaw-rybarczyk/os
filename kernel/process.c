@@ -56,9 +56,7 @@ bool spawn_process(const u8 *file, size_t file_length, u64 arg) {
     }
     pqn->process.page_map = page_map;
     // Copy the kernel mappings
-    memcpy((u64 *)PHYS_ADDR(page_map) + 0x100, PML4E_PTR(0) + 0x100, 0x100 * 8);
-    // Set the recursive page table mapping
-    ((u64 *)PHYS_ADDR(page_map))[RECURSIVE_PLM4E] = page_map | PAGE_NX | PAGE_WRITE | PAGE_PRESENT;
+    memcpy((u64 *)PHYS_ADDR(page_map) + 0x100, (u64 *)PHYS_ADDR(get_pml4()) + 0x100, 0x100 * 8);
     // Allocate a kernel stack
     pqn->process.kernel_stack = stack_alloc();
     if (pqn->process.kernel_stack == NULL) {
