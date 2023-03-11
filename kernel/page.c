@@ -146,9 +146,11 @@ u64 get_free_memory_size(void) {
 // Returns true on success, false on failure.
 static bool ensure_page_map_entry_filled(u64 *entry, bool user, bool global, bool write, bool execute, bool clear) {
     if (!(*entry & PAGE_PRESENT)) {
-        u64 page = clear ? page_alloc() : page_alloc_clear();
+        u64 page = page_alloc();
         if (page == 0)
             return false;
+        if (clear)
+            memset((void *)PHYS_ADDR(page), 0, PAGE_SIZE);
         *entry = (page & PAGE_MASK)
             | (execute ? 0 : PAGE_NX)
             | (global ? PAGE_GLOBAL : 0)
