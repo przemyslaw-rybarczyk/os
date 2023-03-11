@@ -104,7 +104,7 @@ u32 get_framebuffer_height(void) {
     return (u32)fb_height;
 }
 
-static spinlock_t fb_lock = SPINLOCK_FREE;
+static spinlock_t fb_lock;
 
 void framebuffer_lock(void) {
     spinlock_acquire(&fb_lock);

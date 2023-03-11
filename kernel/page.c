@@ -15,7 +15,7 @@
 
 #define ID_MAP_INIT_AREA ASSEMBLE_ADDR_PDPTE(0x1FD, 0x002, 0)
 
-static spinlock_t page_stack_lock = SPINLOCK_FREE;
+static spinlock_t page_stack_lock;
 
 // Free pages are stored in a stack.
 static u64 *page_stack_top = PAGE_STACK_BOTTOM;

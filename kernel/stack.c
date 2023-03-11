@@ -9,7 +9,7 @@
 #define KERNEL_INIT_STACK ASSEMBLE_ADDR_PML4E(STACK_PML4E, 0)
 #define KERNEL_STACK_AREA_END (KERNEL_INIT_STACK + PDPT_SIZE)
 
-static spinlock_t stack_alloc_lock = SPINLOCK_FREE;
+static spinlock_t stack_alloc_lock;
 
 // The address of the last stack that has memory allocated for it
 // This variable is global so it can be used to set up the initial kernel stacks for each core.

@@ -26,7 +26,7 @@ typedef struct ProcessQueueNode {
 extern void jump_to_current_process(void);
 extern u8 process_start[];
 
-static spinlock_t scheduler_lock = SPINLOCK_FREE;
+static spinlock_t scheduler_lock;
 
 static ProcessQueueNode *process_queue_start = NULL;
 static ProcessQueueNode *process_queue_end = NULL;

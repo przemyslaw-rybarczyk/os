@@ -66,7 +66,7 @@ typedef struct AllocatedMemoryRegion {
 
 static FreeMemoryRegion *dummy_region;
 
-static spinlock_t alloc_lock = SPINLOCK_FREE;
+static spinlock_t alloc_lock;
 
 bool alloc_init(void) {
     // Allocate the initlial heap
