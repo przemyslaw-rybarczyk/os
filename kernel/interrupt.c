@@ -4,6 +4,7 @@
 #include "alloc.h"
 #include "framebuffer.h"
 #include "segment.h"
+#include "smp.h"
 
 #define IDT_GATE_PRESENT 0x80
 #define IDT_GATE_INTERRUPT 0x0E
@@ -85,7 +86,10 @@ static bool interrupt_pushes_error_code(u8 i) {
 // It's called by the wrapper in `interrupt.s`.
 // It prints the exception information and halts.
 void general_exception_handler(u8 interrupt_number, InterruptFrame *interrupt_frame, u64 error_code) {
-    // We do not lock the framebuffer before printing, as it may be held by whatever code caused the exception to occur
+    // Stop all other cores
+    send_halt_ipi();
+    // We do not lock the framebuffer before printing, as it may be held by whatever code caused the exception to occur.
+    // Not locking won't be a problem anyway, as all other cores have already been stopped by send_halt_ipi().
     print_string("An exception has occurred.\n");
     print_string("Exception number: ");
     print_hex_u8(interrupt_number);
