@@ -35,10 +35,13 @@ interrupt_handler_%+i:
   ; For exceptions we call the handler function with three arguments: the number of the interrupt,
   ; the value the stack pointer had at the start of the interrupt handler, and the error code if the interrupt pushes one.
 %if interrupt_pushes_error_code(i)
-  pop rdx
-%endif
+  mov rdx, [rsp + 9 * 8]
+  mov rdi, i
+  lea rsi, [rsp + 10 * 8]
+%else
   mov rdi, i
   lea rsi, [rsp + 9 * 8]
+%endif
   call general_exception_handler
 %elif i == IDT_PIT_IRQ
   call pit_irq_handler
@@ -46,6 +49,10 @@ interrupt_handler_%+i:
   call keyboard_irq_handler
 %elif i == IDT_MOUSE_IRQ
   call mouse_irq_handler
+%endif
+  ; Remove error code from stack if there is one
+%if interrupt_pushes_error_code(i)
+  pop rax
 %endif
   ; Restore the scratch registers and return
   pop r11
