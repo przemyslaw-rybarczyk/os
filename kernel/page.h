@@ -9,7 +9,7 @@
 #define PAGE_GLOBAL (1ull << 8)
 #define PAGE_NX (1ull << 63)
 
-#define PAGE_MASK 0x00FFFFFFFFFFF000ull
+#define PAGE_MASK 0x000FFFFFFFFFF000ull
 
 #define PAGE_BITS 12
 #define LARGE_PAGE_BITS 21
