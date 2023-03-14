@@ -13,6 +13,7 @@ extern load_elf_file
 extern framebuffer_lock
 extern framebuffer_unlock
 extern print_char
+extern print_string
 
 struc PerCPU
   .current_process: resq 1
@@ -48,6 +49,12 @@ PAGE_PRESENT equ 1 << 0
 PAGE_WRITE equ 1 << 1
 PAGE_GLOBAL equ 1 << 8
 PAGE_NX equ 1 << 63
+
+section .rodata
+
+elf_load_fail_msg: db `Failed to load ELF file\n\0`
+
+section .text
 
 syscall_handler:
   ; Set up the kernel stack
@@ -183,6 +190,8 @@ process_start:
   push rax
   mov rdx, rsp
   call load_elf_file
+  test rax, rax
+  jz .fail
   ; Get process entry point
   pop rax
   ; Set the process argument
@@ -205,3 +214,12 @@ process_start:
   xor r11, r11
   ; Jump to the process using an IRET
   iretq
+.fail:
+  sti
+  call framebuffer_lock
+  mov rdi, elf_load_fail_msg
+  call print_string
+  call framebuffer_unlock
+.fail_loop:
+  hlt
+  jmp .fail_loop
