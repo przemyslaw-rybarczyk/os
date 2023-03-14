@@ -81,15 +81,15 @@ bool page_alloc_init(void) {
             // we use the current page to extend the mapping.
             // Otherwise, we just push the page on top of the stack.
             if ((u64)page_stack_top % PD_SIZE == 0 && page_stack_top_pdpt[ADDR_PDPTE(page_stack_top)] == 0) {
-                memset((void *)PHYS_ADDR(page), 0, PAGE_SIZE);
+                memset(PHYS_ADDR(page), 0, PAGE_SIZE);
                 page_stack_top_pdpt[ADDR_PDPTE(page_stack_top)] = page | PAGE_WRITE | PAGE_PRESENT;
-                page_stack_top_pd = (u64 *)PHYS_ADDR(page);
+                page_stack_top_pd = PHYS_ADDR(page);
             } else if ((u64)page_stack_top % PT_SIZE == 0 && page_stack_top_pd[ADDR_PDE(page_stack_top)] == 0) {
-                memset((void *)PHYS_ADDR(page), 0, PAGE_SIZE);
+                memset(PHYS_ADDR(page), 0, PAGE_SIZE);
                 page_stack_top_pd[ADDR_PDE(page_stack_top)] = page | PAGE_WRITE | PAGE_PRESENT;
-                page_stack_top_pt = (u64 *)PHYS_ADDR(page);
+                page_stack_top_pt = PHYS_ADDR(page);
             } else if ((u64)page_stack_top % PAGE_SIZE == 0 && page_stack_top_pt[ADDR_PTE(page_stack_top)] == 0) {
-                memset((void *)PHYS_ADDR(page), 0, PAGE_SIZE);
+                memset(PHYS_ADDR(page), 0, PAGE_SIZE);
                 page_stack_top_pt[ADDR_PTE(page_stack_top)] = page | PAGE_GLOBAL | PAGE_WRITE | PAGE_PRESENT;
             } else {
                 *page_stack_top = page;
@@ -125,7 +125,7 @@ u64 page_alloc_clear(void) {
     u64 page = page_alloc();
     if (page == 0)
         return 0;
-    memset((void *)PHYS_ADDR(page), 0, PAGE_SIZE);
+    memset(PHYS_ADDR(page), 0, PAGE_SIZE);
     return page;
 }
 
@@ -161,7 +161,7 @@ static void free_page_map_range(u64 start, u64 end, u64 *page_map, u64 page_map_
     for (u64 i = mapping_start_index; i <= mapping_end_index; i++) {
         u64 next_page_map = page_map[i] & PAGE_MASK;
         if (page_map_bits > PAGE_BITS)
-            free_page_map_range(start, end, (u64 *)PHYS_ADDR(next_page_map), page_map_start + (i << page_map_bits), page_map_bits - 9);
+            free_page_map_range(start, end, PHYS_ADDR(next_page_map), page_map_start + (i << page_map_bits), page_map_bits - 9);
         page_free(next_page_map);
     }
 }
@@ -181,14 +181,14 @@ static bool fill_page_map_range(u64 start, u64 end, u64 *page_map, u64 page_map_
             if (page_map_bits == PAGE_BITS)
                 goto fail;
             // If we're mapping a page map and it already exists, use it
-            next_page_map = (u64 *)PHYS_ADDR(page_map[i] & PAGE_MASK);
+            next_page_map = PHYS_ADDR(page_map[i] & PAGE_MASK);
         } else {
             // If there is no page present yet, allocate one
             u64 new_page_phys = page_map_bits > PAGE_BITS ? page_alloc_clear() : page_alloc();
             if (new_page_phys == 0)
                 goto fail;
             page_map[i] = new_page_phys;
-            next_page_map = (u64 *)PHYS_ADDR(new_page_phys);
+            next_page_map = PHYS_ADDR(new_page_phys);
         }
         if (page_map_bits > PAGE_BITS) {
             // Recurse to map the lower level page maps
@@ -199,7 +199,7 @@ static bool fill_page_map_range(u64 start, u64 end, u64 *page_map, u64 page_map_
 fail:
         // Free the previously allocated pages and return an error
         for (u64 j = mapping_start_index; j < i; j++)
-            free_page_map_range(start, end, (u64 *)PHYS_ADDR(page_map[i] & PAGE_MASK), page_map_start + (i << page_map_bits), page_map_bits - 9);
+            free_page_map_range(start, end, PHYS_ADDR(page_map[i] & PAGE_MASK), page_map_start + (i << page_map_bits), page_map_bits - 9);
         return false;
     }
     return true;
@@ -213,7 +213,7 @@ static void enable_page_map_range(u64 start, u64 end, u64 *page_map, u64 page_ma
     u64 mapping_end_index = get_mapping_end_index(end, page_map_start, page_map_bits);
     for (u64 i = mapping_start_index; i <= mapping_end_index; i++) {
         if (page_map_bits > PAGE_BITS) {
-            enable_page_map_range(start, end, (u64 *)PHYS_ADDR(page_map[i] & PAGE_MASK), page_map_start + (i << page_map_bits), page_map_bits - 9, flags);
+            enable_page_map_range(start, end, PHYS_ADDR(page_map[i] & PAGE_MASK), page_map_start + (i << page_map_bits), page_map_bits - 9, flags);
             page_map[i] |= PAGE_USER | PAGE_WRITE | PAGE_PRESENT;
         } else {
             page_map[i] |= flags;
@@ -230,9 +230,9 @@ static bool map_pages(u64 start, u64 length, u64 flags) {
         return false;
     if (length == 0)
         return true;
-    if (!fill_page_map_range(start, start + length - PAGE_SIZE, (u64 *)PHYS_ADDR(get_pml4()), 0, PDPT_BITS))
+    if (!fill_page_map_range(start, start + length - PAGE_SIZE, PHYS_ADDR(get_pml4()), 0, PDPT_BITS))
         return false;
-    enable_page_map_range(start, start + length - PAGE_SIZE, (u64 *)PHYS_ADDR(get_pml4()), 0, PDPT_BITS, flags);
+    enable_page_map_range(start, start + length - PAGE_SIZE, PHYS_ADDR(get_pml4()), 0, PDPT_BITS, flags);
     return true;
 }
 

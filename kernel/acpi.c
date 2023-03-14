@@ -119,12 +119,12 @@ static const RSDP *find_rsdp(void) {
     // Search through the first 1 KiB of the EBDA for the RSDP
     // It always starts with the "RSD PTR " signature aligned to a 16-byte boundary.
     for (size_t i = 0; i < 1024; i += 16)
-        if (memcmp((const void *)PHYS_ADDR(ebda_start + i), rsdp_signature, sizeof(rsdp_signature)) == 0)
-            return (const RSDP *)PHYS_ADDR(ebda_start + i);
+        if (memcmp(PHYS_ADDR(ebda_start + i), rsdp_signature, sizeof(rsdp_signature)) == 0)
+            return PHYS_ADDR(ebda_start + i);
     // Search through the area from 0xE0000 to 0x100000
     for (size_t i = 0xE0000; i < 0x100000; i += 16)
-        if (memcmp((u8 *)PHYS_ADDR(i), rsdp_signature, sizeof(rsdp_signature)) == 0)
-            return (const RSDP *)PHYS_ADDR(i);
+        if (memcmp(PHYS_ADDR(i), rsdp_signature, sizeof(rsdp_signature)) == 0)
+            return PHYS_ADDR(i);
     return NULL;
 }
 
@@ -135,12 +135,12 @@ static const ACPIEntry *find_rsdt(const RSDP *rsdp, bool *is_xsdt) {
     // For ACPI versions below 2.0 we get the RSDT, and for version 2.0 and above we get the XSDT.
     if (rsdp->revision < 2) {
         *is_xsdt = false;
-        return (const ACPIEntry *)PHYS_ADDR(rsdp->rsdt_address);
+        return PHYS_ADDR(rsdp->rsdt_address);
     } else {
         *is_xsdt = true;
         if (rsdp->xsdt_address >= IDENTITY_MAPPING_SIZE)
             return NULL;
-        return (const ACPIEntry *)PHYS_ADDR(rsdp->xsdt_address);
+        return PHYS_ADDR(rsdp->xsdt_address);
     }
 }
 
@@ -154,7 +154,7 @@ static bool parse_rsdt(const ACPIEntry *rsdt, bool is_xsdt) {
         u64 entry_phys = is_xsdt ? ((u64 *)entries)[i] : ((u32 *)entries)[i];
         if (entry_phys >= IDENTITY_MAPPING_SIZE)
             continue;
-        const ACPIEntry *entry = (const ACPIEntry *)PHYS_ADDR(entry_phys);
+        const ACPIEntry *entry = PHYS_ADDR(entry_phys);
         if (memcmp(entry->signature, "APIC", 4) == 0)
             return parse_madt(entry);
     }
@@ -256,7 +256,7 @@ static bool parse_madt(const ACPIEntry *madt) {
             break;
         case MADT_IO_APIC: {
             // Configure the I/O APIC, setting redirections according using the interrupt assignment information gathered earlier
-            IOAPIC *io_apic = (IOAPIC *)PHYS_ADDR(madt_record->io_apic.addr);
+            IOAPIC *io_apic = PHYS_ADDR(madt_record->io_apic.addr);
             u32 int_base = madt_record->io_apic.int_base;
             u32 max_redir = (io_apic_read(io_apic, IOAPICVER) & IOAPICVER_MAX_REDIR_MASK) >> IOAPICVER_MAX_REDIR_OFFSET;
             for (u32 i = int_base; i <= int_base + max_redir; i++) {
@@ -278,7 +278,7 @@ static bool parse_madt(const ACPIEntry *madt) {
     // Save the LAPIC address
     if (lapic_phys >= IDENTITY_MAPPING_SIZE)
         return false;
-    lapic = (void *)PHYS_ADDR(lapic_phys);
+    lapic = PHYS_ADDR(lapic_phys);
     return true;
 }
 
