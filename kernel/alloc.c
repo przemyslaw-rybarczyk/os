@@ -21,8 +21,10 @@ static bool extend_kernel_heap(size_t increment) {
     // Check the increment won't increase heap size past the limit
     if (kernel_heap_end + increment > KERNEL_HEAP_END_MAX || kernel_heap_end + increment < kernel_heap_end)
         return false;
+    // Round up the increment to page size
+    increment = (increment + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE;
     // Allocate the pages needed to extend the heap
-    if (!map_pages(kernel_heap_end, kernel_heap_end + increment, false, true, true, false))
+    if (!map_kernel_pages(kernel_heap_end, increment, true, false))
         return false;
     kernel_heap_end += increment;
     return true;

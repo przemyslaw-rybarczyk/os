@@ -141,51 +141,114 @@ u64 get_free_memory_size(void) {
     return page_stack_top - PAGE_STACK_BOTTOM;
 }
 
-// If the page map entry is empty, fills it with a newly allocated page.
-// If `clear` is true, the page is cleared.
-// Returns true on success, false on failure.
-static bool ensure_page_map_entry_filled(u64 *entry, bool user, bool global, bool write, bool execute, bool clear) {
-    if (!(*entry & PAGE_PRESENT)) {
-        u64 page = page_alloc();
-        if (page == 0)
-            return false;
-        if (clear)
-            memset((void *)PHYS_ADDR(page), 0, PAGE_SIZE);
-        *entry = (page & PAGE_MASK)
-            | (execute ? 0 : PAGE_NX)
-            | (global ? PAGE_GLOBAL : 0)
-            | (user ? PAGE_USER : 0)
-            | (write ? PAGE_WRITE : 0)
-            | PAGE_PRESENT;
+// Used to protect access to the kernel page map
+static spinlock_t kernel_page_lock;
+
+static u64 get_mapping_start_index(u64 start, u64 page_map_start, u64 page_map_bits) {
+    return start < page_map_start ? 0 : (start >> page_map_bits) % PAGE_MAP_LEVEL_SIZE;
+}
+
+static u64 get_mapping_end_index(u64 end, u64 page_map_start, u64 page_map_bits) {
+    return end >= page_map_start + (PAGE_MAP_LEVEL_SIZE << page_map_bits) ? PAGE_MAP_LEVEL_SIZE - 1 : (end >> page_map_bits) % PAGE_MAP_LEVEL_SIZE;
+}
+
+// Free the entries mapping the range from `start` to `end` inclusive within a page map at address `page_map` mapping the range starting at `page_map_start` of length `1 << page_map_bits`
+// Flags are ignored when unmapping entries, including the present flag.
+// Assumes that the page map maps addresses for at least part of the range and that all addresses are truncated to 48 bits.
+static void free_page_map_range(u64 start, u64 end, u64 *page_map, u64 page_map_start, u64 page_map_bits) {
+    u64 mapping_start_index = get_mapping_start_index(start, page_map_start, page_map_bits);
+    u64 mapping_end_index = get_mapping_end_index(end, page_map_start, page_map_bits);
+    for (u64 i = mapping_start_index; i <= mapping_end_index; i++) {
+        u64 next_page_map = page_map[i] & PAGE_MASK;
+        if (page_map_bits > PAGE_BITS)
+            free_page_map_range(start, end, (u64 *)PHYS_ADDR(next_page_map), page_map_start + (i << page_map_bits), page_map_bits - 9);
+        page_free(next_page_map);
+    }
+}
+
+// Fill the entries mapping the range from `start` to `end` inclusive within a page map at address `page_map` mapping the range starting at `page_map_start` of length `1 << page_map_bits`
+// No flags are set, including the present flag. This prevents programs from accessing memory that would be unmapped later if an error occurs.
+// Assumes that the page map maps addresses for at least part of the range and that all addresses are truncated to 48 bits.
+// If an error occurs, all allocated pages are freed.
+static bool fill_page_map_range(u64 start, u64 end, u64 *page_map, u64 page_map_start, u64 page_map_bits) {
+    // Iterate over the relevant range of page map entries
+    u64 mapping_start_index = get_mapping_start_index(start, page_map_start, page_map_bits);
+    u64 mapping_end_index = get_mapping_end_index(end, page_map_start, page_map_bits);
+    for (u64 i = mapping_start_index; i <= mapping_end_index; i++) {
+        u64 *next_page_map;
+        if (page_map[i] & PAGE_PRESENT) {
+            // If the we're trying to map a page that's already mapped, return an error
+            if (page_map_bits == PAGE_BITS)
+                goto fail;
+            // If we're mapping a page map and it already exists, use it
+            next_page_map = (u64 *)PHYS_ADDR(page_map[i] & PAGE_MASK);
+        } else {
+            // If there is no page present yet, allocate one
+            u64 new_page_phys = page_map_bits > PAGE_BITS ? page_alloc_clear() : page_alloc();
+            if (new_page_phys == 0)
+                goto fail;
+            page_map[i] = new_page_phys;
+            next_page_map = (u64 *)PHYS_ADDR(new_page_phys);
+        }
+        if (page_map_bits > PAGE_BITS) {
+            // Recurse to map the lower level page maps
+            if (!fill_page_map_range(start, end, next_page_map, page_map_start + (i << page_map_bits), page_map_bits - 9))
+                goto fail;
+        }
+        continue;
+fail:
+        // Free the previously allocated pages and return an error
+        for (u64 j = mapping_start_index; j < i; j++)
+            free_page_map_range(start, end, (u64 *)PHYS_ADDR(page_map[i] & PAGE_MASK), page_map_start + (i << page_map_bits), page_map_bits - 9);
+        return false;
     }
     return true;
 }
 
-// Maps the page containing a given address, allocating any necessary page tables along the way.
-// If the page or any page tables containing it are already allocated, they are not modified.
-// Returns true on success, false on failure.
-bool map_page(u64 addr, bool user, bool global, bool write, bool execute) {
-    u64 *pml4 = (u64 *)PHYS_ADDR(get_pml4());
-    if (!ensure_page_map_entry_filled(&pml4[ADDR_PML4E(addr)], user, false, true, true, true))
+// Enable the entries mapping the range from `start` to `end` inclusive within a page map at address `page_map` mapping the range starting at `page_map_start` of length `1 << page_map_bits`
+// This sets the given flags for all mapped pages. Page map entries mapping multiple pages have their user, write, and present flags set.
+// Assumes that the page map maps addresses for at least part of the range and that all addresses are truncated to 48 bits.
+static void enable_page_map_range(u64 start, u64 end, u64 *page_map, u64 page_map_start, u64 page_map_bits, u64 flags) {
+    u64 mapping_start_index = get_mapping_start_index(start, page_map_start, page_map_bits);
+    u64 mapping_end_index = get_mapping_end_index(end, page_map_start, page_map_bits);
+    for (u64 i = mapping_start_index; i <= mapping_end_index; i++) {
+        if (page_map_bits > PAGE_BITS) {
+            enable_page_map_range(start, end, (u64 *)PHYS_ADDR(page_map[i] & PAGE_MASK), page_map_start + (i << page_map_bits), page_map_bits - 9, flags);
+            page_map[i] |= PAGE_USER | PAGE_WRITE | PAGE_PRESENT;
+        } else {
+            page_map[i] |= flags;
+        }
+    }
+}
+
+// Map the pages in the given range with the specified flags
+// Assumes all addresses are truncated to 48 bits.
+static bool map_pages(u64 start, u64 length, u64 flags) {
+    if (start % PAGE_SIZE != 0 || length % PAGE_SIZE != 0)
         return false;
-    u64 *pdpt = (u64 *)PHYS_ADDR(pml4[ADDR_PML4E(addr)] & PAGE_MASK);
-    if (!ensure_page_map_entry_filled(&pdpt[ADDR_PDPTE(addr)], user, false, true, true, true))
+    if (start + length < start)
         return false;
-    u64 *pd = (u64 *)PHYS_ADDR(pdpt[ADDR_PDPTE(addr)] & PAGE_MASK);
-    if (!ensure_page_map_entry_filled(&pd[ADDR_PDE(addr)], user, false, true, true, true))
+    if (length == 0)
+        return true;
+    if (!fill_page_map_range(start, start + length - PAGE_SIZE, (u64 *)PHYS_ADDR(get_pml4()), 0, PDPT_BITS))
         return false;
-    u64 *pt = (u64 *)PHYS_ADDR(pd[ADDR_PDE(addr)] & PAGE_MASK);
-    if (!ensure_page_map_entry_filled(&pt[ADDR_PTE(addr)], user, global, write, execute, false))
-        return false;
+    enable_page_map_range(start, start + length - PAGE_SIZE, (u64 *)PHYS_ADDR(get_pml4()), 0, PDPT_BITS, flags);
     return true;
 }
 
-// The same as map_page(), but maps an entire range of addresses
-bool map_pages(u64 start, u64 end, bool user, bool global, bool write, bool execute) {
-    u64 start_page = start / PAGE_SIZE * PAGE_SIZE;
-    u64 end_page = (end + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE;
-    for (u64 page = start_page; page < end_page; page += PAGE_SIZE)
-        if (!map_page(page, user, global, write, execute))
-            return false;
-    return true;
+// Map the pages in the given range as kernel memory
+bool map_kernel_pages(u64 start, u64 length, bool write, bool execute) {
+    if (start + length < KERNEL_MIN_ADDR)
+        return false;
+    spinlock_acquire(&kernel_page_lock);
+    bool result = map_pages(start % PML4_SIZE, length, (execute ? 0 : PAGE_NX) | PAGE_GLOBAL | (write ? PAGE_WRITE : 0) | PAGE_PRESENT);
+    spinlock_release(&kernel_page_lock);
+    return result;
+}
+
+// Map the pages in the given range as userspace memory
+bool map_user_pages(u64 start, u64 length, bool write, bool execute) {
+    if (start > USER_MAX_ADDR)
+        return false;
+    return map_pages(start % PML4_SIZE, length, (execute ? 0 : PAGE_NX) | PAGE_USER | (write ? PAGE_WRITE : 0) | PAGE_PRESENT);
 }

@@ -99,12 +99,13 @@ bool load_elf_file(const u8 *file, size_t file_length, u64 *entry) {
                 return false;
             if (program_header->vaddr + program_header->offset > USER_MAX_ADDR)
                 return false;
+            // Calculate the first and last page to map
+            u64 start_page = program_header->vaddr / PAGE_SIZE * PAGE_SIZE;
+            u64 end_page = (program_header->vaddr + program_header->memory_size + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE;
             // Map the memory range
-            if (!map_pages(
-                program_header->vaddr,
-                program_header->vaddr + program_header->memory_size,
-                true,
-                false,
+            if (!map_user_pages(
+                start_page,
+                end_page - start_page,
                 (program_header->flags & ELF_PT_FLAGS_W) != 0,
                 (program_header->flags & ELF_PT_FLAGS_X) != 0
             ))
@@ -115,8 +116,6 @@ bool load_elf_file(const u8 *file, size_t file_length, u64 *entry) {
             // This includes both memory that's not filled due to segments not being page-aligned,
             // as well as memory that's specified as zeroed by the ELF file (in the difference between memory_size and file_size).
             u64 loaded_end_byte = program_header->vaddr + program_header->file_size;
-            u64 start_page = program_header->vaddr / PAGE_SIZE * PAGE_SIZE;
-            u64 end_page = (program_header->vaddr + program_header->memory_size + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE;
             memset((void *)start_page, 0, program_header->vaddr - start_page);
             memset((void *)loaded_end_byte, 0, end_page - loaded_end_byte);
         }

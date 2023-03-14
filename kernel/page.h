@@ -16,12 +16,16 @@
 #define PT_BITS 21
 #define PD_BITS 30
 #define PDPT_BITS 39
+#define PML4_BITS 48
+#define PAGE_MAP_LEVEL_BITS 9
 
 #define PAGE_SIZE (1ull << PAGE_BITS)
 #define LARGE_PAGE_SIZE (1ull << LARGE_PAGE_BITS)
 #define PT_SIZE (1ull << PT_BITS)
 #define PD_SIZE (1ull << PD_BITS)
 #define PDPT_SIZE (1ull << PDPT_BITS)
+#define PML4_SIZE (1ull << PML4_BITS)
+#define PAGE_MAP_LEVEL_SIZE (1ull << PAGE_MAP_LEVEL_BITS)
 
 // Takes an address and fills its first 16 bits with a sign extension of the lower 48 bits
 #define SIGN_EXTEND_ADDR(x) (((((x) >> 47) & 1) ? 0xFFFF000000000000ull : 0) | (x & 0x0000FFFFFFFFFFFFull))
@@ -55,10 +59,13 @@ static inline u64 get_pml4(void) {
 // Largest address accessible to userspace
 #define USER_MAX_ADDR 0x00007FFFFFFFFFFF
 
+// Lower address used by kernel
+#define KERNEL_MIN_ADDR 0xFFFF800000000000
+
 bool page_alloc_init(void);
 u64 page_alloc(void);
 u64 page_alloc_clear(void);
 void page_free(u64 page);
 u64 get_free_memory_size(void);
-bool map_page(u64 addr, bool user, bool global, bool write, bool execute);
-bool map_pages(u64 start, u64 end, bool user, bool global, bool write, bool execute);
+bool map_kernel_pages(u64 start, u64 length, bool write, bool execute);
+bool map_user_pages(u64 start, u64 length, bool write, bool execute);

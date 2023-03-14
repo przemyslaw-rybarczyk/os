@@ -25,7 +25,7 @@ static u64 first_free_kernel_stack = 0;
 // The initialization is later completed by the AP initialization code, which increments the `last_kernel_stack` variable.
 bool stack_init(void) {
     for (size_t i = 1; i < cpu_num; i++) {
-        if (!map_page(KERNEL_INIT_STACK + 2 * i * PAGE_SIZE, false, true, true, false))
+        if (!map_kernel_pages(KERNEL_INIT_STACK + 2 * i * PAGE_SIZE, PAGE_SIZE, true, false))
             return false;
     }
     return true;
@@ -52,7 +52,7 @@ void *stack_alloc(void) {
             spinlock_release(&stack_alloc_lock);
             return NULL;
         }
-        if (!map_page(stack_addr, false, true, true, false)) {
+        if (!map_kernel_pages(stack_addr, PAGE_SIZE, true, false)) {
             spinlock_release(&stack_alloc_lock);
             return NULL;
         }
