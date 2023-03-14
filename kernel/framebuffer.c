@@ -1,4 +1,4 @@
-#include "types.h"
+include "types.h"
 #include "framebuffer.h"
 
 #include "page.h"
@@ -64,7 +64,7 @@ static u8 g_pos;
 static u8 b_cut;
 static u8 b_pos;
 
-extern u64 pd_fb[0x200];
+extern u64 pd_fb[PAGE_MAP_LEVEL_SIZE];
 
 // Set variables based on VBE mode information received from bootloader
 // Note that the original struct will become unusable after kernel initialization completes and the identity mapping is removed.
@@ -88,8 +88,8 @@ void framebuffer_init(void) {
     u64 last_page = (fb_phys_addr + fb_height * fb_pitch - 1) >> 21;
     u64 num_pages = last_page - first_page + 1;
     // Make sure mapping fits in 1 GiB, although the frambuffer shouldn't ever be this large
-    if (num_pages > 0x200)
-        num_pages = 0x200;
+    if (num_pages > PAGE_MAP_LEVEL_SIZE)
+        num_pages = PAGE_MAP_LEVEL_SIZE;
     for (u64 i = 0; i < num_pages; i++)
         pd_fb[i] = (first_page + i) << 21 | PAGE_NX | PAGE_GLOBAL | PAGE_LARGE | PAGE_WRITE | PAGE_PRESENT;
     // Clear frambuffer to black

@@ -29,8 +29,8 @@ typedef struct MemoryRange {
 
 extern MemoryRange memory_ranges[];
 extern u16 memory_ranges_length;
-extern u64 pdpt_page_stack[0x200];
-extern u64 pt_id_map_init[0x200];
+extern u64 pdpt_page_stack[PAGE_MAP_LEVEL_SIZE];
+extern u64 pt_id_map_init[PAGE_MAP_LEVEL_SIZE];
 
 bool page_alloc_init(void) {
     // Number of pages allocated in the identity mapping initialization area
@@ -58,16 +58,16 @@ bool page_alloc_init(void) {
             if (page >= IDENTITY_MAPPING_SIZE)
                 continue;
             // Fill part of the identity mapping
-            // The identity mapping page map consists of 0x200 PDs, each one mapping 0x200 large pages.
-            // We use the first 0x200 pages we find as PDs for this mapping.
+            // The identity mapping page map consists of PAGE_MAP_LEVEL_SIZE PDs, each one mapping PAGE_MAP_LEVEL_SIZE large pages.
+            // We use the first PAGE_MAP_LEVEL_SIZE pages we find as PDs for this mapping.
             // We first map them as regular pages so that we fill them with PD entries for the large pages.
-            if (filled_id_map_pages < 0x200) {
+            if (filled_id_map_pages < PAGE_MAP_LEVEL_SIZE) {
                 // Map the page in the initialization area
                 pt_id_map_init[filled_id_map_pages] = page | PAGE_WRITE | PAGE_PRESENT;
                 filled_id_map_pages++;
                 // Once we got all the pages we need, we fill them with PD entries and map them as PDs.
-                if (filled_id_map_pages == 0x200) {
-                    for (size_t i = 0; i < 0x200 * 0x200; i++)
+                if (filled_id_map_pages == PAGE_MAP_LEVEL_SIZE) {
+                    for (size_t i = 0; i < PAGE_MAP_LEVEL_SIZE * PAGE_MAP_LEVEL_SIZE; i++)
                         *((u64 *)ID_MAP_INIT_AREA + i) = (i * LARGE_PAGE_SIZE) | PAGE_NX | PAGE_GLOBAL | PAGE_LARGE | PAGE_WRITE | PAGE_PRESENT;
                     pml4[IDENTITY_MAPPING_PML4E] = (u64)pt_id_map_init | PAGE_WRITE | PAGE_PRESENT;
                 }
@@ -98,7 +98,7 @@ bool page_alloc_init(void) {
         }
     }
     // If we didn't find enough pages to create the identity mapping, the initialization fails
-    if (filled_id_map_pages < 0x200) {
+    if (filled_id_map_pages < PAGE_MAP_LEVEL_SIZE) {
         return false;
     }
     return true;
