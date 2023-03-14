@@ -1,10 +1,12 @@
 global _start
 
 _start:
-  mov rax, '-'
+  mov rdx, '-'
 .loop:
+  mov rax, 1
   syscall
-  xchg rdi, rax
+  xchg rdi, rdx
+  mov rax, 1
   syscall
-  xchg rdi, rax
+  xchg rdi, rdx
   jmp .loop

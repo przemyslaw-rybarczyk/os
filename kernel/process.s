@@ -6,14 +6,16 @@ global sched_yield
 global sched_start
 global process_start
 
+extern syscalls
 extern malloc
 extern schedule_first_process
 extern schedule_next_process
 extern load_elf_file
 extern framebuffer_lock
 extern framebuffer_unlock
-extern print_char
 extern print_string
+
+SYSCALLS_NUM equ 2
 
 struc PerCPU
   .current_process: resq 1
@@ -57,13 +59,15 @@ elf_load_fail_msg: db `Failed to load ELF file\n\0`
 section .text
 
 syscall_handler:
+  ; Check if the syscall number is valid
+  cmp rax, SYSCALLS_NUM
+  jae .no_syscall
   ; Set up the kernel stack
-  ; We keep interrupts disabled while we do that to avoid an interrupt occurring with no stack set up.
+  ; We keep interrupts disabled while we do this to avoid an interrupt occurring with no stack set up.
   mov rsp, [gs:PerCPU.current_process]
   mov rsp, [rsp + Process.kernel_stack]
   sti
-  ; Save all scratch registers
-  push rax
+  ; Save all scratch registers except RAX
   push rcx
   push rdx
   push rsi
@@ -72,13 +76,9 @@ syscall_handler:
   push r9
   push r10
   push r11
-  ; Print character passed in RDI
-  push rdi
-  call framebuffer_lock
-  pop rdi
-  and rdi, 0xFF
-  call print_char
-  call framebuffer_unlock
+  ; Perform the system call
+  mov r10, [syscalls + rax * 8]
+  call r10
   ; Restore scratch registers and return
   pop r11
   pop r10
@@ -88,7 +88,9 @@ syscall_handler:
   pop rsi
   pop rdx
   pop rcx
-  pop rax
+  o64 sysret
+.no_syscall:
+  mov rax, 0
   o64 sysret
 
 ; Allocate per-CPU data and set the GS base so it can be used
