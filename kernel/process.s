@@ -20,6 +20,7 @@ SYSCALLS_NUM equ 2
 struc PerCPU
   .current_process: resq 1
   .tss: resq 1
+  .user_rsp: resq 1
 endstruc
 
 struc Process
@@ -62,10 +63,13 @@ syscall_handler:
   ; Check if the syscall number is valid
   cmp rax, SYSCALLS_NUM
   jae .no_syscall
-  ; Set up the kernel stack
+  ; Save the user stack pointer and load the kernel stack pointer
+  ; The user stack pointer is temporarily saved in the CPU-local data and then pushed to the kernel stack once it's loaded.
   ; We keep interrupts disabled while we do this to avoid an interrupt occurring with no stack set up.
+  mov [gs:PerCPU.user_rsp], rsp
   mov rsp, [gs:PerCPU.current_process]
   mov rsp, [rsp + Process.kernel_stack]
+  push qword [gs:PerCPU.user_rsp]
   sti
   ; Save all scratch registers except RAX
   push rcx
@@ -88,6 +92,10 @@ syscall_handler:
   pop rsi
   pop rdx
   pop rcx
+  ; Disable interrupts to avoid an interrupt occurring on the user stack
+  cli
+  ; Restore the user stack pointer
+  pop rsp
   o64 sysret
 .no_syscall:
   mov rax, 0
