@@ -56,8 +56,10 @@ err_t interrupt_init(bool bsp) {
     if (idt == NULL)
         return ERR_NO_MEMORY;
     IDTR *idtr = bsp ? &idtr_bsp : malloc(sizeof(IDTR));
-    if (idtr == NULL)
+    if (idtr == NULL) {
+        free(idt);
         return ERR_NO_MEMORY;
+    }
     *idtr = (IDTR){idt_size - 1, (u64)idt};
     // Fill the IDT entries with the handlers defined in `interrupt.s`
     // Interrupts with handler address given as 0 don't have a handler.
