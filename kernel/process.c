@@ -44,15 +44,15 @@ static void add_process_to_queue_end(ProcessQueueNode *pqn) {
 
 // Create a new process and place it in the queue
 // The arguments determine entry point and initial argument (passed in as RDI).
-bool spawn_process(const u8 *file, size_t file_length, u64 arg) {
+err_t spawn_process(const u8 *file, size_t file_length, u64 arg) {
     ProcessQueueNode *pqn = malloc(sizeof(ProcessQueueNode));
     if (pqn == NULL)
-        return false;
+        return ERR_NO_MEMORY;
     // Allocate a process page map
     u64 page_map = page_alloc_clear();
     if (page_map == 0) {
         free(pqn);
-        return false;
+        return ERR_NO_MEMORY;
     }
     pqn->process.page_map = page_map;
     // Copy the kernel mappings
@@ -62,7 +62,7 @@ bool spawn_process(const u8 *file, size_t file_length, u64 arg) {
     if (pqn->process.kernel_stack == NULL) {
         page_free(pqn->process.page_map);
         free(pqn);
-        return false;
+        return ERR_NO_MEMORY;
     }
     // Initialize the kernel stack contents
     u64 *rsp = pqn->process.kernel_stack;
@@ -84,7 +84,7 @@ bool spawn_process(const u8 *file, size_t file_length, u64 arg) {
     spinlock_acquire(&scheduler_lock);
     add_process_to_queue_end(pqn);
     spinlock_release(&scheduler_lock);
-    return true;
+    return 0;
 }
 
 // Same as schedule_next_process, but doesn't return the current process to the queue

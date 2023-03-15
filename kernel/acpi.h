@@ -1,5 +1,6 @@
 #pragma once
 
 #include "types.h"
+#include "error.h"
 
-bool acpi_init(void);
+err_t acpi_init(void);

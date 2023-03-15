@@ -19,34 +19,34 @@
 
 void kernel_start(void) {
     framebuffer_init();
-    if (!interrupt_init(true)) {
+    if (interrupt_init(true) != 0) {
         print_string("Failed to initialize interrupt handlers\n");
         goto halt;
     }
-    if (!page_alloc_init()) {
+    if (page_alloc_init() != 0) {
         print_string("Failed to initialize paging structures\n");
         goto halt;
     }
-    if (!alloc_init()) {
+    if (alloc_init() != 0) {
         print_string("Failed to initialize memory allocator\n");
         goto halt;
     }
-    if (!percpu_init()) {
+    if (percpu_init() != 0) {
         print_string("Failed to initialize CPU-local storage\n");
         goto halt;
     }
-    if (!gdt_init()) {
+    if (gdt_init() != 0) {
         print_string("Failed to initialize GDT\n");
         goto halt;
     }
     userspace_init();
     pic_disable();
     ps2_init();
-    if (!acpi_init()) {
+    if (acpi_init() != 0) {
         print_string("Failed to read ACPI tables\n");
         goto halt;
     }
-    if (!stack_init()) {
+    if (stack_init() != 0) {
         print_string("Failed to initialize kernel stack manager\n");
         goto halt;
     }
@@ -70,19 +70,19 @@ halt:
 }
 
 void kernel_start_ap(void) {
-    if (!interrupt_init(false)) {
+    if (interrupt_init(false) != 0) {
         framebuffer_lock();
         print_string("Failed to initialize interrupt handlers on AP\n");
         framebuffer_unlock();
         goto halt;
     }
-    if (!percpu_init()) {
+    if (percpu_init() != 0) {
         framebuffer_lock();
         print_string("Failed to initialize CPU-local storage on AP\n");
         framebuffer_unlock();
         goto halt;
     }
-    if (!gdt_init()) {
+    if (gdt_init() != 0) {
         framebuffer_lock();
         print_string("Failed to initialize GDT on AP\n");
         framebuffer_unlock();

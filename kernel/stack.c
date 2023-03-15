@@ -23,12 +23,14 @@ static u64 first_free_kernel_stack = 0;
 
 // Set up the initial stack for each AP
 // The initialization is later completed by the AP initialization code, which increments the `last_kernel_stack` variable.
-bool stack_init(void) {
+err_t stack_init(void) {
+    err_t err;
     for (size_t i = 1; i < cpu_num; i++) {
-        if (!map_kernel_pages(KERNEL_INIT_STACK + 2 * i * PAGE_SIZE, PAGE_SIZE, true, false))
-            return false;
+        err = map_kernel_pages(KERNEL_INIT_STACK + 2 * i * PAGE_SIZE, PAGE_SIZE, true, false);
+        if (err)
+            return err;
     }
-    return true;
+    return 0;
 }
 
 // Allocate a new kernel stack

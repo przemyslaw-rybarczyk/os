@@ -49,15 +49,15 @@ IDTR idtr_bsp;
 // If `bsp` is set, the IDT and IDTR are set from the statically allocated variables `idt_bsp` and `idtr_bsp`, and not allocated dynamically.
 // This option so that interrupts can be initialized on the BSP before initializing the page allocator and memory allocator.
 // This way, if there's an issue with either of those it will produce an error message rather than a triple fault.
-bool interrupt_init(bool bsp) {
+err_t interrupt_init(bool bsp) {
     // Allocate the IDT and IDTR
     size_t idt_size = IDT_ENTRIES_NUM * sizeof(IDTEntry);
     IDTEntry *idt = bsp ? &idt_bsp : malloc(idt_size);
     if (idt == NULL)
-        return false;
+        return ERR_NO_MEMORY;
     IDTR *idtr = bsp ? &idtr_bsp : malloc(sizeof(IDTR));
     if (idtr == NULL)
-        return false;
+        return ERR_NO_MEMORY;
     *idtr = (IDTR){idt_size - 1, (u64)idt};
     // Fill the IDT entries with the handlers defined in `interrupt.s`
     // Interrupts with handler address given as 0 don't have a handler.
@@ -67,7 +67,7 @@ bool interrupt_init(bool bsp) {
     }
     // Load the IDT Descriptor
     asm volatile ("lidt [%0]" : : "r"(idtr));
-    return true;
+    return 0;
 }
 
 typedef struct InterruptFrame {

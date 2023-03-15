@@ -1,6 +1,7 @@
 #pragma once
 
 #include "types.h"
+#include "error.h"
 
 #define SEGMENT_KERNEL_CODE 0x08
 #define SEGMENT_KERNEL_DATA 0x10
@@ -10,4 +11,4 @@
 
 #define SEGMENT_RING_3 0x03
 
-bool gdt_init(void);
+err_t gdt_init(void);

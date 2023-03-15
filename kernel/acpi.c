@@ -144,10 +144,10 @@ static const ACPIEntry *find_rsdt(const RSDP *rsdp, bool *is_xsdt) {
     }
 }
 
-static bool parse_madt(const ACPIEntry *madt);
+static err_t parse_madt(const ACPIEntry *madt);
 
 // Parses the RSDT or XSDT and initializes the I/O APICs using the information found in the ACPI tables
-static bool parse_rsdt(const ACPIEntry *rsdt, bool is_xsdt) {
+static err_t parse_rsdt(const ACPIEntry *rsdt, bool is_xsdt) {
     size_t num_entries = (rsdt->length - sizeof(ACPIEntry)) / (is_xsdt ? sizeof(u64) : sizeof(u32));
     const u8 *entries = rsdt->data;
     for (size_t i = 0; i < num_entries; i++) {
@@ -158,7 +158,7 @@ static bool parse_rsdt(const ACPIEntry *rsdt, bool is_xsdt) {
         if (memcmp(entry->signature, "APIC", 4) == 0)
             return parse_madt(entry);
     }
-    return false;
+    return ERR_UNSUPPORTED;
 }
 
 typedef struct IOAPIC {
@@ -201,7 +201,7 @@ static void io_apic_set_redirection(IOAPIC *io_apic, InterruptAssignment interru
 }
 
 // Parse the MADT and initialize the I/O APIC using the information found there
-static bool parse_madt(const ACPIEntry *madt) {
+static err_t parse_madt(const ACPIEntry *madt) {
     const MADT *madt_data = (const MADT *)madt->data;
     u64 lapic_phys = madt_data->lapic_address;
     // Set the default interrupt assignments
@@ -277,19 +277,19 @@ static bool parse_madt(const ACPIEntry *madt) {
     }
     // Save the LAPIC address
     if (lapic_phys >= IDENTITY_MAPPING_SIZE)
-        return false;
+        return ERR_UNSUPPORTED;
     lapic = PHYS_ADDR(lapic_phys);
-    return true;
+    return 0;
 }
 
 // Locate and parse the ACPI tables and set up the I/O APIC according to them
-bool acpi_init(void) {
+err_t acpi_init(void) {
     const RSDP *rsdp = find_rsdp();
     if (rsdp == NULL)
-        return false;
+        return ERR_UNSUPPORTED;
     bool is_xsdt;
     const ACPIEntry *rsdt = find_rsdt(rsdp, &is_xsdt);
     if (rsdt == NULL)
-        return false;
+        return ERR_UNSUPPORTED;
     return parse_rsdt(rsdt, is_xsdt);
 }

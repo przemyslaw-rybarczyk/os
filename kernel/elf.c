@@ -55,61 +55,62 @@ typedef struct ELFProgramHeader {
 } __attribute__((packed)) ELFProgramHeader;
 
 // Loads an ELF file stored in a buffer into memory.
-// Returns true on success, false on failure.
 // On success `*entry` is set to the entry point.
-bool load_elf_file(const u8 *file, size_t file_length, u64 *entry) {
+err_t load_elf_file(const u8 *file, size_t file_length, u64 *entry) {
+    err_t err;
     // Verify the ELF header
     if (sizeof(ELFHeader) > file_length)
-        return false;
+        return ERR_INVALID_ARG;
     ELFHeader *header = (ELFHeader *)file;
     if (memcmp(header->magic, elf_magic, ELF_MAGIC_SIZE) != 0)
-        return false;
+        return ERR_INVALID_ARG;
     if (header->class != ELF_CLASS_64_BIT)
-        return false;
+        return ERR_INVALID_ARG;
     if (header->endianness != ELF_ENDIAN_LITTLE)
-        return false;
+        return ERR_INVALID_ARG;
     if (header->header_version != ELF_HEADER_VERSION_CURRENT)
-        return false;
+        return ERR_INVALID_ARG;
     if (header->abi != ELF_ABI_SYSV)
-        return false;
+        return ERR_INVALID_ARG;
     if (header->type != ELF_TYPE_EXEC)
-        return false;
+        return ERR_INVALID_ARG;
     if (header->machine != ELF_MACHINE_X86_64)
-        return false;
+        return ERR_INVALID_ARG;
     if (header->version != ELF_VERSION_CURRENT)
-        return false;
+        return ERR_INVALID_ARG;
     if (header->pht_entry_size < sizeof(ELFProgramHeader))
-        return false;
+        return ERR_INVALID_ARG;
     if (header->pht_offset + header->pht_entry_size * header->pht_entries_num < header->pht_offset)
-        return false;
+        return ERR_INVALID_ARG;
     if (header->pht_offset + header->pht_entry_size * header->pht_entries_num > file_length)
-        return false;
+        return ERR_INVALID_ARG;
     // Load the program segments into memory
     for (u16 i = 0; i < header->pht_entries_num; i++) {
         ELFProgramHeader *program_header = (ELFProgramHeader *)(file + header->pht_offset + header->pht_entry_size * i);
         if (program_header->type == ELF_PT_TYPE_LOAD) {
             // Verify the program header
             if (program_header->offset + program_header->file_size < program_header->offset)
-                return false;
+                return ERR_INVALID_ARG;
             if (program_header->offset + program_header->file_size > file_length)
-                return false;
+                return ERR_INVALID_ARG;
             if (program_header->file_size > program_header->memory_size)
-                return false;
+                return ERR_INVALID_ARG;
             if (program_header->vaddr + program_header->offset < program_header->vaddr)
-                return false;
+                return ERR_INVALID_ARG;
             if (program_header->vaddr + program_header->offset > USER_MAX_ADDR)
-                return false;
+                return ERR_INVALID_ARG;
             // Calculate the first and last page to map
             u64 start_page = program_header->vaddr / PAGE_SIZE * PAGE_SIZE;
             u64 end_page = (program_header->vaddr + program_header->memory_size + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE;
             // Map the memory range
-            if (!map_user_pages(
+            err = map_user_pages(
                 start_page,
                 end_page - start_page,
                 (program_header->flags & ELF_PT_FLAGS_W) != 0,
                 (program_header->flags & ELF_PT_FLAGS_X) != 0
-            ))
-                return false;
+            );
+            if (err)
+                return err;
             // Copy segment data from file to memory
             memcpy((void *)program_header->vaddr, file + program_header->offset, program_header->file_size);
             // Fill in the memory that's mapped but not copied to with zeroes
@@ -121,5 +122,5 @@ bool load_elf_file(const u8 *file, size_t file_length, u64 *entry) {
         }
     }
     *entry = header->entry;
-    return true;
+    return 0;
 }

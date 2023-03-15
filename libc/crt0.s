@@ -24,8 +24,8 @@ _start:
   mov rsi, STACK_LENGTH
   mov rdx, MAP_PAGES_WRITE
   syscall
-  test rax, 1
-  jz .fail
+  test rax, rax
+  jnz .fail
   ; Set the stack pointer
   mov rsp, STACK_START + STACK_LENGTH
   mov rdi, rbx

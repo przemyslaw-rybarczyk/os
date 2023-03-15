@@ -17,17 +17,19 @@ static u64 kernel_heap_end = KERNEL_HEAP_START;
 
 // Extend the kernel heap by at least `increment` bytes.
 // Returns true on success, false on failure.
-static bool extend_kernel_heap(size_t increment) {
+static err_t extend_kernel_heap(size_t increment) {
+    err_t err;
     // Check the increment won't increase heap size past the limit
     if (kernel_heap_end + increment > KERNEL_HEAP_END_MAX || kernel_heap_end + increment < kernel_heap_end)
         return false;
     // Round up the increment to page size
     increment = (increment + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE;
     // Allocate the pages needed to extend the heap
-    if (!map_kernel_pages(kernel_heap_end, increment, true, false))
-        return false;
+    err = map_kernel_pages(kernel_heap_end, increment, true, false);
+    if (err)
+        return err;
     kernel_heap_end += increment;
-    return true;
+    return 0;
 }
 
 // The heap is split into consecutive regions, each one starting with a header.
@@ -70,16 +72,18 @@ static FreeMemoryRegion *dummy_region;
 
 static spinlock_t alloc_lock;
 
-bool alloc_init(void) {
+err_t alloc_init(void) {
+    err_t err;
     // Allocate the initlial heap
-    if (!extend_kernel_heap(INIT_HEAP_SIZE))
-        return false;
+    err = extend_kernel_heap(INIT_HEAP_SIZE);
+    if (err)
+        return err;
     // Create the first region and the dummy region and use them to form the linked lists
     FreeMemoryRegion *first_region = (FreeMemoryRegion *)KERNEL_HEAP_START;
     dummy_region = (FreeMemoryRegion *)((char *)kernel_heap_end - sizeof(FreeMemoryRegion));
     *first_region = (FreeMemoryRegion){{false, (MemoryRegion *)dummy_region, (MemoryRegion *)dummy_region}, dummy_region, dummy_region};
     *dummy_region = (FreeMemoryRegion){{true, (MemoryRegion *)first_region, (MemoryRegion *)first_region}, first_region, first_region};
-    return true;
+    return 0;
 }
 
 static void insert_into_region_list(MemoryRegion *region, MemoryRegion *prev) {
@@ -148,7 +152,7 @@ void *malloc(size_t n) {
     size_t heap_extend_size = n + sizeof(MemoryRegion);
     if (heap_extend_size < MIN_HEAP_EXTEND_SIZE)
         heap_extend_size = MIN_HEAP_EXTEND_SIZE;
-    if (!extend_kernel_heap(heap_extend_size)) {
+    if (extend_kernel_heap(heap_extend_size) != 0) {
         spinlock_release(&alloc_lock);
         return NULL;
     }

@@ -59,19 +59,19 @@ typedef struct TSS {
     u16 iopb;
 } __attribute__((packed)) TSS;
 
-bool gdt_init(void) {
+err_t gdt_init(void) {
     // Allocate the GDT, GDTR, and TSS
     size_t gdt_size = GDT_ENTRIES_NUM * sizeof(GDTEntry);
     GDTEntry *gdt = malloc(gdt_size);
     if (gdt == NULL)
-        return false;
+        return ERR_NO_MEMORY;
     GDTR *gdtr = malloc(sizeof(GDTR));
     if (gdtr == NULL)
-        return false;
+        return ERR_NO_MEMORY;
     *gdtr = (GDTR){gdt_size - 1, (u64)gdt};
     TSS *tss = malloc(sizeof(TSS));
     if (tss == NULL)
-        return false;
+        return ERR_NO_MEMORY;
     // Fill the GDT
     // The layout of the GDT is to a degree forced by the design of the SYSCALL instruction.
     // It requires the kernel data selector to come after the kernel code selector,
@@ -127,5 +127,5 @@ bool gdt_init(void) {
     cpu_local->tss = tss;
     // Load the GDT
     asm volatile ("lgdt [%0]" : : "r"(gdtr));
-    return true;
+    return 0;
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "types.h"
+#include "error.h"
 
 #define PAGE_PRESENT (1ull << 0)
 #define PAGE_WRITE (1ull << 1)
@@ -62,10 +63,10 @@ static inline u64 get_pml4(void) {
 // Lower address used by kernel
 #define KERNEL_MIN_ADDR 0xFFFF800000000000
 
-bool page_alloc_init(void);
+err_t page_alloc_init(void);
 u64 page_alloc(void);
 u64 page_alloc_clear(void);
 void page_free(u64 page);
 u64 get_free_memory_size(void);
-bool map_kernel_pages(u64 start, u64 length, bool write, bool execute);
-bool map_user_pages(u64 start, u64 length, bool write, bool execute);
+err_t map_kernel_pages(u64 start, u64 length, bool write, bool execute);
+err_t map_user_pages(u64 start, u64 length, bool write, bool execute);

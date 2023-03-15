@@ -53,6 +53,9 @@ PAGE_WRITE equ 1 << 1
 PAGE_GLOBAL equ 1 << 8
 PAGE_NX equ 1 << 63
 
+ERR_INVALID_SYSCALL_NUMBER equ 1
+ERR_NO_MEMORY equ 4
+
 section .rodata
 
 elf_load_fail_msg: db `Failed to load ELF file\n\0`
@@ -98,7 +101,7 @@ syscall_handler:
   pop rsp
   o64 sysret
 .no_syscall:
-  mov rax, 0
+  mov rax, ERR_INVALID_SYSCALL_NUMBER
   o64 sysret
 
 ; Allocate per-CPU data and set the GS base so it can be used
@@ -111,10 +114,10 @@ percpu_init:
   mov rdx, rax
   shr rdx, 32
   wrmsr
-  mov rax, 1
+  xor rax, rax
   ret
 .malloc_fail:
-  xor rax, rax
+  mov rax, ERR_NO_MEMORY
   ret
 
 userspace_init:
@@ -152,6 +155,8 @@ sched_start:
   ; Skip the part of sched_yield where current process state is saved,
   ; since there is no current process yet.
   jmp sched_yield.start_next_process
+
+extern print_char
 
 ; Preempt the current process and run a different one
 sched_yield:
@@ -201,7 +206,7 @@ process_start:
   mov rdx, rsp
   call load_elf_file
   test rax, rax
-  jz .fail
+  jnz .fail
   ; Get process entry point
   pop rax
   ; Set the process argument

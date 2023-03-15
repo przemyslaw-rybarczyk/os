@@ -1,3 +1,5 @@
 #pragma once
 
-bool interrupt_init(bool bsp);
+#include "error.h"
+
+err_t interrupt_init(bool bsp);
