@@ -66,6 +66,8 @@ syscall_handler:
   ; Check if the syscall number is valid
   cmp rax, SYSCALLS_NUM
   jae .no_syscall
+  ; SWAPGS to get access to per-CPU data through the GS segment
+  swapgs
   ; Save the user stack pointer and load the kernel stack pointer
   ; The user stack pointer is temporarily saved in the CPU-local data and then pushed to the kernel stack once it's loaded.
   ; We keep interrupts disabled while we do this to avoid an interrupt occurring with no stack set up.
@@ -97,6 +99,8 @@ syscall_handler:
   pop rcx
   ; Disable interrupts to avoid an interrupt occurring on the user stack
   cli
+  ; Restore GS base
+  swapgs
   ; Restore the user stack pointer
   pop rsp
   o64 sysret
@@ -227,6 +231,7 @@ process_start:
   xor r9, r9
   xor r10, r10
   xor r11, r11
+  swapgs
   ; Jump to the process using an IRET
   iretq
 .fail:

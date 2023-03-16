@@ -23,6 +23,12 @@ IDT_HALT_IPI equ 0x2E
 %rep IDT_ENTRIES_NUM
 %if interrupt_has_handler(i)
 interrupt_handler_%+i:
+  ; Perform a SWAPGS if the interrupt occurred while in userspace
+  ; This is tested by checking the lower two bits of the CS register pushed to the stack.
+  test qword [rsp + 8], 3
+  jz .int_from_kernel
+  swapgs
+.int_from_kernel:
   ; Save all scratch registers - they may be overwritten by the C function
   push rax
   push rcx
@@ -54,10 +60,6 @@ interrupt_handler_%+i:
 %elif i == IDT_HALT_IPI
   call halt_ipi_handler
 %endif
-  ; Remove error code from stack if there is one
-%if interrupt_pushes_error_code(i)
-  pop rax
-%endif
   ; Restore the scratch registers and return
   pop r11
   pop r10
@@ -68,6 +70,15 @@ interrupt_handler_%+i:
   pop rdx
   pop rcx
   pop rax
+  ; Remove error code from stack if there is one
+%if interrupt_pushes_error_code(i)
+  add rsp, 8
+%endif
+  ; Perform SWAPGS again if returning to userspace
+  test qword [rsp + 8], 3
+  jz .ret_to_kernel
+  swapgs
+.ret_to_kernel:
   iretq
 %endif
 %assign i i+1
