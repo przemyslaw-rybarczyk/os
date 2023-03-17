@@ -56,12 +56,11 @@ void kernel_start(void) {
     framebuffer_lock();
     print_string("BSP finished initialization\n");
     framebuffer_unlock();
-    smp_init_sync_1();
+    smp_init_sync();
     for (u64 arg = 'A'; arg <= 'H'; arg++)
         spawn_process(included_file_program1, included_file_program1_end - included_file_program1, arg);
     for (u64 arg = 'a'; arg <= 'h'; arg++)
         spawn_process(included_file_program2, included_file_program2_end - included_file_program2, arg);
-    smp_init_sync_2();
     sched_start();
 halt:
     asm volatile ("cli");
@@ -93,8 +92,7 @@ void kernel_start_ap(void) {
     framebuffer_lock();
     print_string("AP finished initialization\n");
     framebuffer_unlock();
-    smp_init_sync_1();
-    smp_init_sync_2();
+    smp_init_sync();
     sched_start();
 halt:
     asm volatile ("cli");

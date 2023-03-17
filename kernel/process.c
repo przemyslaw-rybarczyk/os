@@ -87,20 +87,25 @@ err_t spawn_process(const u8 *file, size_t file_length, u64 arg) {
     return 0;
 }
 
-// Same as schedule_next_process, but doesn't return the current process to the queue
-// Called when initializing the scheduler.
-void schedule_first_process(void) {
+// Set `cpu_local->current_process` to the next process in the queue
+// The current process is not returned to the queue.
+void sched_replace_process(void) {
     spinlock_acquire(&scheduler_lock);
+    while (process_queue_start == NULL) {
+        spinlock_release(&scheduler_lock);
+        asm volatile ("hlt");
+        spinlock_acquire(&scheduler_lock);
+    }
     cpu_local->current_process = process_queue_start;
     process_queue_start = process_queue_start->next;
     spinlock_release(&scheduler_lock);
 }
 
-// Set `cpu_local->current_process` to the next process in the queue
+// Return the current process to the end of the queue an set `cpu_local->current_process` to the next process in the queue
 // The current scheduler is a basic round-robin scheduler.
-// When this function is called the current process is returned to the end of the queue.
-void schedule_next_process(void) {
+void sched_switch_process(void) {
     spinlock_acquire(&scheduler_lock);
+    // If there are no other processes to run, return to the current process
     if (process_queue_start == NULL) {
         spinlock_release(&scheduler_lock);
         return;

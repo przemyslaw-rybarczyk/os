@@ -12,3 +12,7 @@ print_char:
   mov rax, 1
   syscall
   ret
+
+process_exit:
+  mov rax, 2
+  syscall

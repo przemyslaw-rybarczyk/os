@@ -4,18 +4,22 @@ global percpu_init
 global userspace_init
 global sched_yield
 global sched_start
+global process_exit
 global process_start
 
 extern syscalls
 extern malloc
-extern schedule_first_process
-extern schedule_next_process
+extern sched_replace_process
+extern sched_switch_process
+extern process_free
 extern load_elf_file
+extern page_map_free_contents
+extern page_free
+extern free
+extern stack_free
 extern framebuffer_lock
 extern framebuffer_unlock
 extern print_string
-
-SYSCALLS_NUM equ 2
 
 struc PerCPU
   .current_process: resq 1
@@ -53,6 +57,8 @@ PAGE_PRESENT equ 1 << 0
 PAGE_WRITE equ 1 << 1
 PAGE_GLOBAL equ 1 << 8
 PAGE_NX equ 1 << 63
+
+SYSCALLS_NUM equ 3
 
 ERR_INVALID_SYSCALL_NUMBER equ 1
 ERR_NO_MEMORY equ 4
@@ -158,12 +164,41 @@ userspace_init:
 ; Start the scheduler
 ; This function is called at the end of kernel initialization.
 sched_start:
-  call schedule_first_process
-  ; Skip the part of sched_yield where current process state is saved,
-  ; since there is no current process yet.
-  jmp sched_yield.start_next_process
+  ; Get the first process to run
+  call sched_replace_process
+  ; Skip the part of sched_yield where current process state is saved, since there is no current process yet
+  jmp sched_yield.from_no_process
 
-extern print_char
+; Ends the current process
+process_exit:
+  mov rbx, [gs:PerCPU.current_process]
+  ; Free the userspace page map
+  mov rdi, [rbx + Process.page_map]
+  call page_map_free_contents
+  ; From this point on, interrupts must be disabled.
+  ; If a context switch occurred while the process is being freed, it wouldn't be possible to come back to it.
+  cli
+  ; Free the PML4
+  mov rdi, [rbx + Process.page_map]
+  call page_free
+  ; Get the kernel stack address so it can be freed later
+  ; We can't free it now, since we're still using it.
+  mov r12, [rbx + Process.kernel_stack]
+  ; Free the process control block
+  mov rdi, rbx
+  call free
+  ; Get the next process to run
+  call sched_replace_process
+  mov r13, [gs:PerCPU.current_process]
+  ; Restore the stack pointer
+  mov rsp, [r13 + Process.rsp]
+  ; Free the old kernel stack
+  mov rdi, r12
+  call stack_free
+  ; Skip the part of sched_yield where current process state is saved and the new process's stack pointer is restored,
+  ; since there is no process to save and we already restored the new stack pointer.
+  mov rax, r13
+  jmp sched_yield.from_removed_process
 
 ; Preempt the current process and run a different one
 sched_yield:
@@ -179,15 +214,17 @@ sched_yield:
   push r15
   mov [rax + Process.rsp], rsp
   ; Set current_process to the next process to be run.
-  call schedule_next_process
-.start_next_process:
+  call sched_switch_process
+.from_no_process:
   mov rax, [gs:PerCPU.current_process]
+  ; Restore the stack pointer
+  mov rsp, [rax + Process.rsp]
+.from_removed_process:
   ; Set the RSP0 in the TSS
   mov rdx, [gs:PerCPU.tss]
   mov rcx, [rax + Process.kernel_stack]
   mov [rdx + TSS.rsp0], rcx
   ; Restore process state
-  mov rsp, [rax + Process.rsp]
   pop r15
   pop r14
   pop r13

@@ -259,3 +259,23 @@ err_t map_user_pages(u64 start, u64 length, bool write, bool execute) {
         return ERR_OUT_OF_RANGE;
     return map_pages(start % PML4_SIZE, length, (execute ? 0 : PAGE_NX) | PAGE_USER | (write ? PAGE_WRITE : 0) | PAGE_PRESENT);
 }
+
+// Free all pages used to allocated a page map of a given level located at a given physical address
+static void page_map_free_(u64 page_map_addr, u64 level) {
+    if (level > 0) {
+        u64 *page_map = PHYS_ADDR(page_map_addr);
+        for (size_t i = 0; i < PAGE_MAP_LEVEL_SIZE; i++)
+            if (page_map[i] & PAGE_PRESENT)
+                page_map_free_(page_map[i] & PAGE_MASK, level - 1);
+    }
+    page_free(page_map_addr);
+}
+
+// Free all pages used to allocate the userspace page map from the page map with PML4 located at a given physical address
+// Does not free the PML4 itself.
+void page_map_free_contents(u64 page_map_addr) {
+    u64 *page_map = PHYS_ADDR(page_map_addr);
+    for (size_t i = 0; i < 0x100; i++)
+        if (page_map[i] & PAGE_PRESENT)
+            page_map_free_(page_map[i] & PAGE_MASK, 3);
+}

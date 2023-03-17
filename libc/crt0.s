@@ -15,6 +15,7 @@ MAP_PAGES_WRITE equ 1
 
 SYSCALL_MAP_PAGES equ 0
 SYSCALL_PRINT_CHAR equ 1
+SYSCALL_PROCESS_EXIT equ 2
 
 _start:
   mov rbx, rdi
@@ -30,16 +31,17 @@ _start:
   mov rsp, STACK_START + STACK_LENGTH
   mov rdi, rbx
   call main
-  ; Afet main() returns, loop forever
-.halt:
-  jmp .halt
+  ; Afet main() returns, exit from the process
+.exit:
+  mov rax, SYSCALL_PROCESS_EXIT
+  syscall
 .fail:
-  ; Print the error message
+  ; Print the error message and exit
   mov rdx, stack_alloc_error_msg
 .print_loop:
   mov rdi, [rdx]
   test rdi, rdi
-  jz .halt
+  jz .exit
   mov rax, SYSCALL_PRINT_CHAR
   syscall
   add rdx, 1

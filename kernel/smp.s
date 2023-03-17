@@ -1,7 +1,6 @@
 global apic_init
 global smp_init
-global smp_init_sync_1
-global smp_init_sync_2
+global smp_init_sync
 global apic_eoi
 global send_halt_ipi
 global halt_ipi_handler
@@ -40,7 +39,6 @@ section .bss
 
 ; Number of initialized CPUs
 cpu_initialized_num: resq 1
-cpu_initialized_num_2: resq 1
 
 ; Number of CPUs that have received the halt IPI
 cpu_halted_num: resq 1
@@ -72,26 +70,13 @@ smp_init:
   ret
 
 ; Synchronize all CPUs after initialization
-smp_init_sync_1:
+smp_init_sync:
   lock add qword [cpu_initialized_num], 1
   mov rax, [cpu_num]
 .wait:
   pause
   cmp [cpu_initialized_num], rax
   jne .wait
-  ret
-
-; Synchronize all CPUs after initialization again and invalidate the page tables
-; This is an ugly to avoid dealing with page table changes properly and will be removed later.
-smp_init_sync_2:
-  lock add qword [cpu_initialized_num_2], 1
-  mov rax, [cpu_num]
-.wait:
-  pause
-  cmp [cpu_initialized_num_2], rax
-  jne .wait
-  mov rax, cr3
-  mov cr3, rax
   ret
 
 ; Signify an EOI to the LAPIC

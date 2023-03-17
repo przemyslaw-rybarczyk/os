@@ -7,3 +7,4 @@
 
 bool map_pages(u64 start, u64 length, u64 flags);
 void print_char(u64 c);
+_Noreturn void process_exit(void);

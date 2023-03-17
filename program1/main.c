@@ -3,7 +3,7 @@
 #include <syscalls.h>
 
 void main(u64 arg) {
-    while (1) {
+    for (size_t i = 0; i < 1000; i++) {
         print_char(arg);
     }
 }

@@ -8,5 +8,6 @@ extern u8 tss_end[];
 
 void userspace_init(void);
 err_t spawn_process(const u8 *file, size_t file_length, u64 arg);
+_Noreturn void process_exit(void);
 void sched_yield(void);
 void sched_start(void);
