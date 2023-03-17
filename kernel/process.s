@@ -243,6 +243,7 @@ sched_yield:
 ; Takes the following arugments from the stack (listed top to bottom):
 ; const u8 *file, size_t file_length, u64 arg
 process_start:
+  sti
   ; Load the process
   pop rdi
   pop rsi
@@ -275,11 +276,4 @@ process_start:
   ; Jump to the process using an IRET
   iretq
 .fail:
-  sti
-  call framebuffer_lock
-  mov rdi, elf_load_fail_msg
-  call print_string
-  call framebuffer_unlock
-.fail_loop:
-  hlt
-  jmp .fail_loop
+  call process_exit
