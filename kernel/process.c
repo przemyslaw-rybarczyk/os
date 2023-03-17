@@ -27,6 +27,7 @@ extern void jump_to_current_process(void);
 extern u8 process_start[];
 
 static spinlock_t scheduler_lock;
+static semaphore_t sched_queue_semaphore;
 
 static ProcessQueueNode *process_queue_start = NULL;
 static ProcessQueueNode *process_queue_end = NULL;
@@ -90,18 +91,15 @@ err_t spawn_process(const u8 *file, size_t file_length, u64 arg) {
     spinlock_acquire(&scheduler_lock);
     add_process_to_queue(pqn);
     spinlock_release(&scheduler_lock);
+    semaphore_increment(&sched_queue_semaphore);
     return 0;
 }
 
 // Set `cpu_local->current_process` to the next process in the queue
 // The current process is not returned to the queue.
 void sched_replace_process(void) {
+    semaphore_decrement(&sched_queue_semaphore);
     spinlock_acquire(&scheduler_lock);
-    while (process_queue_start == NULL) {
-        spinlock_release(&scheduler_lock);
-        asm volatile ("hlt");
-        spinlock_acquire(&scheduler_lock);
-    }
     cpu_local->current_process = get_process_from_queue();
     spinlock_release(&scheduler_lock);
 }

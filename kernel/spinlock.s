@@ -1,10 +1,11 @@
 global spinlock_acquire
 global spinlock_release
+global semaphore_decrement
+global semaphore_increment
 
 ; A spinlock has only two valid values - 0 (free) and 1 (used)
 
 ; Acquire a spinlock
-; RDI holds the lock address.
 spinlock_acquire:
   mov edx, 1
 .try_lock:
@@ -23,7 +24,33 @@ spinlock_acquire:
   jmp .try_lock
 
 ; Release a spinlock
-; RDI holds the lock address.
 spinlock_release:
   xrelease mov dword [rdi], 0
+  ret
+
+; Decrement a semaphore
+semaphore_decrement:
+.check:
+  ; Check if the semaphore is zero and jump to the wait loop if it is
+  mov rax, [rdi]
+  test rax, rax
+  jz .wait
+.try_decrement:
+  ; At this point, RAX contains the expected value of the semaphore
+  ; Try to atomically decrement the semaphore with a LOCK CMPXCHG instruction and return if the operation succeeds
+  lea rdx, [rax - 1]
+  lock cmpxchg [rdi], rdx
+  jne .check
+  ret
+.wait:
+  ; If the semaphore is zero, wait until it is incremented
+  cmp qword [rdi], 0
+  pause
+  je .wait
+  ; After the semaphore becomes nonzero, try to decrement it again
+  jmp .check
+
+; Increment a semaphore
+semaphore_increment:
+  lock add qword [rdi], 1
   ret
