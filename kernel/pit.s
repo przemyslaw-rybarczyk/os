@@ -9,8 +9,8 @@ PIT_MODE_0 equ 0 << 1
 PIT_MODE_2 equ 2 << 1
 
 ; This is the period of the singal we want to receive as a multiple of the period of the input signal (which runs at 1.193182 MHz).
-; We use a value that makes the period closest to 1 ms.
-PIT_TIMER_RELOAD_VALUE equ 1193
+; We use a value that makes the period closest to 20 ms.
+PIT_TIMER_RELOAD_VALUE equ 23864
 
 ; Number of PIT cycles in 10 ms
 PIT_TIMER_WAIT_BEFORE_SIPI_RELOAD_VALUE equ 11932
