@@ -45,6 +45,7 @@ MSR_SFMASK equ 0xC0000084
 MSR_GS_BAS equ 0xC0000101
 
 RFLAGS_IF equ 1 << 9
+RFLAGS_DF equ 1 << 10
 
 PAGE_SIZE equ 1 << 12
 
@@ -145,9 +146,11 @@ userspace_init:
   wrmsr
   ; SFMASK needs to contain the mask that is applied to RFLAGS when a syscall occurs.
   ; The bits that are set in SFMASK are cleared in RFLAGS.
-  ; We set the register to clear IF so that the kernel can load the kernel stack before re-enabling interrupts.
+  ; We set the register to clear IF and DF.
+  ; IF is cleared so that the kernel can load the kernel stack before re-enabling interrupts.
+  ; The ABI requires DF to be cleared before calling the handler.
   mov ecx, MSR_SFMASK
-  xor eax, RFLAGS_IF
+  xor eax, ~(RFLAGS_DF | RFLAGS_IF)
   xor edx, edx
   wrmsr
   ret

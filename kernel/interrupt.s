@@ -29,6 +29,8 @@ interrupt_handler_%+i:
   jz .int_from_kernel
   swapgs
 .int_from_kernel:
+  ; Clear direction flag, as required by the ABI
+  cld
   ; Save all scratch registers - they may be overwritten by the C function
   push rax
   push rcx
