@@ -54,7 +54,7 @@ void *stack_alloc(void) {
             spinlock_release(&stack_alloc_lock);
             return NULL;
         }
-        if (!map_kernel_pages(stack_addr, PAGE_SIZE, true, false)) {
+        if (map_kernel_pages(stack_addr, PAGE_SIZE, true, false) != 0) {
             spinlock_release(&stack_alloc_lock);
             return NULL;
         }
