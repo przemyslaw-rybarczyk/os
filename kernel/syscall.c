@@ -25,8 +25,15 @@ err_t syscall_process_exit(void) {
     process_exit();
 }
 
+err_t syscall_process_yield(void) {
+    asm volatile ("cli");
+    sched_yield();
+    return 0;
+}
+
 const void * const syscalls[] = {
     syscall_map_pages,
     syscall_print_char,
     syscall_process_exit,
+    syscall_process_yield,
 };

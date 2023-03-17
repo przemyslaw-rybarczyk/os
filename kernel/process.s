@@ -58,7 +58,7 @@ PAGE_WRITE equ 1 << 1
 PAGE_GLOBAL equ 1 << 8
 PAGE_NX equ 1 << 63
 
-SYSCALLS_NUM equ 3
+SYSCALLS_NUM equ 4
 
 ERR_INVALID_SYSCALL_NUMBER equ 1
 ERR_NO_MEMORY equ 4
@@ -234,6 +234,8 @@ sched_yield:
   ; Load process page map
   mov rdx, [rax + Process.page_map]
   mov cr3, rdx
+  ; Enable interrupts
+  sti
   ; Return to the process
   ret
 
