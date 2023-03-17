@@ -3,6 +3,7 @@
 
 #include "alloc.h"
 #include "framebuffer.h"
+#include "process.h"
 #include "segment.h"
 #include "smp.h"
 
@@ -88,6 +89,9 @@ static bool interrupt_pushes_error_code(u8 i) {
 // It's called by the wrapper in `interrupt.s`.
 // It prints the exception information and halts.
 void general_exception_handler(u8 interrupt_number, InterruptFrame *interrupt_frame, u64 error_code) {
+    // If the exception occurred in user mode, kill the currently running process
+    if ((interrupt_frame->cs & 3) != 0)
+        process_exit();
     // Stop all other cores
     send_halt_ipi();
     // We do not lock the framebuffer before printing, as it may be held by whatever code caused the exception to occur.

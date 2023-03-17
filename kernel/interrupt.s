@@ -25,7 +25,11 @@ IDT_HALT_IPI equ 0x2E
 interrupt_handler_%+i:
   ; Perform a SWAPGS if the interrupt occurred while in userspace
   ; This is tested by checking the lower two bits of the CS register pushed to the stack.
+%if interrupt_pushes_error_code(i)
+  test qword [rsp + 16], 3
+%else
   test qword [rsp + 8], 3
+%endif
   jz .int_from_kernel
   swapgs
 .int_from_kernel:
