@@ -31,8 +31,8 @@ static spinlock_t scheduler_lock;
 static ProcessQueueNode *process_queue_start = NULL;
 static ProcessQueueNode *process_queue_end = NULL;
 
-static void add_process_to_queue_end(ProcessQueueNode *pqn) {
-    if (process_queue_end == NULL) {
+static void add_process_to_queue(ProcessQueueNode *pqn) {
+    if (process_queue_start == NULL) {
         process_queue_start = pqn;
         process_queue_end = pqn;
     } else {
@@ -40,6 +40,12 @@ static void add_process_to_queue_end(ProcessQueueNode *pqn) {
         process_queue_end = pqn;
     }
     pqn->next = NULL;
+}
+
+static ProcessQueueNode *get_process_from_queue(void) {
+    ProcessQueueNode *pqn = process_queue_start;
+    process_queue_start = process_queue_start->next;
+    return pqn;
 }
 
 // Create a new process and place it in the queue
@@ -82,7 +88,7 @@ err_t spawn_process(const u8 *file, size_t file_length, u64 arg) {
     pqn->process.rsp = rsp;
     // Add the process to the queue
     spinlock_acquire(&scheduler_lock);
-    add_process_to_queue_end(pqn);
+    add_process_to_queue(pqn);
     spinlock_release(&scheduler_lock);
     return 0;
 }
@@ -96,8 +102,7 @@ void sched_replace_process(void) {
         asm volatile ("hlt");
         spinlock_acquire(&scheduler_lock);
     }
-    cpu_local->current_process = process_queue_start;
-    process_queue_start = process_queue_start->next;
+    cpu_local->current_process = get_process_from_queue();
     spinlock_release(&scheduler_lock);
 }
 
@@ -110,8 +115,7 @@ void sched_switch_process(void) {
         spinlock_release(&scheduler_lock);
         return;
     }
-    add_process_to_queue_end(cpu_local->current_process);
-    cpu_local->current_process = process_queue_start;
-    process_queue_start = process_queue_start->next;
+    add_process_to_queue(cpu_local->current_process);
+    cpu_local->current_process = get_process_from_queue();
     spinlock_release(&scheduler_lock);
 }
