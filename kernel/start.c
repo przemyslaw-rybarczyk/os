@@ -58,9 +58,9 @@ void kernel_start(void) {
     framebuffer_unlock();
     smp_init_sync();
     for (u64 arg = 'A'; arg <= 'H'; arg++)
-        spawn_process(included_file_program1, included_file_program1_end - included_file_program1, arg);
+        process_spawn(included_file_program1, included_file_program1_end - included_file_program1, arg);
     for (u64 arg = 'a'; arg <= 'h'; arg++)
-        spawn_process(included_file_program2, included_file_program2_end - included_file_program2, arg);
+        process_spawn(included_file_program2, included_file_program2_end - included_file_program2, arg);
     sched_start();
 halt:
     asm volatile ("cli");

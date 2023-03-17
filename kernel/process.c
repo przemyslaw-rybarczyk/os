@@ -51,7 +51,7 @@ static ProcessQueueNode *get_process_from_queue(void) {
 
 // Create a new process and place it in the queue
 // The arguments determine entry point and initial argument (passed in as RDI).
-err_t spawn_process(const u8 *file, size_t file_length, u64 arg) {
+err_t process_spawn(const u8 *file, size_t file_length, u64 arg) {
     ProcessQueueNode *pqn = malloc(sizeof(ProcessQueueNode));
     if (pqn == NULL)
         return ERR_NO_MEMORY;
