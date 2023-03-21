@@ -156,8 +156,8 @@ userspace_init:
   ; IF is cleared so that the kernel can load the kernel stack before re-enabling interrupts.
   ; The ABI requires DF to be cleared before calling the handler.
   mov ecx, MSR_SFMASK
-  xor eax, ~(RFLAGS_DF | RFLAGS_IF)
-  xor edx, edx
+  mov eax, ~(RFLAGS_DF | RFLAGS_IF)
+  mov edx, ~0
   wrmsr
   ret
 
