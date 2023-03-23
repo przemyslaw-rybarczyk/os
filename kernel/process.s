@@ -13,7 +13,7 @@ extern sched_replace_process
 extern sched_switch_process
 extern process_free
 extern load_elf_file
-extern page_map_free_contents
+extern process_free_contents
 extern page_free
 extern free
 extern stack_free
@@ -58,7 +58,7 @@ PAGE_WRITE equ 1 << 1
 PAGE_GLOBAL equ 1 << 8
 PAGE_NX equ 1 << 63
 
-SYSCALLS_NUM equ 4
+SYSCALLS_NUM equ 6
 
 ERR_INVALID_SYSCALL_NUMBER equ 1
 ERR_NO_MEMORY equ 4
@@ -172,9 +172,10 @@ sched_start:
 ; Ends the current process
 process_exit:
   mov rbx, [gs:PerCPU.current_process]
-  ; Free the userspace page map
-  mov rdi, [rbx + Process.page_map]
-  call page_map_free_contents
+  ; Free the process contents
+  ; This does not free any parts of the process control block that are necessary to switch back to the process running in kernel mode.
+  mov rdi, rbx
+  call process_free_contents
   ; From this point on, interrupts must be disabled.
   ; If a context switch occurred while the process is being freed, it wouldn't be possible to come back to it.
   cli
@@ -256,8 +257,6 @@ process_start:
   jnz .fail
   ; Get process entry point
   pop rax
-  ; Set the process argument
-  pop rdi
   ; Set up the kernel stack for an IRET
   push SEGMENT_USER_DATA | SEGMENT_RING_3
   push 0 ; initialize RSP to 0 - it is the responsibility of user code to allocate a stack
@@ -270,6 +269,7 @@ process_start:
   xor rcx, rcx
   xor rdx, rdx
   xor rsi, rsi
+  xor rdi, rdi
   xor r8, r8
   xor r9, r9
   xor r10, r10

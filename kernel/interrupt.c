@@ -3,6 +3,7 @@
 
 #include "alloc.h"
 #include "framebuffer.h"
+#include "page.h"
 #include "process.h"
 #include "segment.h"
 #include "smp.h"
@@ -92,6 +93,15 @@ void general_exception_handler(u8 interrupt_number, InterruptFrame *interrupt_fr
     // If the exception occurred in user mode, kill the currently running process
     if ((interrupt_frame->cs & 3) != 0)
         process_exit();
+    u64 page_fault_address;
+    if (interrupt_number == INT_PAGE_FAULT) {
+        // If the interrupt is a page fault, get the page fault address from CR2
+        asm ("mov %0, cr2" : "=r"(page_fault_address));
+        // If the page fault is caused by accessing a user address, kill the process,
+        // as it must be caused by an invalid address being passed to the kernel
+        if (page_fault_address < USER_ADDR_UPPER_BOUND)
+            process_exit();
+    }
     // Stop all other cores
     send_halt_ipi();
     // We do not lock the framebuffer before printing, as it may be held by whatever code caused the exception to occur.
@@ -121,12 +131,10 @@ void general_exception_handler(u8 interrupt_number, InterruptFrame *interrupt_fr
         print_newline();
     }
     if (interrupt_number == INT_PAGE_FAULT) {
-        u64 page_fault_address;
-        asm volatile ("mov %0, cr2" : "=r"(page_fault_address));
         print_string("Page fault address: ");
         print_hex_u64(page_fault_address);
         print_newline();
     }
     while (1)
-        asm volatile("hlt");
+        asm volatile ("hlt");
 }

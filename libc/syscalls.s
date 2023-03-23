@@ -2,6 +2,8 @@ global map_pages
 global print_char
 global process_exit
 global process_yield
+global message_get_length
+global message_read
 
 ; This file implements the C interface for system calls
 
@@ -21,5 +23,15 @@ process_exit:
 
 process_yield:
   mov rax, 3
+  syscall
+  ret
+
+message_get_length:
+  mov rax, 4
+  syscall
+  ret
+
+message_read:
+  mov rax, 5
   syscall
   ret

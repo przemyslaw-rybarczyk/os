@@ -57,11 +57,11 @@ static inline u64 get_pml4(void) {
 // x must be less than IDENTITY_MAPPING_SIZE.
 #define PHYS_ADDR(x) ((void *)(ASSEMBLE_ADDR_PML4E(IDENTITY_MAPPING_PML4E, 0) + (x)))
 
-// Largest address accessible to userspace
-#define USER_MAX_ADDR 0x00007FFFFFFFFFFF
+// Lowest address not accessible to userspace
+#define USER_ADDR_UPPER_BOUND 0x0000800000000000
 
-// Lower address used by kernel
-#define KERNEL_MIN_ADDR 0xFFFF800000000000
+// Lowest address used by kernel
+#define KERNEL_ADDR_LOWER_BOUND 0xFFFF800000000000
 
 err_t page_alloc_init(void);
 u64 page_alloc(void);
@@ -70,3 +70,4 @@ void page_free(u64 page);
 u64 get_free_memory_size(void);
 err_t map_kernel_pages(u64 start, u64 length, bool write, bool execute);
 err_t map_user_pages(u64 start, u64 length, bool write, bool execute);
+void page_map_free_contents(u64 page_map_addr);

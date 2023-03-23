@@ -36,4 +36,6 @@ const void * const syscalls[] = {
     syscall_print_char,
     syscall_process_exit,
     syscall_process_yield,
+    syscall_message_get_length,
+    syscall_message_read,
 };

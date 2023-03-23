@@ -4,7 +4,7 @@ extern main
 
 section .rodata
 
-stack_alloc_error_msg: db `Error: failed to allocate stack\n\0`
+error_msg: db `Error: failed to initialize process\n\0`
 
 section .text
 
@@ -16,9 +16,10 @@ MAP_PAGES_WRITE equ 1
 SYSCALL_MAP_PAGES equ 0
 SYSCALL_PRINT_CHAR equ 1
 SYSCALL_PROCESS_EXIT equ 2
+SYSCALL_MESSAGE_GET_LENGTH equ 4
+SYSCALL_MESSAGE_READ equ 5
 
 _start:
-  mov rbx, rdi
   ; Map the stack
   mov rax, SYSCALL_MAP_PAGES
   mov rdi, STACK_START
@@ -29,7 +30,24 @@ _start:
   jnz .fail
   ; Set the stack pointer
   mov rsp, STACK_START + STACK_LENGTH
-  mov rdi, rbx
+  ; Load argument into RDI by reading the message from handle 0
+  push rax
+  mov rax, SYSCALL_MESSAGE_GET_LENGTH
+  mov rdi, 0
+  mov rsi, rsp
+  syscall
+  test rax, rax
+  jnz .fail
+  push rax
+  mov rax, SYSCALL_MESSAGE_READ
+  mov rdi, 0
+  mov rsi, rsp
+  syscall
+  test rax, rax
+  jnz .fail
+  pop rdi
+.start:
+  ; Call main()
   call main
   ; Afet main() returns, exit from the process
 .exit:
@@ -37,7 +55,7 @@ _start:
   syscall
 .fail:
   ; Print the error message and exit
-  mov rdx, stack_alloc_error_msg
+  mov rdx, error_msg
 .print_loop:
   mov rdi, [rdx]
   test rdi, rdi

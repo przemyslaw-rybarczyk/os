@@ -233,7 +233,7 @@ static err_t map_pages(u64 start, u64 length, u64 flags) {
     if (start % PAGE_SIZE != 0 || length % PAGE_SIZE != 0)
         return ERR_OUT_OF_RANGE;
     if (start + length < start)
-        return ERR_OUT_OF_RANGE;
+        return ERR_INVALID_ADDRESS;
     if (length == 0)
         return 0;
     err = fill_page_map_range(start, start + length - PAGE_SIZE, PHYS_ADDR(get_pml4()), 0, PDPT_BITS);
@@ -245,8 +245,8 @@ static err_t map_pages(u64 start, u64 length, u64 flags) {
 
 // Map the pages in the given range as kernel memory
 err_t map_kernel_pages(u64 start, u64 length, bool write, bool execute) {
-    if (start + length < KERNEL_MIN_ADDR)
-        return ERR_OUT_OF_RANGE;
+    if (start < KERNEL_ADDR_LOWER_BOUND)
+        return ERR_INVALID_ADDRESS;
     spinlock_acquire(&kernel_page_lock);
     bool result = map_pages(start % PML4_SIZE, length, (execute ? 0 : PAGE_NX) | PAGE_GLOBAL | (write ? PAGE_WRITE : 0) | PAGE_PRESENT);
     spinlock_release(&kernel_page_lock);
@@ -255,8 +255,8 @@ err_t map_kernel_pages(u64 start, u64 length, bool write, bool execute) {
 
 // Map the pages in the given range as userspace memory
 err_t map_user_pages(u64 start, u64 length, bool write, bool execute) {
-    if (start > USER_MAX_ADDR)
-        return ERR_OUT_OF_RANGE;
+    if (start + length > USER_ADDR_UPPER_BOUND)
+        return ERR_INVALID_ADDRESS;
     return map_pages(start % PML4_SIZE, length, (execute ? 0 : PAGE_NX) | PAGE_USER | (write ? PAGE_WRITE : 0) | PAGE_PRESENT);
 }
 

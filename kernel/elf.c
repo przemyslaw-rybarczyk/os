@@ -95,9 +95,9 @@ err_t load_elf_file(const u8 *file, size_t file_length, u64 *entry) {
                 return ERR_INVALID_ARG;
             if (program_header->file_size > program_header->memory_size)
                 return ERR_INVALID_ARG;
-            if (program_header->vaddr + program_header->offset < program_header->vaddr)
+            if (program_header->vaddr + program_header->memory_size < program_header->vaddr)
                 return ERR_INVALID_ARG;
-            if (program_header->vaddr + program_header->offset > USER_MAX_ADDR)
+            if (program_header->vaddr + program_header->memory_size > USER_ADDR_UPPER_BOUND)
                 return ERR_INVALID_ARG;
             // Calculate the first and last page to map
             u64 start_page = program_header->vaddr / PAGE_SIZE * PAGE_SIZE;
