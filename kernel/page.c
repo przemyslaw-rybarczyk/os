@@ -151,7 +151,7 @@ static u64 get_mapping_end_index(u64 end, u64 page_map_start, u64 page_map_bits)
     return end >= page_map_start + (PAGE_MAP_LEVEL_SIZE << page_map_bits) ? PAGE_MAP_LEVEL_SIZE - 1 : (end >> page_map_bits) % PAGE_MAP_LEVEL_SIZE;
 }
 
-// Free the entries mapping the range from `start` to `end` inclusive within a page map at address `page_map` mapping the range starting at `page_map_start` of length `1 << page_map_bits`
+// Free the entries not marked as present mapping the range from `start` to `end` inclusive within a page map at address `page_map` mapping the range starting at `page_map_start` of length `1 << page_map_bits`
 // Flags are ignored when unmapping entries, including the present flag.
 // Assumes that the page map maps addresses for at least part of the range and that all addresses are truncated to 48 bits.
 static void free_page_map_range(u64 start, u64 end, u64 *page_map, u64 page_map_start, u64 page_map_bits) {
@@ -161,7 +161,8 @@ static void free_page_map_range(u64 start, u64 end, u64 *page_map, u64 page_map_
         u64 next_page_map = page_map[i] & PAGE_MASK;
         if (page_map_bits > PAGE_BITS)
             free_page_map_range(start, end, PHYS_ADDR(next_page_map), page_map_start + (i << page_map_bits), page_map_bits - 9);
-        page_free(next_page_map);
+        if (!(page_map[i] & PAGE_PRESENT))
+            page_free(next_page_map);
     }
 }
 
@@ -197,14 +198,21 @@ static err_t fill_page_map_range(u64 start, u64 end, u64 *page_map, u64 page_map
         if (page_map_bits > PAGE_BITS) {
             // Recurse to map the lower level page maps
             err = fill_page_map_range(start, end, next_page_map, page_map_start + (i << page_map_bits), page_map_bits - 9);
-            if (err)
+            if (err) {
+                if (!(page_map[i] & PAGE_PRESENT))
+                    page_free(page_map[i] & PAGE_MASK);
                 goto fail;
+            }
         }
         continue;
 fail:
         // Free the previously allocated pages and return an error
-        for (u64 j = mapping_start_index; j < i; j++)
-            free_page_map_range(start, end, PHYS_ADDR(page_map[i] & PAGE_MASK), page_map_start + (i << page_map_bits), page_map_bits - 9);
+        for (u64 j = mapping_start_index; j < i; j++) {
+            if (page_map_bits > PAGE_BITS)
+                free_page_map_range(start, end, PHYS_ADDR(page_map[j] & PAGE_MASK), page_map_start + (j << page_map_bits), page_map_bits - 9);
+            if (!(page_map[j] & PAGE_PRESENT))
+                page_free(page_map[j] & PAGE_MASK);
+        }
         return err;
     }
     return 0;
