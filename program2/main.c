@@ -2,10 +2,21 @@
 
 #include <syscalls.h>
 
-void main(u64 arg) {
-    for (size_t i = 0; i < 1000; i++) {
-        print_char('-');
-        print_char(arg);
-        process_yield();
+void main(void) {
+    err_t err;
+    while (1) {
+        size_t message;
+        err = channel_receive(1, &message);
+        if (err)
+            continue;
+        size_t message_length;
+        err = message_get_length(message, &message_length);
+        if (err || message_length != sizeof(u64))
+            continue;
+        u64 c;
+        err = message_read(message, &c);
+        if (err)
+            continue;
+        print_char(c);
     }
 }

@@ -1,5 +1,6 @@
 #include "types.h"
 
+#include "channel.h"
 #include "error.h"
 #include "framebuffer.h"
 #include "page.h"
@@ -26,7 +27,6 @@ err_t syscall_process_exit(void) {
 }
 
 err_t syscall_process_yield(void) {
-    asm volatile ("cli");
     sched_yield();
     return 0;
 }
@@ -38,4 +38,6 @@ const void * const syscalls[] = {
     syscall_process_yield,
     syscall_message_get_length,
     syscall_message_read,
+    syscall_channel_send,
+    syscall_channel_receive,
 };

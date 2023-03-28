@@ -2,8 +2,10 @@
 #include "process.h"
 
 #include "alloc.h"
+#include "channel.h"
 #include "elf.h"
 #include "handle.h"
+#include "included_programs.h"
 #include "page.h"
 #include "percpu.h"
 #include "segment.h"
@@ -18,12 +20,8 @@ typedef struct Process {
     void *kernel_stack;
     u64 page_map; // physical address of the PML4
     HandleList handles;
+    struct Process *next_process;
 } Process;
-
-typedef struct ProcessQueueNode {
-    Process process;
-    struct ProcessQueueNode *next;
-} ProcessQueueNode;
 
 extern void jump_to_current_process(void);
 extern u8 process_start[];
@@ -31,33 +29,34 @@ extern u8 process_start[];
 static spinlock_t scheduler_lock;
 static semaphore_t sched_queue_semaphore;
 
-static ProcessQueueNode *process_queue_start = NULL;
-static ProcessQueueNode *process_queue_end = NULL;
+static Process *process_queue_start = NULL;
+static Process *process_queue_end = NULL;
 
-static void add_process_to_queue(ProcessQueueNode *pqn) {
+static void add_process_to_queue(Process *process) {
     if (process_queue_start == NULL) {
-        process_queue_start = pqn;
-        process_queue_end = pqn;
+        process_queue_start = process;
+        process_queue_end = process;
     } else {
-        process_queue_end->next = pqn;
-        process_queue_end = pqn;
+        process_queue_end->next_process = process;
+        process_queue_end = process;
     }
-    pqn->next = NULL;
+    process->next_process = NULL;
 }
 
-static ProcessQueueNode *get_process_from_queue(void) {
-    ProcessQueueNode *pqn = process_queue_start;
-    process_queue_start = process_queue_start->next;
-    return pqn;
+static Process *get_process_from_queue(void) {
+    Process *process = process_queue_start;
+    process_queue_start = process_queue_start->next_process;
+    return process;
 }
 
-// Create a new process and place it in the queue
-err_t process_spawn(const u8 *file, size_t file_length, u64 arg) {
+// Create a new process
+// The process is not placed in the queue.
+err_t process_create(const u8 *file, size_t file_length, Process **process_ptr) {
     err_t err;
-    ProcessQueueNode *pqn = malloc(sizeof(ProcessQueueNode));
-    if (pqn == NULL) {
+    Process *process = malloc(sizeof(Process));
+    if (process == NULL) {
         err = ERR_NO_MEMORY;
-        goto fail_pqn_alloc;
+        goto fail_process_alloc;
     }
     // Allocate a process page map
     u64 page_map = page_alloc_clear();
@@ -65,37 +64,21 @@ err_t process_spawn(const u8 *file, size_t file_length, u64 arg) {
         err = ERR_NO_MEMORY;
         goto fail_page_map_alloc;
     }
-    pqn->process.page_map = page_map;
+    process->page_map = page_map;
     // Copy the kernel mappings
     memcpy((u64 *)PHYS_ADDR(page_map) + 0x100, (u64 *)PHYS_ADDR(get_pml4()) + 0x100, 0x100 * 8);
     // Allocate a kernel stack
-    pqn->process.kernel_stack = stack_alloc();
-    if (pqn->process.kernel_stack == NULL) {
+    process->kernel_stack = stack_alloc();
+    if (process->kernel_stack == NULL) {
         err = ERR_NO_MEMORY;
         goto fail_stack_alloc;
     }
-    // Initialize the argument message
-    Message *message = malloc(sizeof(Message));
-    if (message == NULL) {
-        err = ERR_NO_MEMORY;
-        goto fail_message_alloc;
-    }
-    message->data_size = sizeof(u64);
-    message->data = malloc(message->data_size);
-    if (message->data == NULL) {
-        err = ERR_NO_MEMORY;
-        goto fail_message_data_alloc;
-    }
-    memcpy(message->data, &arg, message->data_size);
     // Initialize the handle list
-    err = handle_list_init(&pqn->process.handles);
+    err = handle_list_init(&process->handles);
     if (err)
         goto fail_handle_list_init;
-    err = handle_add(&pqn->process.handles, (Handle){HANDLE_TYPE_MESSAGE, {.message = message}}, NULL);
-    if (err)
-        goto fail_handle_add;
     // Initialize the kernel stack contents
-    u64 *rsp = pqn->process.kernel_stack;
+    u64 *rsp = process->kernel_stack;
     // Arguments to process_start()
     *--rsp = file_length;
     *--rsp = (u64)file;
@@ -108,35 +91,78 @@ err_t process_spawn(const u8 *file, size_t file_length, u64 arg) {
     *--rsp = 0;
     *--rsp = 0;
     *--rsp = 0;
-    pqn->process.rsp = rsp;
-    // Add the process to the queue
+    process->rsp = rsp;
+    *process_ptr = process;
+    return 0;
+fail_handle_list_init:
+    stack_free(process->kernel_stack);
+fail_stack_alloc:
+    page_free(process->page_map);
+fail_page_map_alloc:
+    free(process);
+fail_process_alloc:
+    return err;
+}
+
+// Add a process to the queue of running processes
+err_t process_enqueue(Process *process) {
     spinlock_acquire(&scheduler_lock);
-    add_process_to_queue(pqn);
+    add_process_to_queue(process);
     spinlock_release(&scheduler_lock);
     semaphore_increment(&sched_queue_semaphore);
     return 0;
-fail_handle_add:
-    handle_list_free(&pqn->process.handles);
-fail_handle_list_init:
-    free(message->data);
-fail_message_data_alloc:
-    free(message);
-fail_message_alloc:
-    stack_free(pqn->process.kernel_stack);
-fail_stack_alloc:
-    page_free(pqn->process.page_map);
-fail_page_map_alloc:
-    free(pqn);
-fail_pqn_alloc:
-    return err;
+}
+
+// Initialize processes
+// Creates a number of client processes communitcating with a server process through a channel.
+err_t process_setup(void) {
+    err_t err;
+    Channel *channel = channel_alloc();
+    if (channel == NULL)
+        return ERR_NO_MEMORY;
+    Process *server_process;
+    err = process_create(included_file_program2, included_file_program2_end - included_file_program2, &server_process);
+    if (err)
+        return err;
+    err = handle_set(&server_process->handles, 1, (Handle){HANDLE_TYPE_CHANNEL, {.channel = channel}});
+    if (err)
+        return err;
+    for (u64 i = 0; i < 8; i++) {
+        Process *client_process;
+        err = process_create(included_file_program1, included_file_program1_end - included_file_program1, &client_process);
+        if (err)
+            return err;
+        u8 *message_data = malloc(sizeof(u64));
+        if (message_data == NULL)
+            return ERR_NO_MEMORY;
+        u64 arg = 'A' + i;
+        memcpy(message_data, &arg, sizeof(u64));
+        Message *message = message_alloc(sizeof(u64), message_data);
+        if (message == NULL)
+            return ERR_NO_MEMORY;
+        err = handle_set(&client_process->handles, 0, (Handle){HANDLE_TYPE_MESSAGE, {.message = message}});
+        if (err)
+            return err;
+        channel_add_ref(channel);
+        err = handle_set(&client_process->handles, 1, (Handle){HANDLE_TYPE_CHANNEL, {.channel = channel}});
+        if (err)
+            return err;
+        err = process_enqueue(client_process);
+        if (err)
+            return err;
+    }
+    err = process_enqueue(server_process);
+    if (err)
+        return err;
+    return 0;
 }
 
 // Free the current process
 // Does not free any information that is necessary to switch to the process when it's running in kernel mode,
 // as it needs to be freed separately and with interrupts disabled.
 void process_free_contents(void) {
-    page_map_free_contents(cpu_local->current_process->process.page_map);
-    handle_list_free(&cpu_local->current_process->process.handles);
+    page_map_free_contents(cpu_local->current_process->page_map);
+    handle_list_free(&cpu_local->current_process->handles);
 }
 
 // Set `cpu_local->current_process` to the next process in the queue
@@ -162,46 +188,10 @@ void sched_switch_process(void) {
     spinlock_release(&scheduler_lock);
 }
 
-// Verify that a buffer provided by a process is contained within the process address space
-// This does not handle the cases where an address is not mapped by the process - in those cases a page fault will occur and the process will be killed.
-static err_t verify_user_buffer(void *start, size_t length) {
-    u64 start_addr = (u64)start;
-    if (start_addr + length < start_addr)
-        return ERR_INVALID_ADDRESS;
-    if (start_addr + length > USER_ADDR_UPPER_BOUND)
-        return ERR_INVALID_ADDRESS;
-    return 0;
+err_t process_get_handle(size_t i, Handle *handle) {
+    return handle_get(&cpu_local->current_process->handles, i, handle);
 }
 
-// Returns the length of the message
-err_t syscall_message_get_length(size_t i, size_t *length) {
-    err_t err;
-    err = verify_user_buffer(length, sizeof(size_t));
-    if (err)
-        return err;
-    Handle handle;
-    err = handle_get(&cpu_local->current_process->process.handles, i, &handle);
-    if (err)
-        return err;
-    if (handle.type != HANDLE_TYPE_MESSAGE)
-        return ERR_WRONG_HANDLE_TYPE;
-    *length = handle.message->data_size;
-    return 0;
-}
-
-// Reads the message data into the provided userspace buffer
-// The buffer must be large enough to fit the entire message.
-err_t syscall_message_read(size_t i, void *data) {
-    err_t err;
-    Handle handle;
-    err = handle_get(&cpu_local->current_process->process.handles, i, &handle);
-    if (err)
-        return err;
-    if (handle.type != HANDLE_TYPE_MESSAGE)
-        return ERR_WRONG_HANDLE_TYPE;
-    err = verify_user_buffer(data, handle.message->data_size);
-    if (err)
-        return err;
-    memcpy(data, handle.message->data, handle.message->data_size);
-    return 0;
+err_t process_add_handle(Handle handle, size_t *i_ptr) {
+    return handle_add(&cpu_local->current_process->handles, handle, i_ptr);
 }

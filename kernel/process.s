@@ -4,11 +4,13 @@ global percpu_init
 global userspace_init
 global sched_yield
 global sched_start
+global process_block
 global process_exit
 global process_start
 
 extern syscalls
 extern malloc
+extern spinlock_release
 extern sched_replace_process
 extern sched_switch_process
 extern process_free
@@ -45,7 +47,7 @@ TSS.rsp0 equ 4
 
 MSR_STAR equ 0xC0000081
 MSR_LSTAR equ 0xC0000082
-MSR_SFMASK equ 0xC0000084
+MSR_FMASK equ 0xC0000084
 MSR_GS_BAS equ 0xC0000101
 
 RFLAGS_IF equ 1 << 9
@@ -58,7 +60,7 @@ PAGE_WRITE equ 1 << 1
 PAGE_GLOBAL equ 1 << 8
 PAGE_NX equ 1 << 63
 
-SYSCALLS_NUM equ 6
+SYSCALLS_NUM equ 8
 
 ERR_INVALID_SYSCALL_NUMBER equ 1
 ERR_NO_MEMORY equ 4
@@ -150,14 +152,14 @@ userspace_init:
   mov rdx, rax
   shr rdx, 32
   wrmsr
-  ; SFMASK needs to contain the mask that is applied to RFLAGS when a syscall occurs.
-  ; The bits that are set in SFMASK are cleared in RFLAGS.
+  ; FMASK needs to contain the mask that is applied to RFLAGS when a syscall occurs.
+  ; The bits that are set in FMASK are cleared in RFLAGS.
   ; We set the register to clear IF and DF.
   ; IF is cleared so that the kernel can load the kernel stack before re-enabling interrupts.
   ; The ABI requires DF to be cleared before calling the handler.
-  mov ecx, MSR_SFMASK
-  mov eax, ~(RFLAGS_DF | RFLAGS_IF)
-  mov edx, ~0
+  mov ecx, MSR_FMASK
+  mov eax, RFLAGS_DF | RFLAGS_IF
+  xor edx, edx
   wrmsr
   ret
 
@@ -167,6 +169,27 @@ sched_start:
   ; Get the first process to run
   call sched_replace_process
   ; Skip the part of sched_yield where current process state is saved, since there is no current process yet
+  jmp sched_yield.from_no_process
+
+; Preempt the current process without returning it to the queue
+; Takes a spinlock as argument. After saving process state, the spinlock is released.
+; This is provided so that a process can safely place itself in a process queue protected by a lock before calling this function.
+process_block:
+  ; Disable interrupts to prevent context switches from this point on
+  cli
+  mov rax, [gs:PerCPU.current_process]
+  ; Save process state
+  push rbx
+  push rbp
+  push r12
+  push r13
+  push r14
+  push r15
+  mov [rax + Process.rsp], rsp
+  ; Release the spinlock
+  call spinlock_release
+  ; Get the next process to run and jump to the appropriate part of sched_yield
+  call sched_replace_process
   jmp sched_yield.from_no_process
 
 ; Ends the current process
@@ -203,6 +226,7 @@ process_exit:
 
 ; Preempt the current process and run a different one
 sched_yield:
+  cli
   mov rax, [gs:PerCPU.current_process]
   ; Save process state on the stack
   ; Since this function will only be called from kernel code, we only need to save the non-scratch registers.

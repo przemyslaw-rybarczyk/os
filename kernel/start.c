@@ -2,8 +2,8 @@
 
 #include "acpi.h"
 #include "alloc.h"
+#include "channel.h"
 #include "framebuffer.h"
-#include "included_programs.h"
 #include "interrupt.h"
 #include "keyboard.h"
 #include "mouse.h"
@@ -57,10 +57,7 @@ void kernel_start(void) {
     print_string("BSP finished initialization\n");
     framebuffer_unlock();
     smp_init_sync();
-    for (u64 arg = 'A'; arg <= 'H'; arg++)
-        process_spawn(included_file_program1, included_file_program1_end - included_file_program1, arg);
-    for (u64 arg = 'a'; arg <= 'h'; arg++)
-        process_spawn(included_file_program2, included_file_program2_end - included_file_program2, arg);
+    process_setup();
     sched_start();
 halt:
     asm volatile ("cli");

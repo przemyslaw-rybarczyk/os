@@ -4,6 +4,8 @@ global process_exit
 global process_yield
 global message_get_length
 global message_read
+global channel_send
+global channel_receive
 
 ; This file implements the C interface for system calls
 
@@ -33,5 +35,15 @@ message_get_length:
 
 message_read:
   mov rax, 5
+  syscall
+  ret
+
+channel_send:
+  mov rax, 6
+  syscall
+  ret
+
+channel_receive:
+  mov rax, 7
   syscall
   ret

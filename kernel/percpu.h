@@ -2,11 +2,11 @@
 
 #include "types.h"
 
-typedef struct ProcessQueueNode ProcessQueueNode;
+typedef struct Process Process;
 typedef struct TSS TSS;
 
 typedef struct PerCPU {
-    ProcessQueueNode *current_process;
+    Process *current_process;
     TSS *tss;
     u64 user_rsp;
 } PerCPU;

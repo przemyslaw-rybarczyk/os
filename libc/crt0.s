@@ -30,22 +30,6 @@ _start:
   jnz .fail
   ; Set the stack pointer
   mov rsp, STACK_START + STACK_LENGTH
-  ; Load argument into RDI by reading the message from handle 0
-  push rax
-  mov rax, SYSCALL_MESSAGE_GET_LENGTH
-  mov rdi, 0
-  mov rsi, rsp
-  syscall
-  test rax, rax
-  jnz .fail
-  push rax
-  mov rax, SYSCALL_MESSAGE_READ
-  mov rdi, 0
-  mov rsi, rsp
-  syscall
-  test rax, rax
-  jnz .fail
-  pop rdi
 .start:
   ; Call main()
   call main
