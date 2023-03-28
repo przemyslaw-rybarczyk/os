@@ -91,8 +91,10 @@ static bool interrupt_pushes_error_code(u8 i) {
 // It prints the exception information and halts.
 void general_exception_handler(u8 interrupt_number, InterruptFrame *interrupt_frame, u64 error_code) {
     // If the exception occurred in user mode, kill the currently running process
-    if ((interrupt_frame->cs & 3) != 0)
+    if ((interrupt_frame->cs & 3) != 0) {
+        asm volatile ("sti");
         process_exit();
+    }
     u64 page_fault_address;
     if (interrupt_number == INT_PAGE_FAULT) {
         // If the interrupt is a page fault, get the page fault address from CR2
