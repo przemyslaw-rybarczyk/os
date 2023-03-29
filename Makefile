@@ -22,6 +22,7 @@ libc_DEPS =
 # $(1) = name of subproject
 define defs_template =
 $(1)_HEADERS = $$(wildcard $(1)/*.h)
+$(1)_ASM_HEADERS = $$(wildcard $(1)/*.inc)
 $(1)_OBJECTS = $$(patsubst %.c,$$(BUILD)/%.o,$$(wildcard $(1)/*.c)) $$(patsubst %.s,$$(BUILD)/%.s.o,$$(wildcard $(1)/*.s))
 endef
 
@@ -48,7 +49,7 @@ $$(BUILD)/$(1):
 
 $$($(1)_OBJECTS): | $$(BUILD)/$(1)
 
-$$(BUILD)/$(1)/%.s.o: $(1)/%.s
+$$(BUILD)/$(1)/%.s.o: $(1)/%.s $$($(1)_ASM_HEADERS) $$(foreach dep,$(2),$$($$(dep)_ASM_HEADERS))
 	$$(asm_recipe)
 
 $$(BUILD)/$(1)/%.o: $(1)/%.c $$($(1)_HEADERS) $$(foreach dep,$(2),$$($$(dep)_HEADERS))

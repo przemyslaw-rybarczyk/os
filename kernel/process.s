@@ -1,6 +1,7 @@
+%include "kernel/percpu.inc"
+
 global tss
 global tss_end
-global percpu_init
 global userspace_init
 global sched_yield
 global sched_start
@@ -9,7 +10,6 @@ global process_exit
 global process_start
 
 extern syscalls
-extern malloc
 extern spinlock_release
 extern sched_replace_process
 extern sched_switch_process
@@ -22,13 +22,6 @@ extern stack_free
 extern framebuffer_lock
 extern framebuffer_unlock
 extern print_string
-
-struc PerCPU
-  .current_process: resq 1
-  .tss: resq 1
-  .user_rsp: resq 1
-  .idle_stack: resq 1
-endstruc
 
 struc Process
   .rsp: resq 1
@@ -49,7 +42,6 @@ TSS.rsp0 equ 4
 MSR_STAR equ 0xC0000081
 MSR_LSTAR equ 0xC0000082
 MSR_FMASK equ 0xC0000084
-MSR_GS_BAS equ 0xC0000101
 
 RFLAGS_IF equ 1 << 9
 RFLAGS_DF equ 1 << 10
@@ -64,7 +56,6 @@ PAGE_NX equ 1 << 63
 SYSCALLS_NUM equ 8
 
 ERR_INVALID_SYSCALL_NUMBER equ 1
-ERR_NO_MEMORY equ 4
 
 section .rodata
 
@@ -117,25 +108,6 @@ syscall_handler:
 .no_syscall:
   mov rax, ERR_INVALID_SYSCALL_NUMBER
   o64 sysret
-
-; Allocate per-CPU data and set the GS base so it can be used
-percpu_init:
-  push rdi
-  mov rdi, PerCPU_size
-  call malloc
-  test rax, rax
-  jz .malloc_fail
-  pop rdi
-  mov [rax + PerCPU.idle_stack], rdi
-  mov ecx, MSR_GS_BAS
-  mov rdx, rax
-  shr rdx, 32
-  wrmsr
-  xor rax, rax
-  ret
-.malloc_fail:
-  mov rax, ERR_NO_MEMORY
-  ret
 
 userspace_init:
   ; Load the TSS

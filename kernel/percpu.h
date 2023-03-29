@@ -1,6 +1,7 @@
 #pragma once
 
 #include "types.h"
+#include "error.h"
 
 typedef struct Process Process;
 typedef struct TSS TSS;
@@ -10,6 +11,7 @@ typedef struct PerCPU {
     TSS *tss;
     u64 user_rsp;
     void *idle_stack;
+    u64 preempt_disable;
 } PerCPU;
 
 #define cpu_local ((__seg_gs PerCPU *)0)

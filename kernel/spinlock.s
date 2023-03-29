@@ -1,3 +1,5 @@
+%include "kernel/percpu.inc"
+
 global spinlock_acquire
 global spinlock_release
 global semaphore_decrement
@@ -9,6 +11,7 @@ global semaphore_increment
 spinlock_acquire:
   mov edx, 1
 .try_lock:
+  add qword gs:[PerCPU.preempt_disable], 1
   ; Try to atomically acquire the lock with a LOCK CMPXCHG and return if the operation succeeds
   xor eax, eax
   xacquire lock cmpxchg [rdi], edx
@@ -26,6 +29,7 @@ spinlock_acquire:
 ; Release a spinlock
 spinlock_release:
   xrelease mov dword [rdi], 0
+  sub qword gs:[PerCPU.preempt_disable], 1
   ret
 
 ; Decrement a semaphore
@@ -43,11 +47,15 @@ semaphore_decrement:
   jne .check
   ret
 .wait:
+  add qword gs:[PerCPU.preempt_disable], 1
+  sti
   ; If the semaphore is zero, wait until it is incremented
   cmp qword [rdi], 0
   pause
   je .wait
   ; After the semaphore becomes nonzero, try to decrement it again
+  cli
+  sub qword gs:[PerCPU.preempt_disable], 1
   jmp .check
 
 ; Increment a semaphore
