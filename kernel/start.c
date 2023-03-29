@@ -17,7 +17,7 @@
 #include "smp.h"
 #include "stack.h"
 
-void kernel_start(void) {
+void kernel_start(void *stack) {
     framebuffer_init();
     if (interrupt_init(true) != 0) {
         print_string("Failed to initialize interrupt handlers\n");
@@ -31,7 +31,7 @@ void kernel_start(void) {
         print_string("Failed to initialize memory allocator\n");
         goto halt;
     }
-    if (percpu_init() != 0) {
+    if (percpu_init(stack) != 0) {
         print_string("Failed to initialize CPU-local storage\n");
         goto halt;
     }
@@ -65,14 +65,14 @@ halt:
         asm volatile ("hlt");
 }
 
-void kernel_start_ap(void) {
+void kernel_start_ap(void *stack) {
     if (interrupt_init(false) != 0) {
         framebuffer_lock();
         print_string("Failed to initialize interrupt handlers on AP\n");
         framebuffer_unlock();
         goto halt;
     }
-    if (percpu_init() != 0) {
+    if (percpu_init(stack) != 0) {
         framebuffer_lock();
         print_string("Failed to initialize CPU-local storage on AP\n");
         framebuffer_unlock();

@@ -27,6 +27,7 @@ struc PerCPU
   .current_process: resq 1
   .tss: resq 1
   .user_rsp: resq 1
+  .idle_stack: resq 1
 endstruc
 
 struc Process
@@ -119,10 +120,13 @@ syscall_handler:
 
 ; Allocate per-CPU data and set the GS base so it can be used
 percpu_init:
+  push rdi
   mov rdi, PerCPU_size
   call malloc
   test rax, rax
   jz .malloc_fail
+  pop rdi
+  mov [rax + PerCPU.idle_stack], rdi
   mov ecx, MSR_GS_BAS
   mov rdx, rax
   shr rdx, 32
@@ -186,6 +190,8 @@ process_block:
   push r14
   push r15
   mov [rax + Process.rsp], rsp
+  ; Switch to the idle stack
+  mov rsp, [gs:PerCPU.idle_stack]
   ; Release the spinlock
   call spinlock_release
   ; Get the next process to run and jump to the appropriate part of sched_yield
@@ -202,27 +208,21 @@ process_exit:
   ; From this point on, interrupts must be disabled.
   ; If a context switch occurred while the process is being freed, it wouldn't be possible to come back to it.
   cli
+  ; Switch to the idle stack
+  mov rsp, [gs:PerCPU.idle_stack]
   ; Free the PML4
   mov rdi, [rbx + Process.page_map]
   call page_free
-  ; Get the kernel stack address so it can be freed later
-  ; We can't free it now, since we're still using it.
-  mov r12, [rbx + Process.kernel_stack]
+  ; Free the process kernel stack
+  mov rdi, [rbx + Process.kernel_stack]
+  call stack_free
   ; Free the process control block
   mov rdi, rbx
   call free
   ; Get the next process to run
   call sched_replace_process
-  mov r13, [gs:PerCPU.current_process]
-  ; Restore the stack pointer
-  mov rsp, [r13 + Process.rsp]
-  ; Free the old kernel stack
-  mov rdi, r12
-  call stack_free
-  ; Skip the part of sched_yield where current process state is saved and the new process's stack pointer is restored,
-  ; since there is no process to save and we already restored the new stack pointer.
-  mov rax, r13
-  jmp sched_yield.from_removed_process
+  ; Skip the part of sched_yield where current process state is saved, since there is no process now
+  jmp sched_yield.from_no_process
 
 ; Preempt the current process and run a different one
 sched_yield:
@@ -244,7 +244,6 @@ sched_yield:
   mov rax, [gs:PerCPU.current_process]
   ; Restore the stack pointer
   mov rsp, [rax + Process.rsp]
-.from_removed_process:
   ; Set the RSP0 in the TSS
   mov rdx, [gs:PerCPU.tss]
   mov rcx, [rax + Process.kernel_stack]

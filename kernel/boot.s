@@ -592,6 +592,7 @@ long_mode_start:
   ; Set rsp to bottom of stack
   mov rsp, STACK_BOTTOM_VIRTUAL
   ; Finally, enter the kernel
+  mov rdi, rsp
   call kernel_start
   ; Loop forever if kernel exits - this shouldn't happen
 .halt:
@@ -658,6 +659,7 @@ long_mode_start_ap:
   lock xadd [last_kernel_stack], rax
   lea rsp, [rax + 3 * PAGE_SIZE]
   ; Finally, enter the kernel
+  mov rdi, rsp
   call kernel_start_ap
   ; Loop forever if kernel exits - this shouldn't happen
 .halt:
