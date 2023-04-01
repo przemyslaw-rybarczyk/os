@@ -29,23 +29,27 @@ extern u8 process_start[];
 static spinlock_t scheduler_lock;
 static semaphore_t sched_queue_semaphore;
 
-static Process *process_queue_start = NULL;
-static Process *process_queue_end = NULL;
+static ProcessQueue scheduler_queue;
 
-static void add_process_to_queue(Process *process) {
-    if (process_queue_start == NULL) {
-        process_queue_start = process;
-        process_queue_end = process;
-    } else {
-        process_queue_end->next_process = process;
-        process_queue_end = process;
-    }
+// Add a process to the end of a queue
+void process_queue_add(ProcessQueue *queue, Process *process) {
     process->next_process = NULL;
+    if (queue->start == NULL) {
+        queue->start = process;
+        queue->end = process;
+    } else {
+        queue->end->next_process = process;
+        queue->end = process;
+    }
 }
 
-static Process *get_process_from_queue(void) {
-    Process *process = process_queue_start;
-    process_queue_start = process_queue_start->next_process;
+// Remove a process from the start of a queue and return it
+// If the queue is empty, returns NULL.
+Process *process_queue_remove(ProcessQueue *queue) {
+    if (queue->start == NULL)
+        return NULL;
+    Process *process = queue->start;
+    queue->start = queue->start->next_process;
     return process;
 }
 
@@ -107,7 +111,7 @@ fail_process_alloc:
 // Add a process to the queue of running processes
 err_t process_enqueue(Process *process) {
     spinlock_acquire(&scheduler_lock);
-    add_process_to_queue(process);
+    process_queue_add(&scheduler_queue, process);
     spinlock_release(&scheduler_lock);
     semaphore_increment(&sched_queue_semaphore);
     return 0;
@@ -170,21 +174,24 @@ void process_free_contents(void) {
 void sched_replace_process(void) {
     semaphore_decrement(&sched_queue_semaphore);
     spinlock_acquire(&scheduler_lock);
-    cpu_local->current_process = get_process_from_queue();
+    cpu_local->current_process = process_queue_remove(&scheduler_queue);
     spinlock_release(&scheduler_lock);
 }
 
-// Return the current process to the end of the queue an set `cpu_local->current_process` to the next process in the queue
+// Return the current process to the end of the queue and set `cpu_local->current_process` to the next process in the queue
 // The current scheduler is a basic round-robin scheduler.
 void sched_switch_process(void) {
     spinlock_acquire(&scheduler_lock);
+    // Get the next process from the queue
+    Process *next_process = process_queue_remove(&scheduler_queue);
     // If there are no other processes to run, return to the current process
-    if (process_queue_start == NULL) {
+    if (next_process == NULL) {
         spinlock_release(&scheduler_lock);
         return;
     }
-    add_process_to_queue(cpu_local->current_process);
-    cpu_local->current_process = get_process_from_queue();
+    // Add the current process to the queue and replace it with the new process
+    process_queue_add(&scheduler_queue, cpu_local->current_process);
+    cpu_local->current_process = next_process;
     spinlock_release(&scheduler_lock);
 }
 

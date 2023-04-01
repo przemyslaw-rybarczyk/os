@@ -9,6 +9,8 @@
 #include "spinlock.h"
 #include "string.h"
 
+#define CHANNEL_MAX_QUEUE_LENGTH 16
+
 typedef struct Message {
     size_t data_size;
     u8 *data;
@@ -19,6 +21,8 @@ typedef struct Channel {
     spinlock_t lock;
     size_t refcount;
     Process *blocked_receiver;
+    ProcessQueue blocked_senders;
+    size_t queue_length;
     Message *queue_start;
     Message *queue_end;
 } Channel;
@@ -44,11 +48,8 @@ Channel *channel_alloc(void) {
     Channel *channel = malloc(sizeof(Channel));
     if (channel == NULL)
         return NULL;
-    channel->lock = SPINLOCK_FREE;
+    memset(channel, 0, sizeof(Channel));
     channel->refcount = 1;
-    channel->blocked_receiver = NULL;
-    channel->queue_start = NULL;
-    channel->queue_end = NULL;
     return channel;
 }
 
@@ -78,6 +79,14 @@ void channel_del_ref(Channel *channel) {
 // Send a message on a channel
 err_t channel_send(Channel *channel, Message *message) {
     spinlock_acquire(&channel->lock);
+    // If the queue is full, block until there is space
+    while (channel->queue_length >= CHANNEL_MAX_QUEUE_LENGTH) {
+        process_queue_add(&channel->blocked_senders, cpu_local->current_process);
+        interrupt_disable();
+        process_block(&channel->lock);
+        interrupt_enable();
+        spinlock_acquire(&channel->lock);
+    }
     // Add the message to the channel queue
     message->next_message = NULL;
     if (channel->queue_start == NULL) {
@@ -87,7 +96,8 @@ err_t channel_send(Channel *channel, Message *message) {
         channel->queue_end->next_message = message;
         channel->queue_end = message;
     }
-    // If there is a received blocked waiting for a message, unblock it
+    channel->queue_length += 1;
+    // If there is a receiver blocked waiting for a message, unblock it
     if (channel->blocked_receiver != NULL)
         process_enqueue(channel->blocked_receiver);
     channel->blocked_receiver = NULL;
@@ -109,6 +119,11 @@ err_t channel_receive(Channel *channel, Message **message_ptr) {
     // Remove a message from the queue
     *message_ptr = channel->queue_start;
     channel->queue_start = channel->queue_start->next_message;
+    channel->queue_length -= 1;
+    // If there is a blocked sender, unblock it
+    Process *blocked_sender = process_queue_remove(&channel->blocked_senders);
+    if (blocked_sender != NULL)
+        process_enqueue(blocked_sender);
     spinlock_release(&channel->lock);
     return 0;
 }
@@ -119,6 +134,7 @@ static void channel_return_message(Channel *channel, Message *message) {
     spinlock_acquire(&channel->lock);
     message->next_message = channel->queue_start;
     channel->queue_start = message;
+    channel->queue_length += 1;
     spinlock_release(&channel->lock);
 }
 

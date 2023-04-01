@@ -11,6 +11,13 @@ extern u8 tss_end[];
 
 typedef struct Process Process;
 
+typedef struct ProcessQueue {
+    Process *start;
+    Process *end;
+} ProcessQueue;
+
+void process_queue_add(ProcessQueue *queue, Process *process);
+Process *process_queue_remove(ProcessQueue *queue);
 void userspace_init(void);
 err_t process_enqueue(Process *process);
 err_t process_setup(void);
