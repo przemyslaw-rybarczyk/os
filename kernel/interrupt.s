@@ -1,4 +1,8 @@
+%include "kernel/percpu.inc"
+
 global interrupt_handlers
+global interrupt_disable
+global interrupt_enable
 
 extern general_exception_handler
 extern pit_irq_handler
@@ -35,6 +39,9 @@ interrupt_handler_%+i:
 .int_from_kernel:
   ; Clear direction flag, as required by the ABI
   cld
+  ; Record that interrupts have been disabled
+  ; This is necessary to prevent delayed preemptions.
+  add qword gs:[PerCPU.interrupt_disable], 1
   ; Save all scratch registers - they may be overwritten by the C function
   push rax
   push rcx
@@ -66,6 +73,8 @@ interrupt_handler_%+i:
 %elif i == IDT_HALT_IPI
   call halt_ipi_handler
 %endif
+  ; Record that interrupts will be re-enabled now
+  sub qword gs:[PerCPU.interrupt_disable], 1
   ; Restore the scratch registers and return
   pop r11
   pop r10
@@ -103,3 +112,28 @@ interrupt_handlers:
 %endif
 %assign i i+1
 %endrep
+
+; Disable interrupts
+; Unlike the CLI instruction, this function allows nesting.
+interrupt_disable:
+  ; If interrupts are currently enabled, execute the CLI instruction
+  cmp qword gs:[PerCPU.interrupt_disable], 0
+  jne .no_disable
+  cli
+.no_disable:
+  ; Increment the interrupt disable count
+  add qword gs:[PerCPU.interrupt_disable], 1
+  ret
+
+; Enable interrupts
+interrupt_enable:
+  ; If the interrupt disable count is 1, decrement it and execute the STI instruction
+  cmp qword gs:[PerCPU.interrupt_disable], 1
+  jne .no_enable
+  sub qword gs:[PerCPU.interrupt_disable], 1
+  sti
+  ret
+  ; Otherwise, just decrement the count
+.no_enable:
+  sub qword gs:[PerCPU.interrupt_disable], 1
+  ret

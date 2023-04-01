@@ -3,6 +3,7 @@
 #include "channel.h"
 #include "error.h"
 #include "framebuffer.h"
+#include "interrupt.h"
 #include "page.h"
 #include "process.h"
 
@@ -27,6 +28,7 @@ err_t syscall_process_exit(void) {
 }
 
 err_t syscall_process_yield(void) {
+    interrupt_disable();
     sched_yield();
     return 0;
 }

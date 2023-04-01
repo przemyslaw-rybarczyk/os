@@ -92,7 +92,7 @@ static bool interrupt_pushes_error_code(u8 i) {
 void general_exception_handler(u8 interrupt_number, InterruptFrame *interrupt_frame, u64 error_code) {
     // If the exception occurred in user mode, kill the currently running process
     if ((interrupt_frame->cs & 3) != 0) {
-        asm volatile ("sti");
+        interrupt_enable();
         process_exit();
     }
     u64 page_fault_address;
@@ -101,8 +101,10 @@ void general_exception_handler(u8 interrupt_number, InterruptFrame *interrupt_fr
         asm ("mov %0, cr2" : "=r"(page_fault_address));
         // If the page fault is caused by accessing a user address, kill the process,
         // as it must be caused by an invalid address being passed to the kernel
-        if (page_fault_address < USER_ADDR_UPPER_BOUND)
+        if (page_fault_address < USER_ADDR_UPPER_BOUND) {
+            interrupt_enable();
             process_exit();
+        }
     }
     // Stop all other cores
     send_halt_ipi();

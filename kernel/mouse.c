@@ -1,6 +1,7 @@
 #include "types.h"
 #include "mouse.h"
 
+#include "interrupt.h"
 #include "smp.h"
 
 #define MOUSE_PACKET_LEFT_BUTTON (1 << 0)
@@ -15,13 +16,13 @@ static volatile MouseUpdate mouse_update;
 
 MouseUpdate mouse_get_update(void) {
     // We disable interrupts while accessing mouse update data to avoid conflict with the interrupt handler.
-    asm volatile ("cli");
+    interrupt_disable();
     MouseUpdate r = mouse_update;
     // Reset movement change
     mouse_update.diff_x = 0;
     mouse_update.diff_y = 0;
     mouse_update.diff_scroll = 0;
-    asm volatile ("sti");
+    interrupt_enable();
     return r;
 }
 

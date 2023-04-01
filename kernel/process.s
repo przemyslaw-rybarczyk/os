@@ -9,6 +9,8 @@ global process_block
 global process_exit
 global process_start
 
+extern interrupt_disable
+extern interrupt_enable
 extern syscalls
 extern spinlock_release
 extern sched_replace_process
@@ -19,9 +21,6 @@ extern process_free_contents
 extern page_free
 extern free
 extern stack_free
-extern framebuffer_lock
-extern framebuffer_unlock
-extern print_string
 
 struc Process
   .rsp: resq 1
@@ -150,9 +149,8 @@ sched_start:
 ; Preempt the current process without returning it to the queue
 ; Takes a spinlock as argument. After saving process state, the spinlock is released.
 ; This is provided so that a process can safely place itself in a process queue protected by a lock before calling this function.
+; Must be called with interrupts disabled and only one lock held.
 process_block:
-  ; Disable interrupts to prevent context switches from this point on
-  cli
   mov rax, [gs:PerCPU.current_process]
   ; Save process state
   push rbx
@@ -171,6 +169,7 @@ process_block:
   jmp sched_yield.from_no_process
 
 ; Ends the current process
+; Must be called with interrupts enabled and no locks held.
 process_exit:
   mov rbx, [gs:PerCPU.current_process]
   ; Free the process contents
@@ -179,7 +178,7 @@ process_exit:
   call process_free_contents
   ; From this point on, interrupts must be disabled.
   ; If a context switch occurred while the process is being freed, it wouldn't be possible to come back to it.
-  cli
+  call interrupt_disable
   ; Switch to the idle stack
   mov rsp, [gs:PerCPU.idle_stack]
   ; Free the PML4
@@ -197,8 +196,8 @@ process_exit:
   jmp sched_yield.from_no_process
 
 ; Preempt the current process and run a different one
+; Must be called with interrupts disabled and no locks held.
 sched_yield:
-  cli
   mov rax, [gs:PerCPU.current_process]
   ; Save process state on the stack
   ; Since this function will only be called from kernel code, we only need to save the non-scratch registers.
@@ -230,8 +229,8 @@ sched_yield:
   ; Load process page map
   mov rdx, [rax + Process.page_map]
   mov cr3, rdx
-  ; Enable interrupts
-  sti
+  ; Ignore any delayed preemptions
+  mov qword gs:[PerCPU.preempt_delayed], 0
   ; Return to the process
   ret
 
@@ -241,7 +240,8 @@ sched_yield:
 ; Takes the following arugments from the stack (listed top to bottom):
 ; const u8 *file, size_t file_length, u64 arg
 process_start:
-  sti
+  ; Enable interrupts
+  call interrupt_enable
   ; Load the process
   pop rdi
   pop rsi

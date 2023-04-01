@@ -60,7 +60,7 @@ void kernel_start(void *stack) {
     process_setup();
     sched_start();
 halt:
-    asm volatile ("cli");
+    interrupt_disable();
     while (1)
         asm volatile ("hlt");
 }
@@ -92,7 +92,7 @@ void kernel_start_ap(void *stack) {
     smp_init_sync();
     sched_start();
 halt:
-    asm volatile ("cli");
+    interrupt_disable();
     while (1)
         asm volatile ("hlt");
 }

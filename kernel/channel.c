@@ -2,6 +2,7 @@
 #include "channel.h"
 
 #include "alloc.h"
+#include "interrupt.h"
 #include "page.h"
 #include "percpu.h"
 #include "process.h"
@@ -100,7 +101,9 @@ err_t channel_receive(Channel *channel, Message **message_ptr) {
     // If there are no messages in the queue, block until a message arrives
     while (channel->queue_start == NULL) {
         channel->blocked_receiver = cpu_local->current_process;
+        interrupt_disable();
         process_block(&channel->lock);
+        interrupt_enable();
         spinlock_acquire(&channel->lock);
     }
     // Remove a message from the queue
