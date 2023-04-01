@@ -90,9 +90,9 @@ send_halt_ipi:
   mov edx, 1
   xor eax, eax
   lock cmpxchg [halt_ipi_lock], edx
-  ; If another process has already acquired the lock, jump to .halt
+  ; If another process has already acquired the lock, jump straight to the halt IPI handler
   ; This avoids a race condition when two cores encounter a fatal error at around the same time.
-  jne .halt
+  jne halt_ipi_handler
   mov rax, [lapic]
   ; Send halt IPI to every other processor
   mov dword [rax + LAPIC_INTERRUPT_COMMAND_REGISTER_HIGH], 0
@@ -105,18 +105,10 @@ send_halt_ipi:
   cmp [cpu_halted_num], rax
   jne .wait
   ret
-.halt:
-  ; Halt with interrupts enabled
-  ; Keeping interrupts enabled allows this thread to receive a halt IPI from another process
-  sti
-.halt_loop:
-  hlt
-  jmp .halt_loop
 
 halt_ipi_handler:
   ; After receiving a halt IPI, increment the halted CPU counter and halt
   lock add qword [cpu_halted_num], 1
-  cli
 .halt:
   hlt
   jmp .halt
