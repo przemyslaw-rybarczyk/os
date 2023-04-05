@@ -33,6 +33,11 @@ err_t syscall_process_yield(void) {
     return 0;
 }
 
+err_t syscall_handle_free(size_t i) {
+    process_clear_handle(i);
+    return 0;
+}
+
 const void * const syscalls[] = {
     syscall_map_pages,
     syscall_print_char,
@@ -40,6 +45,8 @@ const void * const syscalls[] = {
     syscall_process_yield,
     syscall_message_get_length,
     syscall_message_read,
-    syscall_channel_send,
+    syscall_channel_call,
     syscall_channel_receive,
+    syscall_message_reply,
+    syscall_handle_free,
 };

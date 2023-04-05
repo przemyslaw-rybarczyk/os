@@ -4,8 +4,10 @@ global process_exit
 global process_yield
 global message_get_length
 global message_read
-global channel_send
+global channel_call
 global channel_receive
+global message_reply
+global handle_free
 
 ; This file implements the C interface for system calls
 
@@ -38,12 +40,23 @@ message_read:
   syscall
   ret
 
-channel_send:
+channel_call:
   mov rax, 6
+  mov r10, rcx
   syscall
   ret
 
 channel_receive:
   mov rax, 7
+  syscall
+  ret
+
+message_reply:
+  mov rax, 8
+  syscall
+  ret
+
+handle_free:
+  mov rax, 9
   syscall
   ret

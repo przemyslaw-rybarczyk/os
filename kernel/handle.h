@@ -8,6 +8,7 @@
 typedef enum HandleType {
     HANDLE_TYPE_EMPTY,
     HANDLE_TYPE_MESSAGE,
+    HANDLE_TYPE_REPLY,
     HANDLE_TYPE_CHANNEL,
 } HandleType;
 
@@ -26,6 +27,7 @@ typedef struct HandleList {
 
 err_t handle_list_init(HandleList *list);
 void handle_list_free(HandleList *list);
+void handle_clear(HandleList *list, size_t i);
 err_t handle_add(HandleList *list, Handle handle, size_t *i_ptr);
 err_t handle_remove(HandleList *list, size_t i);
 err_t handle_get(HandleList *list, size_t i, Handle *handle);

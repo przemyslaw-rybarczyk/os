@@ -14,6 +14,8 @@
 typedef struct Message {
     size_t data_size;
     u8 *data;
+    Message **reply;
+    Process *blocked_sender;
     Message *next_message;
 } Message;
 
@@ -32,6 +34,7 @@ Message *message_alloc(size_t data_size, u8 *data) {
     Message *message = malloc(sizeof(Message));
     if (message == NULL)
         return NULL;
+    memset(message, 0, sizeof(Message));
     message->data_size = data_size;
     message->data = data;
     return message;
@@ -41,6 +44,20 @@ Message *message_alloc(size_t data_size, u8 *data) {
 void message_free(Message *message) {
     free(message->data);
     free(message);
+}
+
+err_t message_reply(Message *message, Message *reply) {
+    // Set the reply if one is wanted
+    // Otherwise, free the reply since it's no longer needed
+    if (message->reply != NULL)
+        *(message->reply) = reply;
+    else
+        message_free(reply);
+    // If there is a sender blocked waiting for a reply, unblock it
+    if (message->blocked_sender != NULL)
+        process_enqueue(message->blocked_sender);
+    message->blocked_sender = NULL;
+    return 0;
 }
 
 // Create a channel
@@ -77,7 +94,7 @@ void channel_del_ref(Channel *channel) {
 }
 
 // Send a message on a channel
-err_t channel_send(Channel *channel, Message *message) {
+err_t channel_send(Channel *channel, Message *message, Message **reply) {
     spinlock_acquire(&channel->lock);
     // If the queue is full, block until there is space
     while (channel->queue_length >= CHANNEL_MAX_QUEUE_LENGTH) {
@@ -87,6 +104,9 @@ err_t channel_send(Channel *channel, Message *message) {
         interrupt_enable();
         spinlock_acquire(&channel->lock);
     }
+    // Set the reply information
+    message->reply = reply;
+    message->blocked_sender = cpu_local->current_process;
     // Add the message to the channel queue
     message->next_message = NULL;
     if (channel->queue_start == NULL) {
@@ -101,7 +121,10 @@ err_t channel_send(Channel *channel, Message *message) {
     if (channel->blocked_receiver != NULL)
         process_enqueue(channel->blocked_receiver);
     channel->blocked_receiver = NULL;
-    spinlock_release(&channel->lock);
+    // Block and wait for a reply
+    interrupt_disable();
+    process_block(&channel->lock);
+    interrupt_enable();
     return 0;
 }
 
@@ -157,7 +180,7 @@ err_t syscall_message_get_length(size_t i, size_t *length) {
     err = process_get_handle(i, &handle);
     if (err)
         return err;
-    if (handle.type != HANDLE_TYPE_MESSAGE)
+    if (handle.type != HANDLE_TYPE_MESSAGE && handle.type != HANDLE_TYPE_REPLY)
         return ERR_WRONG_HANDLE_TYPE;
     // Verify buffer is valid
     err = verify_user_buffer(length, sizeof(size_t));
@@ -177,7 +200,7 @@ err_t syscall_message_read(size_t i, void *data) {
     err = process_get_handle(i, &handle);
     if (err)
         return err;
-    if (handle.type != HANDLE_TYPE_MESSAGE)
+    if (handle.type != HANDLE_TYPE_MESSAGE && handle.type != HANDLE_TYPE_REPLY)
         return ERR_WRONG_HANDLE_TYPE;
     // Verify buffer is valid
     err = verify_user_buffer(data, handle.message->data_size);
@@ -188,13 +211,18 @@ err_t syscall_message_read(size_t i, void *data) {
     return 0;
 }
 
-err_t syscall_channel_send(size_t channel_i, size_t message_size, void *message_data_user) {
+err_t syscall_channel_call(size_t channel_i, size_t message_size, void *message_data_user, size_t *reply_i_ptr) {
     err_t err;
     Handle channel_handle;
-    // Verify buffer is valid
+    // Verify buffers are valid
     err = verify_user_buffer(message_data_user, message_size);
     if (err)
         return err;
+    if (reply_i_ptr != NULL) {
+        err = verify_user_buffer(reply_i_ptr, sizeof(size_t));
+        if (err)
+            return err;
+    }
     // Get the channel from handle
     err = process_get_handle(channel_i, &channel_handle);
     if (err)
@@ -203,7 +231,7 @@ err_t syscall_channel_send(size_t channel_i, size_t message_size, void *message_
         return ERR_WRONG_HANDLE_TYPE;
     // Copy the message data
     void *message_data = malloc(message_size);
-    if (message_data == NULL)
+    if (message_data == NULL && message_size != 0)
         return ERR_NO_MEMORY;
     memcpy(message_data, message_data_user, message_size);
     // Create a message
@@ -213,10 +241,17 @@ err_t syscall_channel_send(size_t channel_i, size_t message_size, void *message_
         return ERR_NO_MEMORY;
     }
     // Send the message
-    err = channel_send(channel_handle.channel, message);
+    Message *reply;
+    err = channel_send(channel_handle.channel, message, &reply);
     if (err) {
         message_free(message);
         return err;
+    }
+    // Add the reply handle
+    if (reply_i_ptr != NULL) {
+        err = process_add_handle((Handle){HANDLE_TYPE_REPLY, {.message = reply}}, reply_i_ptr);
+        if (err)
+            return err;
     }
     return 0;
 }
@@ -225,7 +260,7 @@ err_t syscall_channel_receive(size_t channel_i, size_t *message_i_ptr) {
     err_t err;
     Handle channel_handle;
     // Verify buffer is valid
-    err = verify_user_buffer(message_i_ptr, sizeof(size_t *));
+    err = verify_user_buffer(message_i_ptr, sizeof(size_t));
     if (err)
         return err;
     // Get the channel from handle
@@ -245,5 +280,38 @@ err_t syscall_channel_receive(size_t channel_i, size_t *message_i_ptr) {
         channel_return_message(channel_handle.channel, message);
         return err;
     }
+    return 0;
+}
+
+err_t syscall_message_reply(size_t message_i, size_t reply_size, void *reply_data_user) {
+    err_t err;
+    Handle message_handle;
+    // Verify buffer is valid
+    err = verify_user_buffer(reply_data_user, reply_size);
+    if (err)
+        return err;
+    // Get the message from handle
+    err = process_get_handle(message_i, &message_handle);
+    if (err)
+        return err;
+    if (message_handle.type != HANDLE_TYPE_MESSAGE)
+        return ERR_WRONG_HANDLE_TYPE;
+    // Copy the message data
+    void *reply_data = malloc(reply_size);
+    if (reply_data == NULL && reply_size != 0)
+        return ERR_NO_MEMORY;
+    memcpy(reply_data, reply_data_user, reply_size);
+    // Create a reply
+    Message *reply = message_alloc(reply_size, reply_data);
+    if (reply == NULL) {
+        free(reply_data);
+        return ERR_NO_MEMORY;
+    }
+    // Send the reply
+    err = message_reply(message_handle.message, reply);
+    if (err)
+        return err;
+    // Free message and handle
+    process_clear_handle(message_i);
     return 0;
 }

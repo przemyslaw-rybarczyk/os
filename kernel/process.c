@@ -227,3 +227,7 @@ err_t process_get_handle(size_t i, Handle *handle) {
 err_t process_add_handle(Handle handle, size_t *i_ptr) {
     return handle_add(&cpu_local->current_process->handles, handle, i_ptr);
 }
+
+void process_clear_handle(size_t i) {
+    return handle_clear(&cpu_local->current_process->handles, i);
+}

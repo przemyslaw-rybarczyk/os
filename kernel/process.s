@@ -52,13 +52,9 @@ PAGE_WRITE equ 1 << 1
 PAGE_GLOBAL equ 1 << 8
 PAGE_NX equ 1 << 63
 
-SYSCALLS_NUM equ 8
+SYSCALLS_NUM equ 10
 
 ERR_INVALID_SYSCALL_NUMBER equ 1
-
-section .rodata
-
-elf_load_fail_msg: db `Failed to load ELF file\n\0`
 
 section .text
 
@@ -86,6 +82,7 @@ syscall_handler:
   push r10
   push r11
   ; Perform the system call
+  mov rcx, r10
   mov r10, [syscalls + rax * 8]
   call r10
   ; Restore scratch registers and return

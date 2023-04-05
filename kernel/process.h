@@ -27,3 +27,4 @@ void sched_start(void);
 void process_block(spinlock_t *spinlock);
 err_t process_get_handle(size_t i, Handle *handle);
 err_t process_add_handle(Handle handle, size_t *i_ptr);
+void process_clear_handle(size_t i);

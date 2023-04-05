@@ -18,5 +18,9 @@ void main(void) {
         if (err)
             continue;
         print_char(c);
+        u64 reply = c ^ 0x20;
+        err = message_reply(message, sizeof(reply), &reply);
+        if (err)
+            continue;
     }
 }

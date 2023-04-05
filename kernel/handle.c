@@ -12,6 +12,7 @@ static void handle_free(Handle handle) {
     case HANDLE_TYPE_EMPTY:
         break;
     case HANDLE_TYPE_MESSAGE:
+    case HANDLE_TYPE_REPLY:
         message_free(handle.message);
         break;
     case HANDLE_TYPE_CHANNEL:
@@ -35,6 +36,13 @@ void handle_list_free(HandleList *list) {
     for (size_t i = 0; i < list->length; i++)
         handle_free(list->handles[i]);
     free(list->handles);
+}
+
+void handle_clear(HandleList *list, size_t i) {
+    if (i >= list->length)
+        return;
+    handle_free(list->handles[i]);
+    list->handles[i].type = HANDLE_TYPE_EMPTY;
 }
 
 // Extend the handle list to length `new_length`
