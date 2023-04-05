@@ -6,9 +6,11 @@
 #include "elf.h"
 #include "handle.h"
 #include "included_programs.h"
+#include "interrupt.h"
 #include "page.h"
 #include "percpu.h"
 #include "segment.h"
+#include "smp.h"
 #include "spinlock.h"
 #include "stack.h"
 #include "string.h"
@@ -27,9 +29,9 @@ extern void jump_to_current_process(void);
 extern u8 process_start[];
 
 static spinlock_t scheduler_lock;
-static semaphore_t sched_queue_semaphore;
 
 static ProcessQueue scheduler_queue;
+static PerCPU *idle_core_list;
 
 // Add a process to the end of a queue
 void process_queue_add(ProcessQueue *queue, Process *process) {
@@ -111,9 +113,14 @@ fail_process_alloc:
 // Add a process to the queue of running processes
 err_t process_enqueue(Process *process) {
     spinlock_acquire(&scheduler_lock);
+    // Add the process to end of the queue
     process_queue_add(&scheduler_queue, process);
+    // Wake up an idle core if there is one
+    if (idle_core_list != NULL) {
+        send_wakeup_ipi(idle_core_list->lapic_id);
+        idle_core_list = idle_core_list->next_cpu;
+    }
     spinlock_release(&scheduler_lock);
-    semaphore_increment(&sched_queue_semaphore);
     return 0;
 }
 
@@ -171,10 +178,28 @@ void process_free_contents(void) {
 
 // Set `cpu_local->current_process` to the next process in the queue
 // The current process is not returned to the queue.
+// Must be called with interrupts disabled.
 void sched_replace_process(void) {
-    semaphore_decrement(&sched_queue_semaphore);
     spinlock_acquire(&scheduler_lock);
-    cpu_local->current_process = process_queue_remove(&scheduler_queue);
+    // Get a process from the queue
+    // If the queue is empty, wait until it isn't
+    while ((cpu_local->current_process = process_queue_remove(&scheduler_queue)) == NULL) {
+        // If there are no processes in the queue, add the CPU to the idle CPU list
+        cpu_local->next_cpu = idle_core_list;
+        idle_core_list = cpu_local->self;
+        spinlock_release(&scheduler_lock);
+        // The idle flag is set and will only be cleared by a wakeup IPI.
+        cpu_local->idle = true;
+        // Preemption is disabled since interrupts are enabled while waiting but there is no valid process.
+        preempt_disable();
+        // Wait for a wakeup IPI to occur
+        // The HLT instruction has to immediately follow an STI to avoid a race condition where an interrupt occurs before HLT.
+        // The effect of STI is always delayed by at least one instruction, so the interrupt can't occur before the HLT.
+        while (cpu_local->idle)
+            asm volatile ("sti; hlt; cli");
+        preempt_enable();
+        spinlock_acquire(&scheduler_lock);
+    }
     spinlock_release(&scheduler_lock);
 }
 

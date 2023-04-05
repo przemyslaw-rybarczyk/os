@@ -6,6 +6,7 @@ void apic_init(void);
 void smp_init(void);
 void smp_init_sync(void);
 void apic_eoi(void);
+void send_wakeup_ipi(u32);
 void send_halt_ipi(void);
 
 extern u8 cpus[];

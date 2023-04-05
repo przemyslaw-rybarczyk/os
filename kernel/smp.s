@@ -1,7 +1,11 @@
+%include "kernel/percpu.inc"
+
 global apic_init
 global smp_init
 global smp_init_sync
 global apic_eoi
+global send_wakeup_ipi
+global wakeup_ipi_handler
 global send_halt_ipi
 global halt_ipi_handler
 
@@ -22,6 +26,7 @@ LAPIC_INTERRUPT_COMMAND_REGISTER_HIGH equ 0x310
 LAPIC_LOGICAL_ID_OFFSET equ 24
 LAPIC_ENABLE equ 1 << 8
 
+ICR_DESTINATION_OFFSET equ 56
 ICR_ALL_EXCLUDING_SELF equ 3 << 18
 ICR_ASSERT equ 1 << 14
 ICR_FIXED equ 0 << 8
@@ -32,6 +37,7 @@ ICR_SIPI equ 6 << 8
 ; We set it to 0x08, so that AP initialization code can be placed at 0x8000, right after the bootloader.
 SIPI_VECTOR equ 0x08
 
+INT_VECTOR_WAKEUP_IPI equ 0x2D
 INT_VECTOR_HALT_IPI equ 0x2E
 SPURIOUS_INTERRUPT_VECTOR equ 0xFF
 
@@ -49,6 +55,10 @@ section .text
 
 apic_init:
   mov rax, [lapic]
+  ; Get the LAPIC ID
+  mov edx, [rax + LAPIC_ID_REGISTER]
+  and edx, 0xFF000000
+  mov gs:[PerCPU.lapic_id], edx
   ; Set logical APIC ID to 1
   mov dword [rax + LAPIC_LOGICAL_DESTINATION_REGISTER], 1 << LAPIC_LOGICAL_ID_OFFSET
   ; Enable the LAPIC and set the spurious interrupt vector
@@ -85,8 +95,21 @@ apic_eoi:
   mov dword [rax + LAPIC_EOI_REGISTER], 0
   ret
 
+; Send a wakeup IPI to a given CPU
+send_wakeup_ipi:
+  mov rax, [lapic]
+  mov dword [rax + LAPIC_INTERRUPT_COMMAND_REGISTER_HIGH], edi
+  mov dword [rax + LAPIC_INTERRUPT_COMMAND_REGISTER_LOW], ICR_ASSERT | ICR_FIXED | INT_VECTOR_WAKEUP_IPI
+  ret
+
+wakeup_ipi_handler:
+  ; Reset the idle flag
+  mov byte gs:[PerCPU.idle], 0
+  call apic_eoi
+  ret
+
 send_halt_ipi:
-  ; Try to aquire the halt IPI lock
+  ; Try to acquire the halt IPI lock
   mov edx, 1
   xor eax, eax
   lock cmpxchg [halt_ipi_lock], edx

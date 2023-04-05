@@ -26,6 +26,8 @@ percpu_init:
   call memset
   pop rax
   pop rdi
+  ; Set the self pointer
+  mov [rax + PerCPU.self], rax
   ; Set the idle stack
   mov [rax + PerCPU.idle_stack], rdi
   ; Initialize interrupts as disabled once
