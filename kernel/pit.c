@@ -10,7 +10,7 @@ void pit_irq_handler(void) {
     // Try to preempt the current process
     // If preemption is disabled, mark the preemption as delayed
     if (cpu_local->preempt_disable == 0)
-        sched_yield();
+        process_switch();
     else
         cpu_local->preempt_delayed = true;
 }

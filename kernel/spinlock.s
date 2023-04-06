@@ -5,7 +5,7 @@ global preempt_enable
 global spinlock_acquire
 global spinlock_release
 
-extern sched_yield
+extern process_switch
 extern interrupt_disable
 
 preempt_disable:
@@ -23,7 +23,7 @@ preempt_enable:
   ; If all of these conditions hold, preempt the current thread
   call interrupt_disable
   sub qword gs:[PerCPU.preempt_disable], 1
-  call sched_yield
+  call process_switch
   sub qword gs:[PerCPU.interrupt_disable], 1
   sti
   ret

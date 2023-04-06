@@ -29,7 +29,7 @@ err_t syscall_process_exit(void) {
 
 err_t syscall_process_yield(void) {
     interrupt_disable();
-    sched_yield();
+    process_switch();
     return 0;
 }
 

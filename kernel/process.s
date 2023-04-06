@@ -3,7 +3,7 @@
 global tss
 global tss_end
 global userspace_init
-global sched_yield
+global process_switch
 global sched_start
 global process_block
 global process_exit
@@ -140,8 +140,8 @@ userspace_init:
 sched_start:
   ; Get the first process to run
   call sched_replace_process
-  ; Skip the part of sched_yield where current process state is saved, since there is no current process yet
-  jmp sched_yield.from_no_process
+  ; Skip the part of process_switch where current process state is saved, since there is no current process yet
+  jmp process_switch.from_no_process
 
 ; Preempt the current process without returning it to the queue
 ; Takes a spinlock as argument. After saving process state, the spinlock is released.
@@ -161,9 +161,9 @@ process_block:
   mov rsp, gs:[PerCPU.idle_stack]
   ; Release the spinlock
   call spinlock_release
-  ; Get the next process to run and jump to the appropriate part of sched_yield
+  ; Get the next process to run and jump to the appropriate part of process_switch
   call sched_replace_process
-  jmp sched_yield.from_no_process
+  jmp process_switch.from_no_process
 
 ; Ends the current process
 ; Must be called with interrupts enabled and no locks held.
@@ -189,12 +189,12 @@ process_exit:
   call free
   ; Get the next process to run
   call sched_replace_process
-  ; Skip the part of sched_yield where current process state is saved, since there is no process now
-  jmp sched_yield.from_no_process
+  ; Skip the part of process_switch where current process state is saved, since there is no process now
+  jmp process_switch.from_no_process
 
 ; Preempt the current process and run a different one
 ; Must be called with interrupts disabled and no locks held.
-sched_yield:
+process_switch:
   mov rax, gs:[PerCPU.current_process]
   ; Save process state on the stack
   ; Since this function will only be called from kernel code, we only need to save the non-scratch registers.

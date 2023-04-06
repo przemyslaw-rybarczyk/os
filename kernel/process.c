@@ -88,7 +88,7 @@ err_t process_create(const u8 *file, size_t file_length, Process **process_ptr) 
     // Arguments to process_start()
     *--rsp = file_length;
     *--rsp = (u64)file;
-    // Used by sched_yield() - return address and saved registers
+    // Used by process_switch() - return address and saved registers
     // We set the return address to the entry point of process_start and zero all registers.
     *--rsp = (u64)process_start;
     *--rsp = 0;
