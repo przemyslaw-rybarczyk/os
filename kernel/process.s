@@ -67,10 +67,10 @@ syscall_handler:
   ; Save the user stack pointer and load the kernel stack pointer
   ; The user stack pointer is temporarily saved in the CPU-local data and then pushed to the kernel stack once it's loaded.
   ; We keep interrupts disabled while we do this to avoid an interrupt occurring with no stack set up.
-  mov [gs:PerCPU.user_rsp], rsp
-  mov rsp, [gs:PerCPU.current_process]
+  mov gs:[PerCPU.user_rsp], rsp
+  mov rsp, gs:[PerCPU.current_process]
   mov rsp, [rsp + Process.kernel_stack]
-  push qword [gs:PerCPU.user_rsp]
+  push qword gs:[PerCPU.user_rsp]
   sti
   ; Save all scratch registers except RAX
   push rcx
@@ -148,7 +148,7 @@ sched_start:
 ; This is provided so that a process can safely place itself in a process queue protected by a lock before calling this function.
 ; Must be called with interrupts disabled and only one lock held.
 process_block:
-  mov rax, [gs:PerCPU.current_process]
+  mov rax, gs:[PerCPU.current_process]
   ; Save process state
   push rbx
   push rbp
@@ -158,7 +158,7 @@ process_block:
   push r15
   mov [rax + Process.rsp], rsp
   ; Switch to the idle stack
-  mov rsp, [gs:PerCPU.idle_stack]
+  mov rsp, gs:[PerCPU.idle_stack]
   ; Release the spinlock
   call spinlock_release
   ; Get the next process to run and jump to the appropriate part of sched_yield
@@ -168,7 +168,7 @@ process_block:
 ; Ends the current process
 ; Must be called with interrupts enabled and no locks held.
 process_exit:
-  mov rbx, [gs:PerCPU.current_process]
+  mov rbx, gs:[PerCPU.current_process]
   ; Free the process contents
   ; This does not free any parts of the process control block that are necessary to switch back to the process running in kernel mode.
   mov rdi, rbx
@@ -177,7 +177,7 @@ process_exit:
   ; If a context switch occurred while the process is being freed, it wouldn't be possible to come back to it.
   call interrupt_disable
   ; Switch to the idle stack
-  mov rsp, [gs:PerCPU.idle_stack]
+  mov rsp, gs:[PerCPU.idle_stack]
   ; Free the PML4
   mov rdi, [rbx + Process.page_map]
   call page_free
@@ -195,7 +195,7 @@ process_exit:
 ; Preempt the current process and run a different one
 ; Must be called with interrupts disabled and no locks held.
 sched_yield:
-  mov rax, [gs:PerCPU.current_process]
+  mov rax, gs:[PerCPU.current_process]
   ; Save process state on the stack
   ; Since this function will only be called from kernel code, we only need to save the non-scratch registers.
   ; The instruction pointer was already saved on the stack when this function was called.
@@ -209,11 +209,11 @@ sched_yield:
   ; Set current_process to the next process to be run.
   call sched_switch_process
 .from_no_process:
-  mov rax, [gs:PerCPU.current_process]
+  mov rax, gs:[PerCPU.current_process]
   ; Restore the stack pointer
   mov rsp, [rax + Process.rsp]
   ; Set the RSP0 in the TSS
-  mov rdx, [gs:PerCPU.tss]
+  mov rdx, gs:[PerCPU.tss]
   mov rcx, [rax + Process.kernel_stack]
   mov [rdx + TSS.rsp0], rcx
   ; Restore process state
