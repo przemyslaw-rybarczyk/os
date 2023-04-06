@@ -136,8 +136,11 @@ void page_free(u64 page) {
 }
 
 // Returns the number of free pages.
-u64 get_free_memory_size(void) {
-    return page_stack_top - PAGE_STACK_BOTTOM;
+size_t get_free_memory_size(void) {
+    spinlock_acquire(&page_stack_lock);
+    size_t result = page_stack_top - PAGE_STACK_BOTTOM;
+    spinlock_release(&page_stack_lock);
+    return result;
 }
 
 // Used to protect access to the kernel page map
