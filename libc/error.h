@@ -14,3 +14,5 @@ typedef enum err_t : u64 {
     ERR_WRONG_HANDLE_TYPE,
     ERR_INVALID_ADDRESS,
 } err_t;
+
+#define ERR_KERNEL_MAX 65535

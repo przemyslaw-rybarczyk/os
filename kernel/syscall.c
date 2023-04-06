@@ -49,4 +49,5 @@ const void * const syscalls[] = {
     syscall_channel_receive,
     syscall_message_reply,
     syscall_handle_free,
+    syscall_message_reply_error,
 };

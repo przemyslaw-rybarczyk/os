@@ -14,6 +14,7 @@
 typedef struct Message {
     size_t data_size;
     u8 *data;
+    err_t *reply_error;
     Message **reply;
     Process *blocked_sender;
     Message *next_message;
@@ -46,13 +47,29 @@ void message_free(Message *message) {
     free(message);
 }
 
+// Reply to a message
 err_t message_reply(Message *message, Message *reply) {
+    // Set the reply error code to 0 (success)
+    if (message->reply_error != NULL)
+        *(message->reply_error) = 0;
     // Set the reply if one is wanted
     // Otherwise, free the reply since it's no longer needed
     if (message->reply != NULL)
         *(message->reply) = reply;
     else
         message_free(reply);
+    // If there is a sender blocked waiting for a reply, unblock it
+    if (message->blocked_sender != NULL)
+        process_enqueue(message->blocked_sender);
+    message->blocked_sender = NULL;
+    return 0;
+}
+
+// Reply to a message with an error code
+err_t message_reply_error(Message *message, err_t error) {
+    // Set the reply error code if one is wanted
+    if (message->reply_error != NULL)
+        *(message->reply_error) = error;
     // If there is a sender blocked waiting for a reply, unblock it
     if (message->blocked_sender != NULL)
         process_enqueue(message->blocked_sender);
@@ -104,7 +121,9 @@ err_t channel_send(Channel *channel, Message *message, Message **reply) {
         interrupt_enable();
         spinlock_acquire(&channel->lock);
     }
+    err_t reply_error;
     // Set the reply information
+    message->reply_error = &reply_error;
     message->reply = reply;
     message->blocked_sender = cpu_local->current_process;
     // Add the message to the channel queue
@@ -125,7 +144,7 @@ err_t channel_send(Channel *channel, Message *message, Message **reply) {
     interrupt_disable();
     process_block(&channel->lock);
     interrupt_enable();
-    return 0;
+    return reply_error;
 }
 
 // Receive a message from a channel
@@ -211,6 +230,7 @@ err_t syscall_message_read(size_t i, void *data) {
     return 0;
 }
 
+// Send a message on a channel and wait for a reply
 err_t syscall_channel_call(size_t channel_i, size_t message_size, void *message_data_user, size_t *reply_i_ptr) {
     err_t err;
     Handle channel_handle;
@@ -243,10 +263,8 @@ err_t syscall_channel_call(size_t channel_i, size_t message_size, void *message_
     // Send the message
     Message *reply;
     err = channel_send(channel_handle.channel, message, &reply);
-    if (err) {
-        message_free(message);
+    if (err)
         return err;
-    }
     // Add the reply handle
     if (reply_i_ptr != NULL) {
         err = process_add_handle((Handle){HANDLE_TYPE_REPLY, {.message = reply}}, reply_i_ptr);
@@ -256,6 +274,7 @@ err_t syscall_channel_call(size_t channel_i, size_t message_size, void *message_
     return 0;
 }
 
+// Get a message from a channel
 err_t syscall_channel_receive(size_t channel_i, size_t *message_i_ptr) {
     err_t err;
     Handle channel_handle;
@@ -309,6 +328,27 @@ err_t syscall_message_reply(size_t message_i, size_t reply_size, void *reply_dat
     }
     // Send the reply
     err = message_reply(message_handle.message, reply);
+    if (err)
+        return err;
+    // Free message and handle
+    process_clear_handle(message_i);
+    return 0;
+}
+
+err_t syscall_message_reply_error(size_t message_i, err_t error) {
+    err_t err;
+    Handle message_handle;
+    // Check error code is not reserved by the kernel
+    if (error <= ERR_KERNEL_MAX)
+        return ERR_INVALID_ARG;
+    // Get the message from handle
+    err = process_get_handle(message_i, &message_handle);
+    if (err)
+        return err;
+    if (message_handle.type != HANDLE_TYPE_MESSAGE)
+        return ERR_WRONG_HANDLE_TYPE;
+    // Send the error
+    err = message_reply_error(message_handle.message, error);
     if (err)
         return err;
     // Free message and handle

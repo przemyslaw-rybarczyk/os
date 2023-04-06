@@ -16,3 +16,4 @@ err_t channel_call(size_t channel_i, size_t message_size, void *message_data, si
 err_t channel_receive(size_t channel_i, size_t *message_i);
 err_t message_reply(size_t message_i, size_t reply_size, void *reply_data);
 void handle_free(size_t i);
+err_t message_reply_error(size_t message_i, err_t error);

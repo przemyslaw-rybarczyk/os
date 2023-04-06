@@ -8,6 +8,7 @@ global channel_call
 global channel_receive
 global message_reply
 global handle_free
+global message_reply_error
 
 ; This file implements the C interface for system calls
 
@@ -58,5 +59,10 @@ message_reply:
 
 handle_free:
   mov rax, 9
+  syscall
+  ret
+
+message_reply_error:
+  mov rax, 10
   syscall
   ret
