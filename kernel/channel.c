@@ -192,7 +192,7 @@ static err_t verify_user_buffer(void *start, size_t length) {
 }
 
 // Returns the length of the message
-err_t syscall_message_get_length(size_t i, size_t *length) {
+err_t syscall_message_get_length(handle_t i, size_t *length) {
     err_t err;
     Handle handle;
     // Get the message from handle
@@ -212,7 +212,7 @@ err_t syscall_message_get_length(size_t i, size_t *length) {
 
 // Reads the message data into the provided userspace buffer
 // The buffer must be large enough to fit the entire message.
-err_t syscall_message_read(size_t i, void *data) {
+err_t syscall_message_read(handle_t i, void *data) {
     err_t err;
     Handle handle;
     // Get the message from handle
@@ -231,7 +231,7 @@ err_t syscall_message_read(size_t i, void *data) {
 }
 
 // Send a message on a channel and wait for a reply
-err_t syscall_channel_call(size_t channel_i, size_t message_size, void *message_data_user, size_t *reply_i_ptr) {
+err_t syscall_channel_call(handle_t channel_i, size_t message_size, void *message_data_user, handle_t *reply_i_ptr) {
     err_t err;
     Handle channel_handle;
     // Verify buffers are valid
@@ -239,7 +239,7 @@ err_t syscall_channel_call(size_t channel_i, size_t message_size, void *message_
     if (err)
         return err;
     if (reply_i_ptr != NULL) {
-        err = verify_user_buffer(reply_i_ptr, sizeof(size_t));
+        err = verify_user_buffer(reply_i_ptr, sizeof(handle_t));
         if (err)
             return err;
     }
@@ -275,11 +275,11 @@ err_t syscall_channel_call(size_t channel_i, size_t message_size, void *message_
 }
 
 // Get a message from a channel
-err_t syscall_channel_receive(size_t channel_i, size_t *message_i_ptr) {
+err_t syscall_channel_receive(handle_t channel_i, handle_t *message_i_ptr) {
     err_t err;
     Handle channel_handle;
     // Verify buffer is valid
-    err = verify_user_buffer(message_i_ptr, sizeof(size_t));
+    err = verify_user_buffer(message_i_ptr, sizeof(handle_t));
     if (err)
         return err;
     // Get the channel from handle
@@ -302,7 +302,7 @@ err_t syscall_channel_receive(size_t channel_i, size_t *message_i_ptr) {
     return 0;
 }
 
-err_t syscall_message_reply(size_t message_i, size_t reply_size, void *reply_data_user) {
+err_t syscall_message_reply(handle_t message_i, size_t reply_size, void *reply_data_user) {
     err_t err;
     Handle message_handle;
     // Verify buffer is valid
@@ -335,7 +335,7 @@ err_t syscall_message_reply(size_t message_i, size_t reply_size, void *reply_dat
     return 0;
 }
 
-err_t syscall_message_reply_error(size_t message_i, err_t error) {
+err_t syscall_message_reply_error(handle_t message_i, err_t error) {
     err_t err;
     Handle message_handle;
     // Check error code is not reserved by the kernel

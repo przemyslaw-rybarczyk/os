@@ -34,12 +34,12 @@ err_t handle_list_init(HandleList *list) {
 
 // Free a handle list
 void handle_list_free(HandleList *list) {
-    for (size_t i = 0; i < list->length; i++)
+    for (handle_t i = 0; i < list->length; i++)
         handle_free(list->handles[i]);
     free(list->handles);
 }
 
-void handle_clear(HandleList *list, size_t i) {
+void handle_clear(HandleList *list, handle_t i) {
     if (i >= list->length)
         return;
     handle_free(list->handles[i]);
@@ -58,10 +58,10 @@ static err_t handle_list_extend(HandleList *list, size_t new_length) {
 }
 
 // Add a handle to the list in the first empty slot
-err_t handle_add(HandleList *list, Handle handle, size_t *i_ptr) {
+err_t handle_add(HandleList *list, Handle handle, handle_t *i_ptr) {
     err_t err;
     // Search for the first empty slot
-    for (size_t i = 0; i < list->length; i++) {
+    for (handle_t i = 0; i < list->length; i++) {
         if (list->handles[i].type == HANDLE_TYPE_EMPTY) {
             list->handles[i] = handle;
             *i_ptr = i;
@@ -69,7 +69,7 @@ err_t handle_add(HandleList *list, Handle handle, size_t *i_ptr) {
         }
     }
     // If there are none, extend the list
-    size_t i = list->length;
+    handle_t i = list->length;
     err = handle_list_extend(list, 2 * list->length);
     if (err)
         return err;
@@ -79,7 +79,7 @@ err_t handle_add(HandleList *list, Handle handle, size_t *i_ptr) {
 }
 
 // Remove a handle from a list
-err_t handle_remove(HandleList *list, size_t i) {
+err_t handle_remove(HandleList *list, handle_t i) {
     if (i >= list->length)
         return ERR_INVALID_HANDLE;
     if (list->handles[i].type == HANDLE_TYPE_EMPTY)
@@ -90,7 +90,7 @@ err_t handle_remove(HandleList *list, size_t i) {
 }
 
 // Get the contents of a handle
-err_t handle_get(HandleList *list, size_t i, Handle *handle) {
+err_t handle_get(HandleList *list, handle_t i, Handle *handle) {
     if (i >= list->length)
         return ERR_INVALID_HANDLE;
     if (list->handles[i].type == HANDLE_TYPE_EMPTY)
@@ -100,7 +100,7 @@ err_t handle_get(HandleList *list, size_t i, Handle *handle) {
 }
 
 // Set the contents of a handle
-err_t handle_set(HandleList *list, size_t i, Handle handle) {
+err_t handle_set(HandleList *list, handle_t i, Handle handle) {
     err_t err;
     // If the handle is too large, try extend the list so that it fits
     if (i >= list->length) {

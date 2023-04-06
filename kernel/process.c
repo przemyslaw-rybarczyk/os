@@ -220,14 +220,14 @@ void sched_switch_process(void) {
     spinlock_release(&scheduler_lock);
 }
 
-err_t process_get_handle(size_t i, Handle *handle) {
+err_t process_get_handle(handle_t i, Handle *handle) {
     return handle_get(&cpu_local->current_process->handles, i, handle);
 }
 
-err_t process_add_handle(Handle handle, size_t *i_ptr) {
+err_t process_add_handle(Handle handle, handle_t *i_ptr) {
     return handle_add(&cpu_local->current_process->handles, handle, i_ptr);
 }
 
-void process_clear_handle(size_t i) {
+void process_clear_handle(handle_t i) {
     return handle_clear(&cpu_local->current_process->handles, i);
 }

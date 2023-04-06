@@ -13,7 +13,7 @@ void main(void) {
     if (err)
         return;
     while (1) {
-        size_t reply_msg;
+        handle_t reply_msg;
         err = channel_call(1, sizeof(c), &c, &reply_msg);
         if (err)
             continue;

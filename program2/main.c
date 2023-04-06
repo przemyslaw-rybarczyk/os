@@ -5,7 +5,7 @@
 void main(void) {
     err_t err;
     while (1) {
-        size_t message;
+        handle_t message;
         err = channel_receive(1, &message);
         if (err)
             continue;

@@ -33,7 +33,7 @@ err_t syscall_process_yield(void) {
     return 0;
 }
 
-err_t syscall_handle_free(size_t i) {
+err_t syscall_handle_free(handle_t i) {
     process_clear_handle(i);
     return 0;
 }
