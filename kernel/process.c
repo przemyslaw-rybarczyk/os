@@ -135,7 +135,7 @@ err_t process_setup(void) {
     err = process_create(included_file_program2, included_file_program2_end - included_file_program2, &server_process);
     if (err)
         return err;
-    err = handle_set(&server_process->handles, 1, (Handle){HANDLE_TYPE_CHANNEL, {.channel = channel}});
+    err = handle_set(&server_process->handles, 1, (Handle){HANDLE_TYPE_CHANNEL_OUT, {.channel = channel}});
     if (err)
         return err;
     for (u64 i = 0; i < 8; i++) {
@@ -155,7 +155,7 @@ err_t process_setup(void) {
         if (err)
             return err;
         channel_add_ref(channel);
-        err = handle_set(&client_process->handles, 1, (Handle){HANDLE_TYPE_CHANNEL, {.channel = channel}});
+        err = handle_set(&client_process->handles, 1, (Handle){HANDLE_TYPE_CHANNEL_IN, {.channel = channel}});
         if (err)
             return err;
         err = process_enqueue(client_process);

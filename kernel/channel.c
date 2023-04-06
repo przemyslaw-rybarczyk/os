@@ -247,7 +247,7 @@ err_t syscall_channel_call(size_t channel_i, size_t message_size, void *message_
     err = process_get_handle(channel_i, &channel_handle);
     if (err)
         return err;
-    if (channel_handle.type != HANDLE_TYPE_CHANNEL)
+    if (channel_handle.type != HANDLE_TYPE_CHANNEL_IN)
         return ERR_WRONG_HANDLE_TYPE;
     // Copy the message data
     void *message_data = malloc(message_size);
@@ -286,7 +286,7 @@ err_t syscall_channel_receive(size_t channel_i, size_t *message_i_ptr) {
     err = process_get_handle(channel_i, &channel_handle);
     if (err)
         return err;
-    if (channel_handle.type != HANDLE_TYPE_CHANNEL)
+    if (channel_handle.type != HANDLE_TYPE_CHANNEL_OUT)
         return ERR_WRONG_HANDLE_TYPE;
     // Receive a message
     Message *message;
