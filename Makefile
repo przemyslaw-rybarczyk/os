@@ -6,7 +6,7 @@ KERNEL_CFLAGS = -target x86_64-pc-none-elf -ffreestanding -masm=intel -mcmodel=k
 KERNEL_LDFLAGS = -target x86_64-pc-none-elf -ffreestanding -static -nostdlib -O2
 
 # Flags for building programs and libraries
-USER_CFLAGS = -target x86_64-pc-none-elf -ffreestanding -masm=intel -mcmodel=kernel -mno-red-zone -mno-x87 -mno-mmx -mno-sse -mno-sse2 -fno-PIC -nostdlibinc -O2 -Wall -Wextra -fomit-frame-pointer -Ilibc
+USER_CFLAGS = -target x86_64-pc-none-elf -ffreestanding -masm=intel -mno-red-zone -mno-x87 -mno-mmx -mno-sse -mno-sse2 -fno-PIC -nostdlibinc -O2 -Wall -Wextra -fomit-frame-pointer -Ilibc
 USER_LDFLAGS = -target x86_64-pc-none-elf -ffreestanding -static -nostdlib -O2
 
 # All subprojects other than the kernel are either programs or libraries
