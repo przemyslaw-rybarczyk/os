@@ -21,11 +21,8 @@ preempt_enable:
   cmp qword gs:[PerCPU.interrupt_disable], 0
   jne .no_preempt
   ; If all of these conditions hold, preempt the current thread
-  call interrupt_disable
   sub qword gs:[PerCPU.preempt_disable], 1
   call process_switch
-  sub qword gs:[PerCPU.interrupt_disable], 1
-  sti
   ret
   ; Otherwise just decrement the preempt disable counter
 .no_preempt:

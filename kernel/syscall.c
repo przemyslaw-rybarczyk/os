@@ -28,7 +28,6 @@ err_t syscall_process_exit(void) {
 }
 
 err_t syscall_process_yield(void) {
-    interrupt_disable();
     process_switch();
     return 0;
 }

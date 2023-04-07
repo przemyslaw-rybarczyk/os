@@ -116,9 +116,7 @@ err_t channel_send(Channel *channel, Message *message, Message **reply) {
     // If the queue is full, block until there is space
     while (channel->queue_length >= CHANNEL_MAX_QUEUE_LENGTH) {
         process_queue_add(&channel->blocked_senders, cpu_local->current_process);
-        interrupt_disable();
         process_block(&channel->lock);
-        interrupt_enable();
         spinlock_acquire(&channel->lock);
     }
     err_t reply_error;
@@ -141,9 +139,7 @@ err_t channel_send(Channel *channel, Message *message, Message **reply) {
         process_enqueue(channel->blocked_receiver);
     channel->blocked_receiver = NULL;
     // Block and wait for a reply
-    interrupt_disable();
     process_block(&channel->lock);
-    interrupt_enable();
     return reply_error;
 }
 
@@ -153,9 +149,7 @@ err_t channel_receive(Channel *channel, Message **message_ptr) {
     // If there are no messages in the queue, block until a message arrives
     while (channel->queue_start == NULL) {
         channel->blocked_receiver = cpu_local->current_process;
-        interrupt_disable();
         process_block(&channel->lock);
-        interrupt_enable();
         spinlock_acquire(&channel->lock);
     }
     // Remove a message from the queue

@@ -146,8 +146,10 @@ sched_start:
 ; Preempt the current process without returning it to the queue
 ; Takes a spinlock as argument. After saving process state, the spinlock is released.
 ; This is provided so that a process can safely place itself in a process queue protected by a lock before calling this function.
-; Must be called with interrupts disabled and only one lock held.
+; Must be called with no locks held other than the one passed as argument.
 process_block:
+  ; Disable interrupts
+  call interrupt_disable
   mov rax, gs:[PerCPU.current_process]
   ; Save process state
   push rbx
@@ -156,6 +158,7 @@ process_block:
   push r13
   push r14
   push r15
+  push qword gs:[PerCPU.interrupt_disable]
   mov [rax + Process.rsp], rsp
   ; Switch to the idle stack
   mov rsp, gs:[PerCPU.idle_stack]
@@ -166,7 +169,7 @@ process_block:
   jmp process_switch.from_no_process
 
 ; Ends the current process
-; Must be called with interrupts enabled and no locks held.
+; Must be called with no locks held.
 process_exit:
   mov rbx, gs:[PerCPU.current_process]
   ; Free the process contents
@@ -193,8 +196,10 @@ process_exit:
   jmp process_switch.from_no_process
 
 ; Preempt the current process and run a different one
-; Must be called with interrupts disabled and no locks held.
+; Must be called with no locks held.
 process_switch:
+  ; Disable interrupts
+  call interrupt_disable
   mov rax, gs:[PerCPU.current_process]
   ; Save process state on the stack
   ; Since this function will only be called from kernel code, we only need to save the non-scratch registers.
@@ -205,6 +210,7 @@ process_switch:
   push r13
   push r14
   push r15
+  push qword gs:[PerCPU.interrupt_disable]
   mov [rax + Process.rsp], rsp
   ; Set current_process to the next process to be run.
   call sched_switch_process
@@ -216,6 +222,7 @@ process_switch:
   mov rdx, gs:[PerCPU.tss]
   mov rcx, [rax + Process.kernel_stack]
   mov [rdx + TSS.rsp0], rcx
+  pop qword gs:[PerCPU.interrupt_disable]
   ; Restore process state
   pop r15
   pop r14
@@ -228,6 +235,8 @@ process_switch:
   mov cr3, rdx
   ; Ignore any delayed preemptions
   mov qword gs:[PerCPU.preempt_delayed], 0
+  ; Re-enable interrupts
+  call interrupt_enable
   ; Return to the process
   ret
 
@@ -237,8 +246,6 @@ process_switch:
 ; Takes the following arugments from the stack (listed top to bottom):
 ; const u8 *file, size_t file_length, u64 arg
 process_start:
-  ; Enable interrupts
-  call interrupt_enable
   ; Load the process
   pop rdi
   pop rsi

@@ -88,8 +88,8 @@ err_t process_create(const u8 *file, size_t file_length, Process **process_ptr) 
     // Arguments to process_start()
     *--rsp = file_length;
     *--rsp = (u64)file;
-    // Used by process_switch() - return address and saved registers
-    // We set the return address to the entry point of process_start and zero all registers.
+    // Used by process_switch() - return address, saved registers and interrupt disable count
+    // We set the return address to the entry point of process_start, zero all registers, and set interrupts as disabled once.
     *--rsp = (u64)process_start;
     *--rsp = 0;
     *--rsp = 0;
@@ -97,6 +97,7 @@ err_t process_create(const u8 *file, size_t file_length, Process **process_ptr) 
     *--rsp = 0;
     *--rsp = 0;
     *--rsp = 0;
+    *--rsp = 1;
     process->rsp = rsp;
     *process_ptr = process;
     return 0;
