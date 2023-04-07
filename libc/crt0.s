@@ -1,6 +1,7 @@
 global _start
 
 extern main
+extern _alloc_init
 
 section .rodata
 
@@ -30,6 +31,10 @@ _start:
   jnz .fail
   ; Set the stack pointer
   mov rsp, STACK_START + STACK_LENGTH
+  ; Call initialization functions
+  call _alloc_init
+  test rax, rax
+  jnz .fail
 .start:
   ; Call main()
   call main

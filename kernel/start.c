@@ -27,7 +27,7 @@ void kernel_start(void *stack) {
         print_string("Failed to initialize paging structures\n");
         goto halt;
     }
-    if (alloc_init() != 0) {
+    if (_alloc_init() != 0) {
         print_string("Failed to initialize memory allocator\n");
         goto halt;
     }
