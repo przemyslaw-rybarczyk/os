@@ -212,6 +212,8 @@ process_switch:
   push r15
   push qword gs:[PerCPU.interrupt_disable]
   mov [rax + Process.rsp], rsp
+  ; Switch to the idle stack
+  mov rsp, gs:[PerCPU.idle_stack]
   ; Set current_process to the next process to be run.
   call sched_switch_process
 .from_no_process:
