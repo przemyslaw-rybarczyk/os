@@ -17,8 +17,11 @@
 #include "smp.h"
 #include "stack.h"
 
+void _string_init(void);
+
 void kernel_start(void *stack) {
     framebuffer_init();
+    _string_init();
     if (interrupt_init(true) != 0) {
         print_string("Failed to initialize interrupt handlers\n");
         goto halt;
