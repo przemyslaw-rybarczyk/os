@@ -72,15 +72,20 @@ $(eval $(call common_template,kernel,,$(KERNEL_CFLAGS)))
 # Defines the rules for building a library
 # $(1) = name of library, $(2) = library dependencies
 define library_template =
+
 $$(eval $$(call common_template,$(1),$(2),$$(USER_CFLAGS)))
+
+$$(BUILD)/$(1)/$(1).a: $$($(1)_OBJECTS) $$(foreach dep,$(2),$$(BUILD)/$$(dep)/$$(dep).a)
+	ar rcs $$@ $$($(1)_OBJECTS) $$(foreach dep,$(2),$$(BUILD)/$$(dep)/$$(dep).a)
+
 endef
 
 # Defines the rules for building a program
 # $(1) = name of program, $(2) = library dependencies
 define program_template =
 
-$$(BUILD)/$(1)/$(1).bin: $$($(1)_OBJECTS) $$(foreach dep,$(2),$$($$(dep)_OBJECTS))
-	clang $$(USER_LDFLAGS) $$($(1)_OBJECTS) $$(foreach dep,$(2),$$($$(dep)_OBJECTS)) -o $$@
+$$(BUILD)/$(1)/$(1).bin: $$($(1)_OBJECTS) $$(foreach dep,$(2),$$(BUILD)/$$(dep)/$$(dep).a)
+	clang $$(USER_LDFLAGS) $$($(1)_OBJECTS) $$(foreach dep,$(2),$$(BUILD)/$$(dep)/$$(dep).a) -o $$@
 
 $$(eval $$(call common_template,$(1),$(2),$$(USER_CFLAGS)))
 
