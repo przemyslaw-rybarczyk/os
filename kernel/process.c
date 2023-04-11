@@ -126,44 +126,13 @@ err_t process_enqueue(Process *process) {
 }
 
 // Initialize processes
-// Creates a number of client processes communitcating with a server process through a channel.
 err_t process_setup(void) {
     err_t err;
-    Channel *channel = channel_alloc();
-    if (channel == NULL)
-        return ERR_NO_MEMORY;
-    Process *server_process;
-    err = process_create(included_file_program2, included_file_program2_end - included_file_program2, &server_process);
+    Process *client_process;
+    err = process_create(included_file_program1, included_file_program1_end - included_file_program1, &client_process);
     if (err)
         return err;
-    err = handle_set(&server_process->handles, 1, (Handle){HANDLE_TYPE_CHANNEL_OUT, {.channel = channel}});
-    if (err)
-        return err;
-    for (u64 i = 0; i < 8; i++) {
-        Process *client_process;
-        err = process_create(included_file_program1, included_file_program1_end - included_file_program1, &client_process);
-        if (err)
-            return err;
-        u8 *message_data = malloc(sizeof(u64));
-        if (message_data == NULL)
-            return ERR_NO_MEMORY;
-        u64 arg = 'A' + i;
-        memcpy(message_data, &arg, sizeof(u64));
-        Message *message = message_alloc(sizeof(u64), message_data);
-        if (message == NULL)
-            return ERR_NO_MEMORY;
-        err = handle_set(&client_process->handles, 0, (Handle){HANDLE_TYPE_MESSAGE, {.message = message}});
-        if (err)
-            return err;
-        channel_add_ref(channel);
-        err = handle_set(&client_process->handles, 1, (Handle){HANDLE_TYPE_CHANNEL_IN, {.channel = channel}});
-        if (err)
-            return err;
-        err = process_enqueue(client_process);
-        if (err)
-            return err;
-    }
-    err = process_enqueue(server_process);
+    err = process_enqueue(client_process);
     if (err)
         return err;
     return 0;
