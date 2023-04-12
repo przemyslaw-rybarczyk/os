@@ -21,7 +21,7 @@
 
 #endif
 
-#define MALLOC_ALIGNMENT 8
+#define MALLOC_ALIGNMENT 16
 #define INIT_HEAP_SIZE (1ull << 20)
 #define MIN_HEAP_EXTEND_SIZE (1ull << 20)
 
