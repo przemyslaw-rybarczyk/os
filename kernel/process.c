@@ -17,10 +17,26 @@
 
 #define RFLAGS_IF (1ull << 9)
 
+typedef struct FXSAVEArea {
+    u16 fcw;
+    u16 fsw;
+    u8 ftw;
+    u8 reserved1;
+    u16 fop;
+    u64 fip;
+    u64 fdp;
+    u32 mxcsr;
+    u32 mxcsr_mask;
+    u64 mm[2][8];
+    u64 xmm[2][16];
+    u64 reserved[12];
+} __attribute__((packed)) FXSAVEArea;
+
 typedef struct Process {
     void *rsp;
     void *kernel_stack;
     u64 page_map; // physical address of the PML4
+    FXSAVEArea *fxsave_area;
     HandleList handles;
     struct Process *next_process;
 } Process;
@@ -59,11 +75,21 @@ Process *process_queue_remove(ProcessQueue *queue) {
 // The process is not placed in the queue.
 err_t process_create(const u8 *file, size_t file_length, Process **process_ptr) {
     err_t err;
+    // Allocate a process control block
     Process *process = malloc(sizeof(Process));
     if (process == NULL) {
         err = ERR_NO_MEMORY;
         goto fail_process_alloc;
     }
+    // Allocate the FXSAVE area and initialize it with default values
+    process->fxsave_area = malloc(sizeof(FXSAVEArea));
+    if (process->fxsave_area == NULL) {
+        err = ERR_NO_MEMORY;
+        goto fail_fxsave_area_alloc;
+    }
+    memset(process->fxsave_area, 0, sizeof(FXSAVEArea));
+    process->fxsave_area->fcw = 0x037F;
+    process->fxsave_area->mxcsr = 0x00001F80u;
     // Allocate a process page map
     u64 page_map = page_alloc_clear();
     if (page_map == 0) {
@@ -106,6 +132,8 @@ fail_handle_list_init:
 fail_stack_alloc:
     page_free(process->page_map);
 fail_page_map_alloc:
+    free(process->fxsave_area);
+fail_fxsave_area_alloc:
     free(process);
 fail_process_alloc:
     return err;

@@ -26,6 +26,7 @@ struc Process
   .rsp: resq 1
   .kernel_stack: resq 1
   .page_map: resq 1
+  .fxsave_area: resq 1
 endstruc
 
 SEGMENT_KERNEL_CODE equ 0x08
@@ -159,6 +160,8 @@ process_block:
   push r14
   push r15
   push qword gs:[PerCPU.interrupt_disable]
+  mov rcx, [rax + Process.fxsave_area]
+  o64 fxsave [rcx]
   mov [rax + Process.rsp], rsp
   ; Switch to the idle stack
   mov rsp, gs:[PerCPU.idle_stack]
@@ -211,6 +214,8 @@ process_switch:
   push r14
   push r15
   push qword gs:[PerCPU.interrupt_disable]
+  mov rcx, [rax + Process.fxsave_area]
+  o64 fxsave [rcx]
   mov [rax + Process.rsp], rsp
   ; Switch to the idle stack
   mov rsp, gs:[PerCPU.idle_stack]
@@ -224,8 +229,10 @@ process_switch:
   mov rdx, gs:[PerCPU.tss]
   mov rcx, [rax + Process.kernel_stack]
   mov [rdx + TSS.rsp0], rcx
-  pop qword gs:[PerCPU.interrupt_disable]
   ; Restore process state
+  mov rcx, [rax + Process.fxsave_area]
+  o64 fxrstor [rcx]
+  pop qword gs:[PerCPU.interrupt_disable]
   pop r15
   pop r14
   pop r13

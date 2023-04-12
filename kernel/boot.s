@@ -73,10 +73,16 @@ VBE_SET_LINEAR_FB equ 1 << 14
 
 CPUID_NX equ 1 << 20
 CPUID_LONG_MODE equ 1 << 29
+CPUID_SSE equ 1 << 25
+CPUID_FXSR equ 1 << 24
 CR0_PE equ 1 << 0
+CR0_MP equ 1 << 1
+CR0_EM equ 1 << 2
 CR0_PG equ 1 << 31
 CR4_PAE equ 1 << 5
 CR4_PGE equ 1 << 7
+CR4_OSFXSR equ 1 << 9
+CR4_OSXMMEXCPT equ 1 << 10
 EFER_MSR equ 0xC0000080
 EFER_MSR_SCE equ 1 << 0
 EFER_MSR_LME equ 1 << 8
@@ -123,6 +129,8 @@ section .boot
 ; 7 - Failed to find appropriate video mode
 ; 8 - Failed to set video mode
 ; 9 - No NX bit
+; A - No SSE support
+; B - No FXSAVE/FSRSTOR support
 
 bits 16
 
@@ -155,12 +163,25 @@ test_cpuid:
   jz .no_long_mode
   test edx, CPUID_NX
   jz .no_nx
+  ; CPUID EAX=1h - Processor Info and Feature Bits
+  mov eax, 1
+  cpuid
+  test edx, CPUID_SSE
+  jz .no_sse
+  test edx, CPUID_FXSR
+  jz .no_sse
   jmp .end
 .no_long_mode:
   mov dl, '0'
   jmp error
 .no_nx:
   mov dl, '9'
+  jmp error
+.no_sse:
+  mov dl, 'A'
+  jmp error
+.no_fsxr:
+  mov dl, 'B'
   jmp error
 .end:
 
@@ -379,16 +400,7 @@ get_video_mode:
   mov dl, '8'
   jne error
 .end:
-
-enter_protected_mode:
-  ; Load GDT
-  lgdt [gdtr32]
-  ; Set PE in CR0
-  mov eax, cr0
-  or eax, CR0_PE
-  mov cr0, eax
-  ; Jump to enter protected mode
-  jmp SEGMENT_KERNEL_CODE:protected_mode_start
+  jmp enter_protected_mode
 
 ; Disk Address Packet
 ; The segment is set so that the offset is 0.
@@ -481,6 +493,16 @@ gdtr:
   dw gdt_length - 1
   dq gdt
 
+enter_protected_mode:
+  ; Load GDT
+  lgdt [gdtr32]
+  ; Set PE in CR0
+  mov eax, cr0
+  or eax, CR0_PE
+  mov cr0, eax
+  ; Jump to enter protected mode
+  jmp SEGMENT_KERNEL_CODE:protected_mode_start
+
 bits 32
 
 ; Set up paging and enter long mode
@@ -558,9 +580,9 @@ protected_mode_start:
   mov ecx, kernel_bss_length_dwords
   rep stosd
 
-  ; Enable PAE and PGE in CR4
+  ; Enable PAE, PGE, OSFXSR, and OSXMMEXCPT in CR4
   mov eax, cr4
-  or eax, CR4_PAE | CR4_PGE
+  or eax, CR4_PAE | CR4_PGE | CR4_OSFXSR | CR4_OSXMMEXCPT
   mov cr4, eax
   ; Set CR3 to address of PML4
   mov eax, pml4
@@ -570,9 +592,10 @@ protected_mode_start:
   rdmsr
   or eax, EFER_MSR_SCE | EFER_MSR_LME | EFER_MSR_NXE
   wrmsr
-  ; Set PG in CR0
+  ; Set PG and clear EM in CR0
   mov eax, cr0
-  or eax, CR0_PG
+  or eax, CR0_PG | CR0_MP
+  and eax, ~CR0_EM
   mov cr0, eax
   ; Load GDT
   lgdt [gdtr]
@@ -623,9 +646,9 @@ bits 32
 
 ; Set up paging and enter long mode
 protected_mode_start_ap:
-  ; Enable PAE and PGE in CR4
+  ; Enable PAE, PGE, OSFXSR, and OSXMMEXCPT in CR4
   mov eax, cr4
-  or eax, CR4_PAE | CR4_PGE
+  or eax, CR4_PAE | CR4_PGE | CR4_OSFXSR | CR4_OSXMMEXCPT
   mov cr4, eax
   ; Set CR3 to address of PML4
   mov eax, pml4
@@ -635,9 +658,10 @@ protected_mode_start_ap:
   rdmsr
   or eax, EFER_MSR_SCE | EFER_MSR_LME | EFER_MSR_NXE
   wrmsr
-  ; Set PG in CR0
+  ; Set PG and clear EM in CR0
   mov eax, cr0
-  or eax, CR0_PG
+  or eax, CR0_PG | CR0_MP
+  and eax, ~CR0_EM
   mov cr0, eax
   ; Load GDT
   lgdt [gdtr]
