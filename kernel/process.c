@@ -187,7 +187,7 @@ err_t process_setup(void) {
         return err;
     process_set_user_stack(client_process, included_file_program1, included_file_program1_end - included_file_program1);
     channel_add_ref(stdout_channel);
-    err = handle_set(&client_process->handles, 1, (Handle){HANDLE_TYPE_CHANNEL_IN, {.channel = stdout_channel}});
+    err = handle_set(&client_process->handles, 1, (Handle){HANDLE_TYPE_CHANNEL_SEND, {.channel = stdout_channel}});
     if (err)
         return err;
     process_enqueue(stdout_kernel_thread);
