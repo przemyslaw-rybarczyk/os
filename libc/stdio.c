@@ -7,15 +7,17 @@
 
 #include <syscalls.h>
 
+#define CHANNEL_STDOUT 1
+
 int putchar(int c) {
     c = (unsigned char)c;
-    print_char(c);
+    channel_call(CHANNEL_STDOUT, 1, &c, NULL);
     return c;
 }
 
 int puts(const char *s) {
     for (const char *p = s; *p != '\0'; p++)
-        print_char(*p);
+        putchar(*p);
     return 0;
 }
 
@@ -36,7 +38,7 @@ struct printf_target {
 static void printf_char(struct printf_target target, char c) {
     if (target.to_file) {
         // Print to stdout
-        print_char(c);
+        putchar(c);
     } else {
         // Write a byte to a buffer if it's within bounds
         if (*(target.offset) < target.size) {

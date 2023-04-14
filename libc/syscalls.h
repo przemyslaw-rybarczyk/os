@@ -7,7 +7,6 @@
 #define MAP_PAGES_EXECUTE (1ull << 1)
 
 err_t map_pages(u64 start, u64 length, u64 flags);
-void print_char(u64 c);
 _Noreturn void process_exit(void);
 void process_yield(void);
 err_t message_get_length(handle_t i, size_t *length);

@@ -11,15 +11,6 @@
 
 #define CHANNEL_MAX_QUEUE_LENGTH 16
 
-typedef struct Message {
-    size_t data_size;
-    u8 *data;
-    err_t *reply_error;
-    Message **reply;
-    Process *blocked_sender;
-    Message *next_message;
-} Message;
-
 typedef struct Channel {
     spinlock_t lock;
     size_t refcount;

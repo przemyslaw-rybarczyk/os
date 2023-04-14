@@ -3,7 +3,17 @@
 #include "types.h"
 #include "error.h"
 
-typedef struct Message Message;
+typedef struct Process Process;
+
+typedef struct Message {
+    size_t data_size;
+    u8 *data;
+    err_t *reply_error;
+    struct Message **reply;
+    Process *blocked_sender;
+    struct Message *next_message;
+} Message;
+
 typedef struct Channel Channel;
 
 Message *message_alloc(size_t data_size, u8 *data);

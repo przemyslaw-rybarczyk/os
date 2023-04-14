@@ -3,7 +3,7 @@
 
 #include "alloc.h"
 #include "channel.h"
-#include "elf.h"
+#include "framebuffer.h"
 #include "handle.h"
 #include "included_programs.h"
 #include "interrupt.h"
@@ -72,8 +72,8 @@ Process *process_queue_remove(ProcessQueue *queue) {
 }
 
 // Create a new process
-// The process is not placed in the queue.
-err_t process_create(const u8 *file, size_t file_length, Process **process_ptr) {
+// The process is not placed in the queue and its stack is not initialized.
+err_t process_create(Process **process_ptr) {
     err_t err;
     // Allocate a process control block
     Process *process = malloc(sizeof(Process));
@@ -109,7 +109,22 @@ err_t process_create(const u8 *file, size_t file_length, Process **process_ptr) 
     err = handle_list_init(&process->handles);
     if (err)
         goto fail_handle_list_init;
-    // Initialize the kernel stack contents
+    *process_ptr = process;
+    return 0;
+fail_handle_list_init:
+    stack_free(process->kernel_stack);
+fail_stack_alloc:
+    page_free(process->page_map);
+fail_page_map_alloc:
+    free(process->fxsave_area);
+fail_fxsave_area_alloc:
+    free(process);
+fail_process_alloc:
+    return err;
+}
+
+// Set up the stack for a user process running a given executable file
+void process_set_user_stack(Process *process, const u8 *file, size_t file_length) {
     u64 *rsp = process->kernel_stack;
     // Arguments to process_start()
     *--rsp = file_length;
@@ -125,22 +140,25 @@ err_t process_create(const u8 *file, size_t file_length, Process **process_ptr) 
     *--rsp = 0;
     *--rsp = 1;
     process->rsp = rsp;
-    *process_ptr = process;
-    return 0;
-fail_handle_list_init:
-    stack_free(process->kernel_stack);
-fail_stack_alloc:
-    page_free(process->page_map);
-fail_page_map_alloc:
-    free(process->fxsave_area);
-fail_fxsave_area_alloc:
-    free(process);
-fail_process_alloc:
-    return err;
+}
+
+// Set up the stack for a kernel thread with a given entry point
+void process_set_kernel_stack(Process *process, void *entry_point) {
+    u64 *rsp = process->kernel_stack;
+    // Used by process_switch() - same as in process_set_user_stack(), but with a different entry point
+    *--rsp = (u64)entry_point;
+    *--rsp = 0;
+    *--rsp = 0;
+    *--rsp = 0;
+    *--rsp = 0;
+    *--rsp = 0;
+    *--rsp = 0;
+    *--rsp = 1;
+    process->rsp = rsp;
 }
 
 // Add a process to the queue of running processes
-err_t process_enqueue(Process *process) {
+void process_enqueue(Process *process) {
     spinlock_acquire(&scheduler_lock);
     // Add the process to end of the queue
     process_queue_add(&scheduler_queue, process);
@@ -150,19 +168,30 @@ err_t process_enqueue(Process *process) {
         idle_core_list = idle_core_list->next_cpu;
     }
     spinlock_release(&scheduler_lock);
-    return 0;
 }
 
 // Initialize processes
 err_t process_setup(void) {
     err_t err;
+    stdout_channel = channel_alloc();
+    if (stdout_channel == NULL)
+        return ERR_NO_MEMORY;
+    Process *stdout_kernel_thread;
+    err = process_create(&stdout_kernel_thread);
+    if (err)
+        return err;
+    process_set_kernel_stack(stdout_kernel_thread, stdout_kernel_thread_main);
     Process *client_process;
-    err = process_create(included_file_program1, included_file_program1_end - included_file_program1, &client_process);
+    err = process_create(&client_process);
     if (err)
         return err;
-    err = process_enqueue(client_process);
+    process_set_user_stack(client_process, included_file_program1, included_file_program1_end - included_file_program1);
+    channel_add_ref(stdout_channel);
+    err = handle_set(&client_process->handles, 1, (Handle){HANDLE_TYPE_CHANNEL_IN, {.channel = stdout_channel}});
     if (err)
         return err;
+    process_enqueue(stdout_kernel_thread);
+    process_enqueue(client_process);
     return 0;
 }
 

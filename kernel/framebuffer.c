@@ -193,3 +193,27 @@ void print_hex_u16(u16 n) {
 void print_hex_u8(u8 n) {
     print_hex((u64)n, 2);
 }
+
+Channel *stdout_channel;
+
+// This thread reads messages from the stdout channel and prints their contents
+_Noreturn void stdout_kernel_thread_main(void) {
+    err_t err;
+    while (1) {
+        Message *message;
+        // Get message from stdout channel
+        err = channel_receive(stdout_channel, &message);
+        if (err)
+            continue;
+        // Print the contents of the message
+        framebuffer_lock();
+        for (size_t i = 0; i < message->data_size; i++)
+            print_char(message->data[i]);
+        framebuffer_unlock();
+        // Send an empty reply
+        Message *reply = message_alloc(0, NULL);
+        if (reply == NULL)
+            continue;
+        message_reply(message, reply);
+    }
+}

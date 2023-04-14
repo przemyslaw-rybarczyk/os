@@ -18,8 +18,10 @@ typedef struct ProcessQueue {
 
 void process_queue_add(ProcessQueue *queue, Process *process);
 Process *process_queue_remove(ProcessQueue *queue);
+err_t process_create(Process **process_ptr);
+void process_set_user_stack(Process *process, const u8 *file, size_t file_length);
 void userspace_init(void);
-err_t process_enqueue(Process *process);
+void process_enqueue(Process *process);
 err_t process_setup(void);
 _Noreturn void process_exit(void);
 void process_switch(void);

@@ -17,52 +17,47 @@ map_pages:
   syscall
   ret
 
-print_char:
-  mov rax, 1
-  syscall
-  ret
-
 process_exit:
-  mov rax, 2
+  mov rax, 1
   syscall
 
 process_yield:
-  mov rax, 3
+  mov rax, 2
   syscall
   ret
 
 message_get_length:
-  mov rax, 4
+  mov rax, 3
   syscall
   ret
 
 message_read:
-  mov rax, 5
+  mov rax, 4
   syscall
   ret
 
 channel_call:
-  mov rax, 6
+  mov rax, 5
   mov r10, rcx
   syscall
   ret
 
 channel_receive:
-  mov rax, 7
+  mov rax, 6
   syscall
   ret
 
 message_reply:
-  mov rax, 8
+  mov rax, 7
   syscall
   ret
 
 handle_free:
-  mov rax, 9
+  mov rax, 8
   syscall
   ret
 
 message_reply_error:
-  mov rax, 10
+  mov rax, 9
   syscall
   ret
