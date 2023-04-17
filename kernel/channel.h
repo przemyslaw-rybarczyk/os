@@ -7,7 +7,7 @@ typedef struct Process Process;
 
 typedef struct Message {
     size_t data_size;
-    u8 *data;
+    void *data;
     err_t *reply_error;
     struct Message **reply;
     Process *blocked_sender;
@@ -16,7 +16,7 @@ typedef struct Message {
 
 typedef struct Channel Channel;
 
-Message *message_alloc(size_t data_size, u8 *data);
+Message *message_alloc(size_t data_size, void *data);
 void message_free(Message *message);
 err_t message_reply(Message *message, Message *reply);
 err_t message_reply_error(Message *message, err_t error);

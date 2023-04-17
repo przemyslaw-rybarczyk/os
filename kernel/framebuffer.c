@@ -114,15 +114,6 @@ void framebuffer_unlock(void) {
     spinlock_release(&fb_lock);
 }
 
-// Set the color of pixel at (x,y) to (r,g,b)
-void put_pixel(u32 x, u32 y, u8 r, u8 g, u8 b) {
-    if (x >= fb_width || y >= fb_height)
-        return;
-    u32 color = ((r >> r_cut) << r_pos) | ((g >> g_cut) << g_pos) | ((b >> b_cut) << b_pos);
-    for (u8 i = 0; i < fb_bytes_per_pixel; i++)
-        framebuffer[y * fb_pitch + x * fb_bytes_per_pixel + i] = (u8)(color >> (8 * i));
-}
-
 // X position in characters to print the next character at
 // There is no Y position because characters are always printed at the bottom of the screen.
 static u32 cursor_x = 0;
@@ -194,26 +185,54 @@ void print_hex_u8(u8 n) {
     print_hex((u64)n, 2);
 }
 
-Channel *stdout_channel;
+typedef struct ScreenSize {
+    size_t width;
+    size_t height;
+} ScreenSize;
 
-// This thread reads messages from the stdout channel and prints their contents
-_Noreturn void stdout_kernel_thread_main(void) {
+Channel *framebuffer_channel;
+
+_Noreturn void framebuffer_kernel_thread_main(void) {
     err_t err;
+    ScreenSize screen_size = {fb_width, fb_height};
     while (1) {
         Message *message;
-        // Get message from stdout channel
-        err = channel_receive(stdout_channel, &message);
+        // Get message from framebuffer channel
+        err = channel_receive(framebuffer_channel, &message);
         if (err)
             continue;
-        // Print the contents of the message
+        // If message size is zero, reply with the screen size
+        if (message->data_size == 0) {
+            Message *reply = message_alloc(sizeof(ScreenSize), &screen_size);
+            if (reply == NULL)
+                message_reply_error(message, 1 << 16);
+            message_reply(message, reply);
+            message_free(message);
+            continue;
+        }
+        // Check that message size is correct
+        if (message->data_size != fb_height * fb_width * 3) {
+            message_reply_error(message, 1 << 16);
+            continue;
+        }
+        // Display the contents of the message
         framebuffer_lock();
-        for (size_t i = 0; i < message->data_size; i++)
-            print_char(message->data[i]);
+        for (size_t y = 0; y < fb_height; y++) {
+            for (size_t x = 0; x < fb_width; x++) {
+                for (int i = 0; i < 3; i++) {
+                    u8 *pixel = &message->data[(y * fb_width + x) * 3];
+                    u32 color = ((pixel[0] >> r_cut) << r_pos) | ((pixel[1] >> g_cut) << g_pos) | ((pixel[2] >> b_cut) << b_pos);
+                    for (u8 i = 0; i < fb_bytes_per_pixel; i++)
+                        framebuffer[y * fb_pitch + x * fb_bytes_per_pixel + i] = (u8)(color >> (8 * i));
+                }
+            }
+        }
         framebuffer_unlock();
-        // Send an empty reply
+        // Send an empty reply and free the message
         Message *reply = message_alloc(0, NULL);
         if (reply == NULL)
-            continue;
+            message_reply_error(message, 1 << 16);
         message_reply(message, reply);
+        message_free(message);
     }
 }

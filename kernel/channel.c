@@ -22,7 +22,7 @@ typedef struct Channel {
 } Channel;
 
 // Create a message from a given data buffer
-Message *message_alloc(size_t data_size, u8 *data) {
+Message *message_alloc(size_t data_size, void *data) {
     Message *message = malloc(sizeof(Message));
     if (message == NULL)
         return NULL;

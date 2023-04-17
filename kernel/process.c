@@ -173,24 +173,24 @@ void process_enqueue(Process *process) {
 // Initialize processes
 err_t process_setup(void) {
     err_t err;
-    stdout_channel = channel_alloc();
-    if (stdout_channel == NULL)
+    framebuffer_channel = channel_alloc();
+    if (framebuffer_channel == NULL)
         return ERR_NO_MEMORY;
-    Process *stdout_kernel_thread;
-    err = process_create(&stdout_kernel_thread);
+    Process *framebuffer_kernel_thread;
+    err = process_create(&framebuffer_kernel_thread);
     if (err)
         return err;
-    process_set_kernel_stack(stdout_kernel_thread, stdout_kernel_thread_main);
+    process_set_kernel_stack(framebuffer_kernel_thread, framebuffer_kernel_thread_main);
     Process *client_process;
     err = process_create(&client_process);
     if (err)
         return err;
     process_set_user_stack(client_process, included_file_program1, included_file_program1_end - included_file_program1);
-    channel_add_ref(stdout_channel);
-    err = handle_set(&client_process->handles, 1, (Handle){HANDLE_TYPE_CHANNEL_SEND, {.channel = stdout_channel}});
+    channel_add_ref(framebuffer_channel);
+    err = handle_set(&client_process->handles, 1, (Handle){HANDLE_TYPE_CHANNEL_SEND, {.channel = framebuffer_channel}});
     if (err)
         return err;
-    process_enqueue(stdout_kernel_thread);
+    process_enqueue(framebuffer_kernel_thread);
     process_enqueue(client_process);
     return 0;
 }
