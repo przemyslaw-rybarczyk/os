@@ -49,7 +49,7 @@ video_modes_ptr equ controller_info + 0x0E
 vbe_mode_info equ 0x0600
 vbe_mode_res equ vbe_mode_info + 0x12
 vbe_mode_bpp equ vbe_mode_info + 0x19
-vbe_mode_memory_model equ vbe_mode_info + 0x21
+vbe_mode_memory_model equ vbe_mode_info + 0x1B
 
 drive_index equ 0x07FC
 memory_ranges_length equ 0x07FE
@@ -136,7 +136,7 @@ bits 16
 
 start:
   ; Set data segment registers
-  mov ax, 0
+  xor ax, ax
   mov ds, ax
   mov es, ax
   mov ss, ax
@@ -317,20 +317,20 @@ get_video_mode:
   ; They are held in a list, the pointer to which is found in the controller info.
   ; An element of 0xFFFF indicates the end of the list.
   cld
-  ; SI holds the pointer to the next video mode.
+  ; FS:SI holds the pointer to the next video mode.
+  mov fs, [video_modes_ptr + 2]
   mov si, [video_modes_ptr]
   ; BP holds the number of the best supported mode.
   ; We use 0xFFFF as a default. Since it acts as a terminator, it's guaranteed to not be a valid mode.
   mov bp, 0xFFFF
   ; EDX holds the resolution of the best mode.
-  ; The upper 16 bits hold the horizontal resolution and the lower 16 the vertical.
-  ; This is done so the horizontal resolution takes priority in comparisons.
   xor edx, edx
   ; BL holds the bits per pixel of the best mode.
   xor bl, bl
 .loop:
   ; Read the next mode number into AX.
-  lodsw
+  mov ax, fs:[si]
+  add si, 2
   ; If it's 0xFFFF, we've reached the end.
   cmp ax, 0xFFFF
   je .loop_end
@@ -352,27 +352,28 @@ get_video_mode:
   not eax
   test eax, VBE_MODE_ATTR_SUPPORTED | VBE_MODE_ATTR_COLOR | VBE_MODE_ATTR_GRAPHICS | VBE_MODE_ATTR_LINEAR_FB
   jnz .loop
-  ; Get the mode's resolution and compare it to that of the current best mode.
-  ; We swap the horizontal and vertical resolution so the horizontal resolution is the upper 16 bits.
-  mov eax, [vbe_mode_res]
-  ror eax, 16
-  cmp eax, edx
-  jb .loop
   ; Check if the memory model is direct color.
   cmp byte [vbe_mode_memory_model], VBE_MODE_DIRECT_COLOR
   jne .loop
+  ; We require the bits per pixel to be a multiple of 8 not greater than 32 (that is, either 8, 16, 24, or 32).
+  mov al, [vbe_mode_bpp]
+  ror al, 3
+  cmp al, 4
+  ja .loop
   ; Compare bits per pixel to that of the current best mode.
   mov al, [vbe_mode_bpp]
   cmp al, bl
   jb .loop
-  ; We require the bits per pixel to be a multiple of 8 not greater than 32 (that is, either 8, 16, 24, or 32).
-  ror al, 3
-  cmp al, 4
-  ja .loop
+  ja .found_new_best_mode
+  ; Get the mode's resolution and compare it to that of the current best mode.
+  mov eax, [vbe_mode_res]
+  cmp eax, edx
+  jb .loop
+.found_new_best_mode:
   ; If we reach this point, we have found the new best mode.
   ; Update all the registers to reflect this fact.
   mov bp, cx
-  mov edx, eax
+  mov edx, [vbe_mode_res]
   mov bl, [vbe_mode_bpp]
   jmp .loop
 .loop_end:
