@@ -7,6 +7,8 @@
 
 #include "font.h"
 
+#define CPUID_SSSE3 (1ull << 9)
+
 #define FB_PML4E 0x1FDull
 
 typedef struct VBEModeInfo {
@@ -49,9 +51,9 @@ extern VBEModeInfo vbe_mode_info;
 
 // These variables contain constants used to draw to the framebuffer.
 static u8 *framebuffer;
-static u16 fb_pitch;
-static u16 fb_width;
-static u16 fb_height;
+u16 fb_pitch;
+u16 fb_width;
+u16 fb_height;
 static u8 fb_bytes_per_pixel;
 
 // When assembing the pixel color value, each 8-bit color component
@@ -63,6 +65,10 @@ static u8 g_cut;
 static u8 g_pos;
 static u8 b_cut;
 static u8 b_pos;
+
+// Data used for fast copy
+static bool fb_fast_copy;
+u8 __attribute__((aligned(16))) fb_fast_copy_shuf_mask[16];
 
 extern u64 pd_fb[PAGE_MAP_LEVEL_SIZE];
 
@@ -79,6 +85,28 @@ void framebuffer_init(void) {
     g_pos = vbe_mode_info.green_pos;
     b_cut = 8 - vbe_mode_info.blue_size;
     b_pos = vbe_mode_info.blue_pos;
+
+    // Get ECX from result of CPUID EAX=1h
+    u32 cpuid_1_ecx;
+    asm ("mov eax, 1; cpuid" : "=c"(cpuid_1_ecx) : : "eax", "ebx", "edx");
+
+    // Fast copy is only usable if the framebuffer uses a four bytes per pixel representation,
+    // with each color channel corresponding to one byte.
+    // Additionally, SSSE3 must be supported, since the fast copy function uses the PSHUFB instruction.
+    fb_fast_copy =
+        (cpuid_1_ecx & CPUID_SSSE3) != 0 &&
+        fb_bytes_per_pixel == 4 &&
+        r_cut == 0 && g_cut == 0 && b_cut == 0 &&
+        r_pos % 8 == 0 && g_pos % 8 == 0 && b_pos % 8 == 0;
+    // Create a mask for the PSHUFB instruction used for the fast copy
+    if (fb_fast_copy) {
+        memset(fb_fast_copy_shuf_mask, 0x80, 16);
+        for (int i = 0; i < 4; i++) {
+            fb_fast_copy_shuf_mask[4 * i + r_pos / 8] = 3 * i;
+            fb_fast_copy_shuf_mask[4 * i + g_pos / 8] = 3 * i + 1;
+            fb_fast_copy_shuf_mask[4 * i + b_pos / 8] = 3 * i + 2;
+        }
+    }
 
     // Map the framebuffer at the beginning of PML4E number FB_PML4E using large pages
     u32 fb_phys_addr = vbe_mode_info.phys_base_ptr;
@@ -192,10 +220,14 @@ typedef struct ScreenSize {
 
 Channel *framebuffer_channel;
 
+void framebuffer_fast_copy_32_bit(void *screen, const void *data);
+
 _Noreturn void framebuffer_kernel_thread_main(void) {
     err_t err;
     ScreenSize screen_size = {fb_width, fb_height};
+    size_t i = 0;
     while (1) {
+        i++;
         Message *message;
         // Get message from framebuffer channel
         err = channel_receive(framebuffer_channel, &message);
@@ -216,10 +248,13 @@ _Noreturn void framebuffer_kernel_thread_main(void) {
             continue;
         }
         // Display the contents of the message
+        // Use fast copy if it's available
         framebuffer_lock();
-        for (size_t y = 0; y < fb_height; y++) {
-            for (size_t x = 0; x < fb_width; x++) {
-                for (int i = 0; i < 3; i++) {
+        if (fb_fast_copy) {
+            framebuffer_fast_copy_32_bit(framebuffer, message->data);
+        } else {
+            for (size_t y = 0; y < fb_height; y++) {
+                for (size_t x = 0; x < fb_width; x++) {
                     u8 *pixel = &message->data[(y * fb_width + x) * 3];
                     u32 color = ((pixel[0] >> r_cut) << r_pos) | ((pixel[1] >> g_cut) << g_pos) | ((pixel[2] >> b_cut) << b_pos);
                     for (u8 i = 0; i < fb_bytes_per_pixel; i++)
@@ -227,6 +262,9 @@ _Noreturn void framebuffer_kernel_thread_main(void) {
                 }
             }
         }
+        // Print the frame counter
+        cursor_x = 0;
+        print_hex_u64(i);
         framebuffer_unlock();
         // Send an empty reply and free the message
         Message *reply = message_alloc(0, NULL);

@@ -56,9 +56,6 @@ void kernel_start(void *stack) {
     apic_init();
     smp_init();
     pit_init();
-    framebuffer_lock();
-    print_string("BSP finished initialization\n");
-    framebuffer_unlock();
     smp_init_sync();
     process_setup();
     sched_start();
@@ -89,9 +86,6 @@ void kernel_start_ap(void *stack) {
     }
     userspace_init();
     apic_init();
-    framebuffer_lock();
-    print_string("AP finished initialization\n");
-    framebuffer_unlock();
     smp_init_sync();
     sched_start();
 halt:
