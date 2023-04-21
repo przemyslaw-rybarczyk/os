@@ -9,16 +9,23 @@
 #include "spinlock.h"
 #include "string.h"
 
-#define CHANNEL_MAX_QUEUE_LENGTH 16
+#define MESSAGE_QUEUE_MAX_LENGTH 16
 
-typedef struct Channel {
+typedef struct MessageQueue {
     spinlock_t lock;
     size_t refcount;
     Process *blocked_receiver;
     ProcessQueue blocked_senders;
-    size_t queue_length;
-    Message *queue_start;
-    Message *queue_end;
+    size_t length;
+    Message *start;
+    Message *end;
+} MessageQueue;
+
+typedef struct Channel {
+    spinlock_t lock;
+    size_t refcount;
+    MessageQueue *queue;
+    uintptr_t tag[2];
 } Channel;
 
 // Create a message from a given data buffer
@@ -68,6 +75,103 @@ err_t message_reply_error(Message *message, err_t error) {
     return 0;
 }
 
+// Create a message queue
+MessageQueue *mqueue_alloc(void) {
+    MessageQueue *mqueue = malloc(sizeof(MessageQueue));
+    if (mqueue == NULL)
+        return NULL;
+    memset(mqueue, 0, sizeof(MessageQueue));
+    mqueue->refcount = 1;
+    return mqueue;
+}
+
+// Increment the message queue reference count
+void mqueue_add_ref(MessageQueue *queue) {
+    spinlock_acquire(&queue->lock);
+    queue->refcount += 1;
+    spinlock_release(&queue->lock);
+}
+
+// Decrement the message queue reference count and free it if there are no remaining references
+void mqueue_del_ref(MessageQueue *queue) {
+    spinlock_acquire(&queue->lock);
+    queue->refcount -= 1;
+    if (queue->refcount == 0) {
+        for (Message *message = queue->start; message != NULL; ) {
+            Message *next_message = message->next_message;
+            message_free(message);
+            message = next_message;
+        }
+        free(queue);
+    } else {
+        spinlock_release(&queue->lock);
+    }
+}
+
+// Send a message to a message queue and wait for a reply
+err_t mqueue_call(MessageQueue *queue, Message *message, Message **reply) {
+    spinlock_acquire(&queue->lock);
+    // If the queue is full, block until there is space
+    while (queue->length >= MESSAGE_QUEUE_MAX_LENGTH) {
+        process_queue_add(&queue->blocked_senders, cpu_local->current_process);
+        process_block(&queue->lock);
+        spinlock_acquire(&queue->lock);
+    }
+    err_t reply_error;
+    // Set the reply information
+    message->reply_error = &reply_error;
+    message->reply = reply;
+    message->blocked_sender = cpu_local->current_process;
+    // Add the message to the queue
+    message->next_message = NULL;
+    if (queue->start == NULL) {
+        queue->start = message;
+        queue->end = message;
+    } else {
+        queue->end->next_message = message;
+        queue->end = message;
+    }
+    queue->length += 1;
+    // If there is a receiver blocked waiting for a message, unblock it
+    if (queue->blocked_receiver != NULL)
+        process_enqueue(queue->blocked_receiver);
+    queue->blocked_receiver = NULL;
+    // Block and wait for a reply
+    process_block(&queue->lock);
+    return reply_error;
+}
+
+// Receive a message from a queue
+err_t mqueue_receive(MessageQueue *queue, Message **message_ptr) {
+    spinlock_acquire(&queue->lock);
+    // If there are no messages in the queue, block until a message arrives
+    while (queue->start == NULL) {
+        queue->blocked_receiver = cpu_local->current_process;
+        process_block(&queue->lock);
+        spinlock_acquire(&queue->lock);
+    }
+    // Remove a message from the queue
+    *message_ptr = queue->start;
+    queue->start = queue->start->next_message;
+    queue->length -= 1;
+    // If there is a blocked sender, unblock it
+    Process *blocked_sender = process_queue_remove(&queue->blocked_senders);
+    if (blocked_sender != NULL)
+        process_enqueue(blocked_sender);
+    spinlock_release(&queue->lock);
+    return 0;
+}
+
+// Return a message to the front of the queue
+// Used when an error occurs
+static void mqueue_return_message(MessageQueue *queue, Message *message) {
+    spinlock_acquire(&queue->lock);
+    message->next_message = queue->start;
+    queue->start = message;
+    queue->length += 1;
+    spinlock_release(&queue->lock);
+}
+
 // Create a channel
 Channel *channel_alloc(void) {
     Channel *channel = malloc(sizeof(Channel));
@@ -90,79 +194,26 @@ void channel_del_ref(Channel *channel) {
     spinlock_acquire(&channel->lock);
     channel->refcount -= 1;
     if (channel->refcount == 0) {
-        for (Message *message = channel->queue_start; message != NULL; ) {
-            Message *next_message = message->next_message;
-            message_free(message);
-            message = next_message;
-        }
+        mqueue_del_ref(channel->queue);
         free(channel);
     } else {
         spinlock_release(&channel->lock);
     }
 }
 
-// Send a message on a channel
-err_t channel_send(Channel *channel, Message *message, Message **reply) {
-    spinlock_acquire(&channel->lock);
-    // If the queue is full, block until there is space
-    while (channel->queue_length >= CHANNEL_MAX_QUEUE_LENGTH) {
-        process_queue_add(&channel->blocked_senders, cpu_local->current_process);
-        process_block(&channel->lock);
-        spinlock_acquire(&channel->lock);
-    }
-    err_t reply_error;
-    // Set the reply information
-    message->reply_error = &reply_error;
-    message->reply = reply;
-    message->blocked_sender = cpu_local->current_process;
-    // Add the message to the channel queue
-    message->next_message = NULL;
-    if (channel->queue_start == NULL) {
-        channel->queue_start = message;
-        channel->queue_end = message;
-    } else {
-        channel->queue_end->next_message = message;
-        channel->queue_end = message;
-    }
-    channel->queue_length += 1;
-    // If there is a receiver blocked waiting for a message, unblock it
-    if (channel->blocked_receiver != NULL)
-        process_enqueue(channel->blocked_receiver);
-    channel->blocked_receiver = NULL;
-    // Block and wait for a reply
-    process_block(&channel->lock);
-    return reply_error;
+// Set the channel's message queue and tag
+void channel_set_mqueue(Channel *channel, MessageQueue *mqueue, uintptr_t tag[2]) {
+    mqueue_add_ref(mqueue);
+    channel->queue = mqueue;
+    channel->tag[0] = tag[0];
+    channel->tag[1] = tag[1];
 }
 
-// Receive a message from a channel
-err_t channel_receive(Channel *channel, Message **message_ptr) {
-    spinlock_acquire(&channel->lock);
-    // If there are no messages in the queue, block until a message arrives
-    while (channel->queue_start == NULL) {
-        channel->blocked_receiver = cpu_local->current_process;
-        process_block(&channel->lock);
-        spinlock_acquire(&channel->lock);
-    }
-    // Remove a message from the queue
-    *message_ptr = channel->queue_start;
-    channel->queue_start = channel->queue_start->next_message;
-    channel->queue_length -= 1;
-    // If there is a blocked sender, unblock it
-    Process *blocked_sender = process_queue_remove(&channel->blocked_senders);
-    if (blocked_sender != NULL)
-        process_enqueue(blocked_sender);
-    spinlock_release(&channel->lock);
-    return 0;
-}
-
-// Return a message to the front of the channel queue
-// Used when an error occurs
-static void channel_return_message(Channel *channel, Message *message) {
-    spinlock_acquire(&channel->lock);
-    message->next_message = channel->queue_start;
-    channel->queue_start = message;
-    channel->queue_length += 1;
-    spinlock_release(&channel->lock);
+// Send a message on a channel and wait for a reply
+err_t channel_call(Channel *channel, Message *message, Message **reply) {
+    message->tag[0] = channel->tag[0];
+    message->tag[1] = channel->tag[1];
+    return mqueue_call(channel->queue, message, reply);
 }
 
 // Verify that a buffer provided by a process is contained within the process address space
@@ -232,7 +283,7 @@ err_t syscall_channel_call(handle_t channel_i, size_t message_size, void *messag
     err = process_get_handle(channel_i, &channel_handle);
     if (err)
         return err;
-    if (channel_handle.type != HANDLE_TYPE_CHANNEL_SEND)
+    if (channel_handle.type != HANDLE_TYPE_CHANNEL)
         return ERR_WRONG_HANDLE_TYPE;
     // Copy the message data
     void *message_data = malloc(message_size);
@@ -247,7 +298,7 @@ err_t syscall_channel_call(handle_t channel_i, size_t message_size, void *messag
     }
     // Send the message
     Message *reply;
-    err = channel_send(channel_handle.channel, message, &reply);
+    err = channel_call(channel_handle.channel, message, &reply);
     if (err)
         return err;
     // Add the reply handle
@@ -260,28 +311,33 @@ err_t syscall_channel_call(handle_t channel_i, size_t message_size, void *messag
 }
 
 // Get a message from a channel
-err_t syscall_channel_receive(handle_t channel_i, handle_t *message_i_ptr) {
+err_t syscall_mqueue_receive(handle_t mqueue_i, uintptr_t tag[2], handle_t *message_i_ptr) {
     err_t err;
-    Handle channel_handle;
+    Handle mqueue_handle;
     // Verify buffer is valid
     err = verify_user_buffer(message_i_ptr, sizeof(handle_t));
     if (err)
         return err;
     // Get the channel from handle
-    err = process_get_handle(channel_i, &channel_handle);
+    err = process_get_handle(mqueue_i, &mqueue_handle);
     if (err)
         return err;
-    if (channel_handle.type != HANDLE_TYPE_CHANNEL_RECEIVE)
+    if (mqueue_handle.type != HANDLE_TYPE_MESSAGE_QUEUE)
         return ERR_WRONG_HANDLE_TYPE;
     // Receive a message
     Message *message;
-    err = channel_receive(channel_handle.channel, &message);
+    err = mqueue_receive(mqueue_handle.mqueue, &message);
     if (err)
         return err;
+    // Return the tag
+    if (tag != NULL) {
+        tag[0] = message->tag[0];
+        tag[1] = message->tag[1];
+    }
     // Add the handle
     err = process_add_handle((Handle){HANDLE_TYPE_MESSAGE, {.message = message}}, message_i_ptr);
     if (err) {
-        channel_return_message(channel_handle.channel, message);
+        mqueue_return_message(mqueue_handle.mqueue, message);
         return err;
     }
     return 0;

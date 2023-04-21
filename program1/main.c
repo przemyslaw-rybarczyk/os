@@ -12,7 +12,7 @@ typedef struct ScreenSize {
 void main(void) {
     err_t err;
     handle_t screen_size_msg;
-    err = channel_call(1, 0, NULL, &screen_size_msg);
+    err = channel_call(2, 0, NULL, &screen_size_msg);
     if (err)
         return;
     size_t screen_size_msg_size;

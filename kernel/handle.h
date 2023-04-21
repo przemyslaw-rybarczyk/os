@@ -9,8 +9,8 @@ typedef enum HandleType {
     HANDLE_TYPE_EMPTY,
     HANDLE_TYPE_MESSAGE,
     HANDLE_TYPE_REPLY,
-    HANDLE_TYPE_CHANNEL_SEND,
-    HANDLE_TYPE_CHANNEL_RECEIVE,
+    HANDLE_TYPE_CHANNEL,
+    HANDLE_TYPE_MESSAGE_QUEUE,
 } HandleType;
 
 typedef struct Handle {
@@ -18,6 +18,7 @@ typedef struct Handle {
     union {
         Message *message;
         Channel *channel;
+        MessageQueue *mqueue;
     };
 } Handle;
 

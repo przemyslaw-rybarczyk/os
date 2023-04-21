@@ -218,7 +218,9 @@ typedef struct ScreenSize {
     size_t height;
 } ScreenSize;
 
-Channel *framebuffer_channel;
+Channel *framebuffer_data_channel;
+Channel *framebuffer_size_channel;
+MessageQueue *framebuffer_mqueue;
 
 void framebuffer_fast_copy_32_bit(void *screen, const void *data);
 
@@ -229,48 +231,58 @@ _Noreturn void framebuffer_kernel_thread_main(void) {
     while (1) {
         i++;
         Message *message;
-        // Get message from framebuffer channel
-        err = channel_receive(framebuffer_channel, &message);
+        // Get message from framebuffer meessage queue
+        err = mqueue_receive(framebuffer_mqueue, &message);
         if (err)
             continue;
-        // If message size is zero, reply with the screen size
-        if (message->data_size == 0) {
+        switch (message->tag[0]) {
+        case FB_MQ_TAG_DATA: {
+            // Check message size
+            if (message->data_size != fb_height * fb_width * 3) {
+                message_reply_error(message, 1 << 16);
+                continue;
+            }
+            // Display the contents of the message
+            // Use fast copy if it's available
+            framebuffer_lock();
+            if (fb_fast_copy) {
+                framebuffer_fast_copy_32_bit(framebuffer, message->data);
+            } else {
+                for (size_t y = 0; y < fb_height; y++) {
+                    for (size_t x = 0; x < fb_width; x++) {
+                        u8 *pixel = &message->data[(y * fb_width + x) * 3];
+                        u32 color = ((pixel[0] >> r_cut) << r_pos) | ((pixel[1] >> g_cut) << g_pos) | ((pixel[2] >> b_cut) << b_pos);
+                        for (u8 i = 0; i < fb_bytes_per_pixel; i++)
+                            framebuffer[y * fb_pitch + x * fb_bytes_per_pixel + i] = (u8)(color >> (8 * i));
+                    }
+                }
+            }
+            // Print the frame counter
+            cursor_x = 0;
+            print_hex_u64(i);
+            framebuffer_unlock();
+            // Send an empty reply and free the message
+            Message *reply = message_alloc(0, NULL);
+            if (reply == NULL)
+                message_reply_error(message, 1 << 16);
+            message_reply(message, reply);
+            message_free(message);
+            break;
+        }
+        case FB_MQ_TAG_SIZE: {
+            // Check message size
+            if (message->data_size != 0) {
+                message_reply_error(message, 1 << 16);
+                continue;
+            }
+            // Request for screen size
             Message *reply = message_alloc(sizeof(ScreenSize), &screen_size);
             if (reply == NULL)
                 message_reply_error(message, 1 << 16);
             message_reply(message, reply);
             message_free(message);
-            continue;
+            break;
         }
-        // Check that message size is correct
-        if (message->data_size != fb_height * fb_width * 3) {
-            message_reply_error(message, 1 << 16);
-            continue;
         }
-        // Display the contents of the message
-        // Use fast copy if it's available
-        framebuffer_lock();
-        if (fb_fast_copy) {
-            framebuffer_fast_copy_32_bit(framebuffer, message->data);
-        } else {
-            for (size_t y = 0; y < fb_height; y++) {
-                for (size_t x = 0; x < fb_width; x++) {
-                    u8 *pixel = &message->data[(y * fb_width + x) * 3];
-                    u32 color = ((pixel[0] >> r_cut) << r_pos) | ((pixel[1] >> g_cut) << g_pos) | ((pixel[2] >> b_cut) << b_pos);
-                    for (u8 i = 0; i < fb_bytes_per_pixel; i++)
-                        framebuffer[y * fb_pitch + x * fb_bytes_per_pixel + i] = (u8)(color >> (8 * i));
-                }
-            }
-        }
-        // Print the frame counter
-        cursor_x = 0;
-        print_hex_u64(i);
-        framebuffer_unlock();
-        // Send an empty reply and free the message
-        Message *reply = message_alloc(0, NULL);
-        if (reply == NULL)
-            message_reply_error(message, 1 << 16);
-        message_reply(message, reply);
-        message_free(message);
     }
 }

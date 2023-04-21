@@ -5,7 +5,7 @@ global process_yield
 global message_get_length
 global message_read
 global channel_call
-global channel_receive
+global mqueue_receive
 global message_reply
 global handle_free
 global message_reply_error
@@ -42,7 +42,7 @@ channel_call:
   syscall
   ret
 
-channel_receive:
+mqueue_receive:
   mov rax, 6
   syscall
   ret

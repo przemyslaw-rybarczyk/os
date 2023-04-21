@@ -173,9 +173,17 @@ void process_enqueue(Process *process) {
 // Initialize processes
 err_t process_setup(void) {
     err_t err;
-    framebuffer_channel = channel_alloc();
-    if (framebuffer_channel == NULL)
+    framebuffer_mqueue = mqueue_alloc();
+    if (framebuffer_mqueue == NULL)
         return ERR_NO_MEMORY;
+    framebuffer_data_channel = channel_alloc();
+    if (framebuffer_data_channel == NULL)
+        return ERR_NO_MEMORY;
+    framebuffer_size_channel = channel_alloc();
+    if (framebuffer_size_channel == NULL)
+        return ERR_NO_MEMORY;
+    channel_set_mqueue(framebuffer_data_channel, framebuffer_mqueue, (uintptr_t[2]){FB_MQ_TAG_DATA, 0});
+    channel_set_mqueue(framebuffer_size_channel, framebuffer_mqueue, (uintptr_t[2]){FB_MQ_TAG_SIZE, 0});
     Process *framebuffer_kernel_thread;
     err = process_create(&framebuffer_kernel_thread);
     if (err)
@@ -186,8 +194,12 @@ err_t process_setup(void) {
     if (err)
         return err;
     process_set_user_stack(client_process, included_file_program1, included_file_program1_end - included_file_program1);
-    channel_add_ref(framebuffer_channel);
-    err = handle_set(&client_process->handles, 1, (Handle){HANDLE_TYPE_CHANNEL_SEND, {.channel = framebuffer_channel}});
+    channel_add_ref(framebuffer_data_channel);
+    err = handle_set(&client_process->handles, 1, (Handle){HANDLE_TYPE_CHANNEL, {.channel = framebuffer_data_channel}});
+    if (err)
+        return err;
+    channel_add_ref(framebuffer_size_channel);
+    err = handle_set(&client_process->handles, 2, (Handle){HANDLE_TYPE_CHANNEL, {.channel = framebuffer_size_channel}});
     if (err)
         return err;
     process_enqueue(framebuffer_kernel_thread);
