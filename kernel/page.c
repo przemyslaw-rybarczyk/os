@@ -242,7 +242,7 @@ static void enable_page_map_range(u64 start, u64 end, u64 *page_map, u64 page_ma
 static err_t map_pages(u64 start, u64 length, u64 flags) {
     err_t err;
     if (start % PAGE_SIZE != 0 || length % PAGE_SIZE != 0)
-        return ERR_OUT_OF_RANGE;
+        return ERR_INVALID_ARG;
     if (start + length < start)
         return ERR_INVALID_ADDRESS;
     if (length == 0)

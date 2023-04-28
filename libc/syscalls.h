@@ -6,6 +6,17 @@
 #define MAP_PAGES_WRITE (1ull << 0)
 #define MAP_PAGES_EXECUTE (1ull << 1)
 
+// Possible return values of system calls:
+// - Every syscall taking a handle as an argument will return ERR_INVALID_HANDLE or ERR_WRONG_HANDLE_TYPE if the handle is invalid
+//   - handle_free() is an exception, as it returns void
+// - Every syscall taking a pointer as an argument will return ERR_INVALID_ADDRESS if the address is invalid
+//   - map_pages() will return ERR_INVALID_ADDRESS if trying to map region that includes kernel memory
+// - The following syscalls may return ERR_NO_MEMORY:
+//     map_pages(), channel_call(), mqueue_receive(), message_reply()
+// - The following syscalls may return ERR_INVALID_ARG if one of their arguments has an invalid value that:
+//     map_pages(), message_reply_error()
+// - map_pages() may also return ERR_PAGE_ALREADY_MAPPED
+
 err_t map_pages(u64 start, u64 length, u64 flags);
 _Noreturn void process_exit(void);
 void process_yield(void);

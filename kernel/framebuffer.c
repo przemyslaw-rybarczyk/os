@@ -225,16 +225,13 @@ MessageQueue *framebuffer_mqueue;
 void framebuffer_fast_copy_32_bit(void *screen, const void *data);
 
 _Noreturn void framebuffer_kernel_thread_main(void) {
-    err_t err;
     ScreenSize screen_size = {fb_width, fb_height};
     size_t i = 0;
     while (1) {
         i++;
         Message *message;
         // Get message from framebuffer meessage queue
-        err = mqueue_receive(framebuffer_mqueue, &message);
-        if (err)
-            continue;
+        mqueue_receive(framebuffer_mqueue, &message);
         switch (message->tag[0]) {
         case FB_MQ_TAG_DATA: {
             // Check message size

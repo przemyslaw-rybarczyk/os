@@ -73,9 +73,7 @@ void main(void) {
     err = message_get_length(screen_size_msg, &screen_size_msg_size);
     if (err || screen_size_msg_size != sizeof(ScreenSize))
         return;
-    err = message_read(screen_size_msg, &screen_size);
-    if (err)
-        return;
+    message_read(screen_size_msg, &screen_size);
     size_t screen_bytes = screen_size.height * screen_size.width * 3;
     u8 *screen = malloc(screen_bytes);
     if (screen == NULL)
@@ -91,11 +89,7 @@ void main(void) {
         if (err)
             continue;
         size_t msg_size;
-        err = message_get_length(msg, &msg_size);
-        if (err) {
-            message_reply_error(msg, 1 << 16);
-            continue;
-        }
+        message_get_length(msg, &msg_size);
         switch (tag[0]) {
         case 1:
             if (msg_size != sizeof(KeyEvent)) {
@@ -103,11 +97,7 @@ void main(void) {
                 continue;
             }
             KeyEvent key_event;
-            err = message_read(msg, &key_event);
-            if (err) {
-                message_reply_error(msg, 1 << 16);
-                continue;
-            }
+            message_read(msg, &key_event);
             if (key_event.pressed == false)
                 color = (color + 1) % COLORS_NUM;
             message_reply(msg, 0, NULL);
@@ -119,11 +109,7 @@ void main(void) {
                 continue;
             }
             MouseUpdate mouse_update;
-            err = message_read(msg, &mouse_update);
-            if (err) {
-                message_reply_error(msg, 1 << 16);
-                continue;
-            }
+            message_read(msg, &mouse_update);
             mouse_x += mouse_update.diff_x;
             mouse_y += mouse_update.diff_y;
             message_reply(msg, 0, NULL);

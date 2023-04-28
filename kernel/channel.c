@@ -46,7 +46,7 @@ void message_free(Message *message) {
 }
 
 // Reply to a message
-err_t message_reply(Message *message, Message *reply) {
+void message_reply(Message *message, Message *reply) {
     // Set the reply error code to 0 (success)
     if (message->reply_error != NULL)
         *(message->reply_error) = 0;
@@ -60,11 +60,10 @@ err_t message_reply(Message *message, Message *reply) {
     if (message->blocked_sender != NULL)
         process_enqueue(message->blocked_sender);
     message->blocked_sender = NULL;
-    return 0;
 }
 
 // Reply to a message with an error code
-err_t message_reply_error(Message *message, err_t error) {
+void message_reply_error(Message *message, err_t error) {
     // Set the reply error code if one is wanted
     if (message->reply_error != NULL)
         *(message->reply_error) = error;
@@ -72,7 +71,6 @@ err_t message_reply_error(Message *message, err_t error) {
     if (message->blocked_sender != NULL)
         process_enqueue(message->blocked_sender);
     message->blocked_sender = NULL;
-    return 0;
 }
 
 // Create a message queue
@@ -142,7 +140,7 @@ err_t mqueue_call(MessageQueue *queue, Message *message, Message **reply) {
 }
 
 // Receive a message from a queue
-err_t mqueue_receive(MessageQueue *queue, Message **message_ptr) {
+void mqueue_receive(MessageQueue *queue, Message **message_ptr) {
     spinlock_acquire(&queue->lock);
     // If there are no messages in the queue, block until a message arrives
     while (queue->start == NULL) {
@@ -159,7 +157,6 @@ err_t mqueue_receive(MessageQueue *queue, Message **message_ptr) {
     if (blocked_sender != NULL)
         process_enqueue(blocked_sender);
     spinlock_release(&queue->lock);
-    return 0;
 }
 
 // Return a message to the front of the queue
@@ -326,9 +323,7 @@ err_t syscall_mqueue_receive(handle_t mqueue_i, uintptr_t tag[2], handle_t *mess
         return ERR_WRONG_HANDLE_TYPE;
     // Receive a message
     Message *message;
-    err = mqueue_receive(mqueue_handle.mqueue, &message);
-    if (err)
-        return err;
+    mqueue_receive(mqueue_handle.mqueue, &message);
     // Return the tag
     if (tag != NULL) {
         tag[0] = message->tag[0];
@@ -368,9 +363,7 @@ err_t syscall_message_reply(handle_t message_i, size_t reply_size, void *reply_d
         return ERR_NO_MEMORY;
     }
     // Send the reply
-    err = message_reply(message_handle.message, reply);
-    if (err)
-        return err;
+    message_reply(message_handle.message, reply);
     // Free message and handle
     process_clear_handle(message_i);
     return 0;
@@ -389,9 +382,7 @@ err_t syscall_message_reply_error(handle_t message_i, err_t error) {
     if (message_handle.type != HANDLE_TYPE_MESSAGE)
         return ERR_WRONG_HANDLE_TYPE;
     // Send the error
-    err = message_reply_error(message_handle.message, error);
-    if (err)
-        return err;
+    message_reply_error(message_handle.message, error);
     // Free message and handle
     process_clear_handle(message_i);
     return 0;
