@@ -53,7 +53,7 @@ void kernel_start(void *stack) {
         print_string("Failed to initialize kernel stack manager\n");
         goto halt;
     }
-    apic_init();
+    apic_init(true);
     smp_init();
     pit_init();
     smp_init_sync();
@@ -85,7 +85,7 @@ void kernel_start_ap(void *stack) {
         goto halt;
     }
     userspace_init();
-    apic_init();
+    apic_init(false);
     smp_init_sync();
     sched_start();
 halt:

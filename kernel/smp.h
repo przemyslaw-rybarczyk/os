@@ -2,7 +2,7 @@
 
 #include "types.h"
 
-void apic_init(void);
+void apic_init(bool bsp);
 void smp_init(void);
 void smp_init_sync(void);
 void apic_eoi(void);

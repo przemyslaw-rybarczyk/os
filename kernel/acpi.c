@@ -24,6 +24,7 @@
 
 #define IOREDTBL 0x10
 #define IOREDTBL_DESTINATION_ALL (0xFFull << 56)
+#define IOREDTBL_DESTINATION_BSP (0x02ull << 56)
 #define IOREDTBL_MASKED (1ul << 16)
 #define IOREDTBL_TRIGGER_LEVEL (1ul << 15)
 #define IOREDTBL_POLARITY_LOW (1ul << 13)
@@ -188,13 +189,16 @@ typedef struct InterruptAssignment {
 } InterruptAssignment;
 
 // Set an I/O APIC redirection table entry
+// If deliver_to_all is true, the interrupt will be delivered to all CPUs.
+// Otherwise, it will only be delivered to the BSP.
+// Only the BSP is used to work around an issue on some computers where reading from the PS/2 data port on an AP would write to a register on the BSP.
 static void io_apic_set_redirection(IOAPIC *io_apic, InterruptAssignment interrupt_assignment, bool deliver_to_all, u32 int_base, u8 vector) {
     u64 redtbl_entry =
-        IOREDTBL_DESTINATION_ALL |
+        (deliver_to_all ? IOREDTBL_DESTINATION_ALL : IOREDTBL_DESTINATION_BSP) |
         (interrupt_assignment.active_level ? IOREDTBL_TRIGGER_LEVEL : 0) |
         (interrupt_assignment.active_low ? IOREDTBL_POLARITY_LOW : 0) |
         IOREDTBL_DESTINATION_LOGICAL |
-        (deliver_to_all ? IOREDTBL_DELIVERY_FIXED : IOREDTBL_DELIVERY_LOWEST_PRIORITY) |
+        IOREDTBL_DELIVERY_FIXED |
         (u64)vector;
     io_apic_write(io_apic, IOREDTBL + (interrupt_assignment.gsi - int_base) * 2, (u32)redtbl_entry);
     io_apic_write(io_apic, IOREDTBL + (interrupt_assignment.gsi - int_base) * 2 + 1, (u32)(redtbl_entry >> 32));

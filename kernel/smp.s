@@ -53,14 +53,22 @@ halt_ipi_lock: resd 1
 
 section .text
 
+; Initialize the local APIC
+; The argument is true if the current processor is the BSP and false otherwise.
 apic_init:
   mov rax, [lapic]
   ; Get the LAPIC ID
   mov edx, [rax + LAPIC_ID_REGISTER]
   and edx, 0xFF000000
   mov gs:[PerCPU.lapic_id], edx
-  ; Set logical APIC ID to 1
+  ; Set logical APIC ID to 1 for APs and 3 for BSP
+  test rdi, rdi
+  jnz .cpu_is_bsp
   mov dword [rax + LAPIC_LOGICAL_DESTINATION_REGISTER], 1 << LAPIC_LOGICAL_ID_OFFSET
+  jmp .logical_destination_set
+.cpu_is_bsp:
+  mov dword [rax + LAPIC_LOGICAL_DESTINATION_REGISTER], 3 << LAPIC_LOGICAL_ID_OFFSET
+.logical_destination_set:
   ; Enable the LAPIC and set the spurious interrupt vector
   mov dword [rax + LAPIC_SPURIOUS_INTERRUPT_VECTOR_REGISTER], LAPIC_ENABLE | SPURIOUS_INTERRUPT_VECTOR
   ret
