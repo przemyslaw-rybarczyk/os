@@ -1,10 +1,11 @@
 #pragma once
 
-#include "keycodes.h"
+#include "types.h"
 
-typedef struct KeyEvent {
-    Keycode keycode;
-    bool pressed;
-} KeyEvent;
+#include "channel.h"
+#include "process.h"
 
-KeyEvent keyboard_read(void);
+extern Process *keyboard_kernel_thread;
+extern Channel *keyboard_channel;
+
+_Noreturn void keyboard_kernel_thread_main(void);

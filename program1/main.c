@@ -9,6 +9,60 @@ typedef struct ScreenSize {
     size_t height;
 } ScreenSize;
 
+typedef struct KeyEvent {
+    u8 keycode;
+    bool pressed;
+} KeyEvent;
+
+typedef struct MouseUpdate {
+    i32 diff_x;
+    i32 diff_y;
+    i32 diff_scroll;
+    bool left_button_pressed;
+    bool right_button_pressed;
+    bool middle_button_pressed;
+} MouseUpdate;
+
+ScreenSize screen_size;
+
+#define COLORS_NUM 12
+
+static u8 colors[COLORS_NUM][3] = {
+    {0xFF, 0x00, 0x00},
+    {0xFF, 0x80, 0x00},
+    {0xFF, 0xFF, 0x00},
+    {0x80, 0xFF, 0x00},
+    {0x00, 0xFF, 0x00},
+    {0x00, 0xFF, 0x80},
+    {0x00, 0xFF, 0xFF},
+    {0x00, 0x80, 0xFF},
+    {0x00, 0x00, 0xFF},
+    {0x80, 0x00, 0xFF},
+    {0xFF, 0x00, 0xFF},
+    {0xFF, 0x00, 0x80},
+};
+
+#define CURSOR_SIZE 2
+
+static void draw_screen(u8 *screen, int color_i, i32 mouse_x, i32 mouse_y) {
+    size_t screen_bytes = screen_size.height * screen_size.width * 3;
+    for (i32 y = 0; (size_t)y < screen_size.height; y++) {
+        for (i32 x = 0; (size_t)x < screen_size.width; x++) {
+            u8 *pixel = &screen[(y * screen_size.width + x) * 3];
+            u8 *color = colors[color_i];
+            pixel[0] = color[0];
+            pixel[1] = color[1];
+            pixel[2] = color[2];
+            if (x <= mouse_x + CURSOR_SIZE && y <= mouse_y + CURSOR_SIZE && x >= mouse_x - CURSOR_SIZE && y >= mouse_y - CURSOR_SIZE) {
+                pixel[0] ^= -1;
+                pixel[1] ^= -1;
+                pixel[2] ^= -1;
+            }
+        }
+    }
+    channel_call(1, screen_bytes, screen, NULL);
+}
+
 void main(void) {
     err_t err;
     handle_t screen_size_msg;
@@ -19,7 +73,6 @@ void main(void) {
     err = message_get_length(screen_size_msg, &screen_size_msg_size);
     if (err || screen_size_msg_size != sizeof(ScreenSize))
         return;
-    ScreenSize screen_size;
     err = message_read(screen_size_msg, &screen_size);
     if (err)
         return;
@@ -27,18 +80,58 @@ void main(void) {
     u8 *screen = malloc(screen_bytes);
     if (screen == NULL)
         return;
-    size_t i = 0;
+    int color = 0;
+    i32 mouse_x = screen_size.width / 2;
+    i32 mouse_y = screen_size.height / 2;
+    draw_screen(screen, color, mouse_x, mouse_y);
     while (1) {
-        for (size_t y = 0; y < screen_size.height; y++) {
-            for (size_t x = 0; x < screen_size.width; x++) {
-                u8 *pixel = &screen[(y * screen_size.width + x) * 3];
-                double f = (double)i / 50.0;
-                pixel[0] = (u8)(size_t)(2 * x - 8 * i);
-                pixel[1] = (u8)(size_t)(x + f * y);
-                pixel[2] = (u8)(size_t)(x - f * y);
-            }
+        uintptr_t tag[2];
+        handle_t msg;
+        err = mqueue_receive(3, tag, &msg);
+        if (err)
+            continue;
+        size_t msg_size;
+        err = message_get_length(msg, &msg_size);
+        if (err) {
+            message_reply_error(msg, 1 << 16);
+            continue;
         }
-        channel_call(1, screen_bytes, screen, NULL);
-        i++;
+        switch (tag[0]) {
+        case 1:
+            if (msg_size != sizeof(KeyEvent)) {
+                message_reply_error(msg, 1 << 16);
+                continue;
+            }
+            KeyEvent key_event;
+            err = message_read(msg, &key_event);
+            if (err) {
+                message_reply_error(msg, 1 << 16);
+                continue;
+            }
+            if (key_event.pressed == false)
+                color = (color + 1) % COLORS_NUM;
+            message_reply(msg, 0, NULL);
+            draw_screen(screen, color, mouse_x, mouse_y);
+            break;
+        case 2:
+            if (msg_size != sizeof(MouseUpdate)) {
+                message_reply_error(msg, 1 << 16);
+                continue;
+            }
+            MouseUpdate mouse_update;
+            err = message_read(msg, &mouse_update);
+            if (err) {
+                message_reply_error(msg, 1 << 16);
+                continue;
+            }
+            mouse_x += mouse_update.diff_x;
+            mouse_y += mouse_update.diff_y;
+            message_reply(msg, 0, NULL);
+            draw_screen(screen, color, mouse_x, mouse_y);
+            break;
+        default:
+            message_reply_error(msg, 1 << 16);
+            break;
+        }
     }
 }

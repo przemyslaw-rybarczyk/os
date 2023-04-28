@@ -1,8 +1,56 @@
 #include "types.h"
 #include "mouse.h"
 
+#include "alloc.h"
 #include "interrupt.h"
+#include "process.h"
 #include "smp.h"
+#include "string.h"
+
+typedef struct MouseUpdate {
+    i32 diff_x;
+    i32 diff_y;
+    i32 diff_scroll;
+    bool left_button_pressed;
+    bool right_button_pressed;
+    bool middle_button_pressed;
+} MouseUpdate;
+
+Process *mouse_kernel_thread;
+Channel *mouse_channel;
+
+// Contains cumulative changes in mouse position since the last time the mouse update was read
+static MouseUpdate mouse_update;
+static bool mouse_update_available = false;
+static bool waiting_for_mouse_event = false;
+
+_Noreturn void mouse_kernel_thread_main(void) {
+    while (1) {
+        // Block until a mouse update happens and read it
+        interrupt_disable();
+        if (!mouse_update_available) {
+            waiting_for_mouse_event = true;
+            process_block(NULL);
+        }
+        mouse_update_available = false;
+        void *message_data = malloc(sizeof(MouseUpdate));
+        if (message_data == NULL) {
+            interrupt_enable();
+            continue;
+        }
+        memcpy(message_data, &mouse_update, sizeof(MouseUpdate));
+        // Reset movement change
+        mouse_update.diff_x = 0;
+        mouse_update.diff_y = 0;
+        mouse_update.diff_scroll = 0;
+        interrupt_enable();
+        // Send the update in a message
+        Message *message = message_alloc(sizeof(MouseUpdate), message_data);
+        if (message == NULL)
+            continue;
+        channel_call(mouse_channel, message, NULL);
+    }
+}
 
 #define MOUSE_PACKET_LEFT_BUTTON (1 << 0)
 #define MOUSE_PACKET_RIGHT_BUTTON (1 << 1)
@@ -10,21 +58,6 @@
 #define MOUSE_PACKET_VALID (1 << 3)
 #define MOUSE_PACKET_X_SIGN_BIT (1 << 4)
 #define MOUSE_PACKET_Y_SIGN_BIT (1 << 5)
-
-// Contains cumulative changes in mouse position since the last time the mouse was polled.
-static volatile MouseUpdate mouse_update;
-
-MouseUpdate mouse_get_update(void) {
-    // We disable interrupts while accessing mouse update data to avoid conflict with the interrupt handler.
-    interrupt_disable();
-    MouseUpdate r = mouse_update;
-    // Reset movement change
-    mouse_update.diff_x = 0;
-    mouse_update.diff_y = 0;
-    mouse_update.diff_scroll = 0;
-    interrupt_enable();
-    return r;
-}
 
 // If the mouse has a scroll wheel, we will receive an additional byte in each packet.
 // This variable is set by the mouse initialization function.
@@ -74,6 +107,12 @@ void mouse_irq_handler(void) {
             }
         }
         bytes_received = 0;
+        // If the mouse thread is waiting for an update, unblock it
+        mouse_update_available = true;
+        if (waiting_for_mouse_event) {
+            waiting_for_mouse_event = false;
+            process_enqueue(mouse_kernel_thread);
+        }
     }
     apic_eoi();
 }

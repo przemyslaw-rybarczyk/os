@@ -1,9 +1,65 @@
 #include "types.h"
 #include "keyboard.h"
 
-#include "framebuffer.h"
+#include "alloc.h"
+#include "channel.h"
+#include "interrupt.h"
 #include "keycodes.h"
+#include "process.h"
 #include "smp.h"
+#include "string.h"
+
+typedef struct KeyEvent {
+    Keycode keycode;
+    bool pressed;
+} KeyEvent;
+
+Process *keyboard_kernel_thread;
+Channel *keyboard_channel;
+
+// The buffer holds up to one KeyEvent.
+// It is written to by the interrupt handler.
+static bool keyboard_buffer_full = false;
+
+static bool waiting_for_key_event = false;
+static KeyEvent keyboard_buffer;
+
+_Noreturn void keyboard_kernel_thread_main(void) {
+    while (1) {
+        // Block until a key event occurs and read it
+        interrupt_disable();
+        if (!keyboard_buffer_full) {
+            waiting_for_key_event = true;
+            process_block(NULL);
+        }
+        keyboard_buffer_full = false;
+        KeyEvent event = keyboard_buffer;
+        interrupt_enable();
+        // Send the key event in a message
+        void *message_data = malloc(sizeof(KeyEvent));
+        if (message_data == NULL)
+            continue;
+        memcpy(message_data, &event, sizeof(KeyEvent));
+        Message *message = message_alloc(sizeof(KeyEvent), message_data);
+        if (message == NULL)
+            continue;
+        channel_call(keyboard_channel, message, NULL);
+    }
+}
+
+// Write an event to the keyboard buffer
+static void keyboard_buffer_write(Keycode code, bool pressed) {
+    if (!keyboard_buffer_full) {
+        // Write to the buffer
+        keyboard_buffer = (KeyEvent){code, pressed};
+        keyboard_buffer_full = true;
+        // If the kernel thread is waiting, unblock it
+        if (waiting_for_key_event) {
+            waiting_for_key_event = false;
+            process_enqueue(keyboard_kernel_thread);
+        }
+    }
+}
 
 #define KEY_NONE (Keycode)(-1)
 
@@ -84,28 +140,6 @@ typedef enum KeyboardState {
 } KeyboardState;
 
 static KeyboardState keyboard_state = KBST_START;
-
-// The buffer holds up to one KeyEvent.
-// It is written to by the interrupt handler.
-static volatile atomic_bool keyboard_buffer_full = false;
-static volatile KeyEvent keyboard_buffer;
-
-// Wait for a key event to occur and return it
-KeyEvent keyboard_read(void) {
-    while (!keyboard_buffer_full)
-        asm volatile ("hlt");
-    // We read in the key event before updating the buffer flag to avoid a race condition
-    KeyEvent r = keyboard_buffer;
-    keyboard_buffer_full = false;
-    return r;
-}
-
-static void keyboard_buffer_write(Keycode code, bool pressed) {
-    if (!keyboard_buffer_full) {
-        keyboard_buffer = (KeyEvent){code, pressed};
-        keyboard_buffer_full = true;
-    }
-}
 
 void keyboard_irq_handler(void) {
     // Read code byte from PS/2 data port

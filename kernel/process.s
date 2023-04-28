@@ -148,6 +148,7 @@ sched_start:
 ; Takes a spinlock as argument. After saving process state, the spinlock is released.
 ; This is provided so that a process can safely place itself in a process queue protected by a lock before calling this function.
 ; Must be called with no locks held other than the one passed as argument.
+; The argument may be NULL, in which case no lock is released.
 process_block:
   ; Disable interrupts
   call interrupt_disable
@@ -165,8 +166,11 @@ process_block:
   mov [rax + Process.rsp], rsp
   ; Switch to the idle stack
   mov rsp, gs:[PerCPU.idle_stack]
+  test rdi, rdi
+  jz .no_spinlock
   ; Release the spinlock
   call spinlock_release
+.no_spinlock:
   ; Get the next process to run and jump to the appropriate part of process_switch
   call sched_replace_process
   jmp process_switch.from_no_process

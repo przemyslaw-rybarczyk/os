@@ -7,6 +7,8 @@
 #include "handle.h"
 #include "included_programs.h"
 #include "interrupt.h"
+#include "keyboard.h"
+#include "mouse.h"
 #include "page.h"
 #include "percpu.h"
 #include "segment.h"
@@ -159,6 +161,7 @@ void process_set_kernel_stack(Process *process, void *entry_point) {
 
 // Add a process to the queue of running processes
 void process_enqueue(Process *process) {
+    interrupt_disable();
     spinlock_acquire(&scheduler_lock);
     // Add the process to end of the queue
     process_queue_add(&scheduler_queue, process);
@@ -168,6 +171,7 @@ void process_enqueue(Process *process) {
         idle_core_list = idle_core_list->next_cpu;
     }
     spinlock_release(&scheduler_lock);
+    interrupt_enable();
 }
 
 // Initialize processes
@@ -182,13 +186,32 @@ err_t process_setup(void) {
     framebuffer_size_channel = channel_alloc();
     if (framebuffer_size_channel == NULL)
         return ERR_NO_MEMORY;
+    keyboard_channel = channel_alloc();
+    if (keyboard_channel == NULL)
+        return ERR_NO_MEMORY;
+    mouse_channel = channel_alloc();
+    if (mouse_channel == NULL)
+        return ERR_NO_MEMORY;
     channel_set_mqueue(framebuffer_data_channel, framebuffer_mqueue, (uintptr_t[2]){FB_MQ_TAG_DATA, 0});
     channel_set_mqueue(framebuffer_size_channel, framebuffer_mqueue, (uintptr_t[2]){FB_MQ_TAG_SIZE, 0});
+    MessageQueue *input_mqueue = mqueue_alloc();
+    if (input_mqueue == NULL)
+        return ERR_NO_MEMORY;
+    channel_set_mqueue(keyboard_channel, input_mqueue, (uintptr_t[2]){1, 0});
+    channel_set_mqueue(mouse_channel, input_mqueue, (uintptr_t[2]){2, 0});
     Process *framebuffer_kernel_thread;
     err = process_create(&framebuffer_kernel_thread);
     if (err)
         return err;
+    err = process_create(&keyboard_kernel_thread);
+    if (err)
+        return err;
+    err = process_create(&mouse_kernel_thread);
+    if (err)
+        return err;
     process_set_kernel_stack(framebuffer_kernel_thread, framebuffer_kernel_thread_main);
+    process_set_kernel_stack(keyboard_kernel_thread, keyboard_kernel_thread_main);
+    process_set_kernel_stack(mouse_kernel_thread, mouse_kernel_thread_main);
     Process *client_process;
     err = process_create(&client_process);
     if (err)
@@ -202,7 +225,13 @@ err_t process_setup(void) {
     err = handle_set(&client_process->handles, 2, (Handle){HANDLE_TYPE_CHANNEL, {.channel = framebuffer_size_channel}});
     if (err)
         return err;
+    mqueue_add_ref(input_mqueue);
+    err = handle_set(&client_process->handles, 3, (Handle){HANDLE_TYPE_MESSAGE_QUEUE, {.mqueue = input_mqueue}});
+    if (err)
+        return err;
     process_enqueue(framebuffer_kernel_thread);
+    process_enqueue(keyboard_kernel_thread);
+    process_enqueue(mouse_kernel_thread);
     process_enqueue(client_process);
     return 0;
 }
