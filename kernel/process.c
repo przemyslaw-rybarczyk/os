@@ -80,13 +80,13 @@ err_t process_create(Process **process_ptr) {
     // Allocate a process control block
     Process *process = malloc(sizeof(Process));
     if (process == NULL) {
-        err = ERR_NO_MEMORY;
+        err = ERR_KERNEL_NO_MEMORY;
         goto fail_process_alloc;
     }
     // Allocate the FXSAVE area and initialize it with default values
     process->fxsave_area = malloc(sizeof(FXSAVEArea));
     if (process->fxsave_area == NULL) {
-        err = ERR_NO_MEMORY;
+        err = ERR_KERNEL_NO_MEMORY;
         goto fail_fxsave_area_alloc;
     }
     memset(process->fxsave_area, 0, sizeof(FXSAVEArea));
@@ -95,7 +95,7 @@ err_t process_create(Process **process_ptr) {
     // Allocate a process page map
     u64 page_map = page_alloc_clear();
     if (page_map == 0) {
-        err = ERR_NO_MEMORY;
+        err = ERR_KERNEL_NO_MEMORY;
         goto fail_page_map_alloc;
     }
     process->page_map = page_map;
@@ -104,7 +104,7 @@ err_t process_create(Process **process_ptr) {
     // Allocate a kernel stack
     process->kernel_stack = stack_alloc();
     if (process->kernel_stack == NULL) {
-        err = ERR_NO_MEMORY;
+        err = ERR_KERNEL_NO_MEMORY;
         goto fail_stack_alloc;
     }
     // Initialize the handle list
@@ -179,24 +179,24 @@ err_t process_setup(void) {
     err_t err;
     framebuffer_mqueue = mqueue_alloc();
     if (framebuffer_mqueue == NULL)
-        return ERR_NO_MEMORY;
+        return ERR_KERNEL_NO_MEMORY;
     framebuffer_data_channel = channel_alloc();
     if (framebuffer_data_channel == NULL)
-        return ERR_NO_MEMORY;
+        return ERR_KERNEL_NO_MEMORY;
     framebuffer_size_channel = channel_alloc();
     if (framebuffer_size_channel == NULL)
-        return ERR_NO_MEMORY;
+        return ERR_KERNEL_NO_MEMORY;
     keyboard_channel = channel_alloc();
     if (keyboard_channel == NULL)
-        return ERR_NO_MEMORY;
+        return ERR_KERNEL_NO_MEMORY;
     mouse_channel = channel_alloc();
     if (mouse_channel == NULL)
-        return ERR_NO_MEMORY;
+        return ERR_KERNEL_NO_MEMORY;
     channel_set_mqueue(framebuffer_data_channel, framebuffer_mqueue, (uintptr_t[2]){FB_MQ_TAG_DATA, 0});
     channel_set_mqueue(framebuffer_size_channel, framebuffer_mqueue, (uintptr_t[2]){FB_MQ_TAG_SIZE, 0});
     MessageQueue *input_mqueue = mqueue_alloc();
     if (input_mqueue == NULL)
-        return ERR_NO_MEMORY;
+        return ERR_KERNEL_NO_MEMORY;
     channel_set_mqueue(keyboard_channel, input_mqueue, (uintptr_t[2]){1, 0});
     channel_set_mqueue(mouse_channel, input_mqueue, (uintptr_t[2]){2, 0});
     Process *framebuffer_kernel_thread;

@@ -99,7 +99,7 @@ err_t page_alloc_init(void) {
     }
     // If we didn't find enough pages to create the identity mapping, the initialization fails
     if (filled_id_map_pages < PAGE_MAP_LEVEL_SIZE)
-        return ERR_NO_MEMORY;
+        return ERR_KERNEL_NO_MEMORY;
     return 0;
 }
 
@@ -183,7 +183,7 @@ static err_t fill_page_map_range(u64 start, u64 end, u64 *page_map, u64 page_map
         if (page_map[i] & PAGE_PRESENT) {
             // If the we're trying to map a page that's already mapped, return an error
             if (page_map_bits == PAGE_BITS) {
-                err = ERR_PAGE_ALREADY_MAPPED;
+                err = ERR_KERNEL_PAGE_ALREADY_MAPPED;
                 goto fail;
             }
             // If we're mapping a page map and it already exists, use it
@@ -192,7 +192,7 @@ static err_t fill_page_map_range(u64 start, u64 end, u64 *page_map, u64 page_map
             // If there is no page present yet, allocate one
             u64 new_page_phys = page_map_bits > PAGE_BITS ? page_alloc_clear() : page_alloc();
             if (new_page_phys == 0) {
-                err = ERR_NO_MEMORY;
+                err = ERR_KERNEL_NO_MEMORY;
                 goto fail;
             }
             page_map[i] = new_page_phys;
@@ -242,9 +242,9 @@ static void enable_page_map_range(u64 start, u64 end, u64 *page_map, u64 page_ma
 static err_t map_pages(u64 start, u64 length, u64 flags) {
     err_t err;
     if (start % PAGE_SIZE != 0 || length % PAGE_SIZE != 0)
-        return ERR_INVALID_ARG;
+        return ERR_KERNEL_INVALID_ARG;
     if (start + length < start)
-        return ERR_INVALID_ADDRESS;
+        return ERR_KERNEL_INVALID_ADDRESS;
     if (length == 0)
         return 0;
     err = fill_page_map_range(start, start + length - PAGE_SIZE, PHYS_ADDR(get_pml4()), 0, PDPT_BITS);
@@ -257,7 +257,7 @@ static err_t map_pages(u64 start, u64 length, u64 flags) {
 // Map the pages in the given range as kernel memory
 err_t map_kernel_pages(u64 start, u64 length, bool write, bool execute) {
     if (start < KERNEL_ADDR_LOWER_BOUND)
-        return ERR_INVALID_ADDRESS;
+        return ERR_KERNEL_INVALID_ADDRESS;
     spinlock_acquire(&kernel_page_lock);
     bool result = map_pages(start % PML4_SIZE, length, (execute ? 0 : PAGE_NX) | PAGE_GLOBAL | (write ? PAGE_WRITE : 0) | PAGE_PRESENT);
     spinlock_release(&kernel_page_lock);
@@ -267,7 +267,7 @@ err_t map_kernel_pages(u64 start, u64 length, bool write, bool execute) {
 // Map the pages in the given range as userspace memory
 err_t map_user_pages(u64 start, u64 length, bool write, bool execute) {
     if (start + length > USER_ADDR_UPPER_BOUND)
-        return ERR_INVALID_ADDRESS;
+        return ERR_KERNEL_INVALID_ADDRESS;
     return map_pages(start % PML4_SIZE, length, (execute ? 0 : PAGE_NX) | PAGE_USER | (write ? PAGE_WRITE : 0) | PAGE_PRESENT);
 }
 

@@ -56,11 +56,11 @@ err_t interrupt_init(bool bsp) {
     size_t idt_size = IDT_ENTRIES_NUM * sizeof(IDTEntry);
     IDTEntry *idt = bsp ? &idt_bsp : malloc(idt_size);
     if (idt == NULL)
-        return ERR_NO_MEMORY;
+        return ERR_KERNEL_NO_MEMORY;
     IDTR *idtr = bsp ? &idtr_bsp : malloc(sizeof(IDTR));
     if (idtr == NULL) {
         free(idt);
-        return ERR_NO_MEMORY;
+        return ERR_KERNEL_NO_MEMORY;
     }
     *idtr = (IDTR){idt_size - 1, (u64)idt};
     // Fill the IDT entries with the handlers defined in `interrupt.s`

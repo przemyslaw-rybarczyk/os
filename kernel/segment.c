@@ -64,18 +64,18 @@ err_t gdt_init(void) {
     size_t gdt_size = GDT_ENTRIES_NUM * sizeof(GDTEntry);
     GDTEntry *gdt = malloc(gdt_size);
     if (gdt == NULL)
-        return ERR_NO_MEMORY;
+        return ERR_KERNEL_NO_MEMORY;
     GDTR *gdtr = malloc(sizeof(GDTR));
     if (gdtr == NULL) {
         free(gdt);
-        return ERR_NO_MEMORY;
+        return ERR_KERNEL_NO_MEMORY;
     }
     *gdtr = (GDTR){gdt_size - 1, (u64)gdt};
     TSS *tss = malloc(sizeof(TSS));
     if (tss == NULL) {
         free(gdtr);
         free(gdt);
-        return ERR_NO_MEMORY;
+        return ERR_KERNEL_NO_MEMORY;
     }
     // Fill the GDT
     // The layout of the GDT is to a degree forced by the design of the SYSCALL instruction.

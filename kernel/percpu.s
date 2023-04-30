@@ -7,7 +7,7 @@ extern memset
 
 MSR_GS_BAS equ 0xC0000101
 
-ERR_NO_MEMORY equ 4
+ERR_NO_MEMORY equ 0xFFFFFFFFFFFF0002
 
 ; Allocate per-CPU data and set the GS base so it can be used
 ; Takes the idle stack base as an argument.

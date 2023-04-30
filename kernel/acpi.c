@@ -159,7 +159,7 @@ static err_t parse_rsdt(const ACPIEntry *rsdt, bool is_xsdt) {
         if (memcmp(entry->signature, "APIC", 4) == 0)
             return parse_madt(entry);
     }
-    return ERR_UNSUPPORTED;
+    return ERR_KERNEL_OTHER;
 }
 
 typedef struct IOAPIC {
@@ -281,7 +281,7 @@ static err_t parse_madt(const ACPIEntry *madt) {
     }
     // Save the LAPIC address
     if (lapic_phys >= IDENTITY_MAPPING_SIZE)
-        return ERR_UNSUPPORTED;
+        return ERR_KERNEL_OTHER;
     lapic = PHYS_ADDR(lapic_phys);
     return 0;
 }
@@ -290,10 +290,10 @@ static err_t parse_madt(const ACPIEntry *madt) {
 err_t acpi_init(void) {
     const RSDP *rsdp = find_rsdp();
     if (rsdp == NULL)
-        return ERR_UNSUPPORTED;
+        return ERR_KERNEL_OTHER;
     bool is_xsdt;
     const ACPIEntry *rsdt = find_rsdt(rsdp, &is_xsdt);
     if (rsdt == NULL)
-        return ERR_UNSUPPORTED;
+        return ERR_KERNEL_OTHER;
     return parse_rsdt(rsdt, is_xsdt);
 }

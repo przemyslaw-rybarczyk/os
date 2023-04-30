@@ -218,9 +218,9 @@ err_t channel_call(Channel *channel, Message *message, Message **reply) {
 static err_t verify_user_buffer(void *start, size_t length) {
     u64 start_addr = (u64)start;
     if (start_addr + length < start_addr)
-        return ERR_INVALID_ADDRESS;
+        return ERR_KERNEL_INVALID_ADDRESS;
     if (start_addr + length > USER_ADDR_UPPER_BOUND)
-        return ERR_INVALID_ADDRESS;
+        return ERR_KERNEL_INVALID_ADDRESS;
     return 0;
 }
 
@@ -233,7 +233,7 @@ err_t syscall_message_get_length(handle_t i, size_t *length) {
     if (err)
         return err;
     if (handle.type != HANDLE_TYPE_MESSAGE && handle.type != HANDLE_TYPE_REPLY)
-        return ERR_WRONG_HANDLE_TYPE;
+        return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Verify buffer is valid
     err = verify_user_buffer(length, sizeof(size_t));
     if (err)
@@ -253,7 +253,7 @@ err_t syscall_message_read(handle_t i, void *data) {
     if (err)
         return err;
     if (handle.type != HANDLE_TYPE_MESSAGE && handle.type != HANDLE_TYPE_REPLY)
-        return ERR_WRONG_HANDLE_TYPE;
+        return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Verify buffer is valid
     err = verify_user_buffer(data, handle.message->data_size);
     if (err)
@@ -281,17 +281,17 @@ err_t syscall_channel_call(handle_t channel_i, size_t message_size, void *messag
     if (err)
         return err;
     if (channel_handle.type != HANDLE_TYPE_CHANNEL)
-        return ERR_WRONG_HANDLE_TYPE;
+        return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Copy the message data
     void *message_data = malloc(message_size);
     if (message_data == NULL && message_size != 0)
-        return ERR_NO_MEMORY;
+        return ERR_KERNEL_NO_MEMORY;
     memcpy(message_data, message_data_user, message_size);
     // Create a message
     Message *message = message_alloc(message_size, message_data);
     if (message == NULL) {
         free(message_data);
-        return ERR_NO_MEMORY;
+        return ERR_KERNEL_NO_MEMORY;
     }
     // Send the message
     Message *reply;
@@ -320,7 +320,7 @@ err_t syscall_mqueue_receive(handle_t mqueue_i, uintptr_t tag[2], handle_t *mess
     if (err)
         return err;
     if (mqueue_handle.type != HANDLE_TYPE_MESSAGE_QUEUE)
-        return ERR_WRONG_HANDLE_TYPE;
+        return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Receive a message
     Message *message;
     mqueue_receive(mqueue_handle.mqueue, &message);
@@ -350,17 +350,17 @@ err_t syscall_message_reply(handle_t message_i, size_t reply_size, void *reply_d
     if (err)
         return err;
     if (message_handle.type != HANDLE_TYPE_MESSAGE)
-        return ERR_WRONG_HANDLE_TYPE;
+        return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Copy the message data
     void *reply_data = malloc(reply_size);
     if (reply_data == NULL && reply_size != 0)
-        return ERR_NO_MEMORY;
+        return ERR_KERNEL_NO_MEMORY;
     memcpy(reply_data, reply_data_user, reply_size);
     // Create a reply
     Message *reply = message_alloc(reply_size, reply_data);
     if (reply == NULL) {
         free(reply_data);
-        return ERR_NO_MEMORY;
+        return ERR_KERNEL_NO_MEMORY;
     }
     // Send the reply
     message_reply(message_handle.message, reply);
@@ -373,14 +373,14 @@ err_t syscall_message_reply_error(handle_t message_i, err_t error) {
     err_t err;
     Handle message_handle;
     // Check error code is not reserved by the kernel
-    if (error <= ERR_KERNEL_MAX)
-        return ERR_INVALID_ARG;
+    if (error >= ERR_KERNEL_MIN)
+        return ERR_KERNEL_INVALID_ARG;
     // Get the message from handle
     err = process_get_handle(message_i, &message_handle);
     if (err)
         return err;
     if (message_handle.type != HANDLE_TYPE_MESSAGE)
-        return ERR_WRONG_HANDLE_TYPE;
+        return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Send the error
     message_reply_error(message_handle.message, error);
     // Free message and handle

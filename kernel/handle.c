@@ -29,7 +29,7 @@ err_t handle_list_init(HandleList *list) {
     list->length = HANDLE_LIST_DEFAULT_LENGTH;
     list->handles = malloc(list->length * sizeof(Handle));
     if (list->handles == NULL)
-        return ERR_NO_MEMORY;
+        return ERR_KERNEL_NO_MEMORY;
     memset(list->handles, 0, list->length * sizeof(Handle));
     return 0;
 }
@@ -52,7 +52,7 @@ void handle_clear(HandleList *list, handle_t i) {
 static err_t handle_list_extend(HandleList *list, size_t new_length) {
     Handle *new_handles = realloc(list->handles, new_length * sizeof(Handle));
     if (new_handles == NULL)
-        return ERR_NO_MEMORY;
+        return ERR_KERNEL_NO_MEMORY;
     memset(new_handles + list->length, 0, (new_length - list->length) * sizeof(Handle));
     list->length = new_length;
     list->handles = new_handles;
@@ -83,9 +83,9 @@ err_t handle_add(HandleList *list, Handle handle, handle_t *i_ptr) {
 // Remove a handle from a list
 err_t handle_remove(HandleList *list, handle_t i) {
     if (i >= list->length)
-        return ERR_INVALID_HANDLE;
+        return ERR_KERNEL_INVALID_HANDLE;
     if (list->handles[i].type == HANDLE_TYPE_EMPTY)
-        return ERR_INVALID_HANDLE;
+        return ERR_KERNEL_INVALID_HANDLE;
     handle_free(list->handles[i]);
     list->handles[i].type = HANDLE_TYPE_EMPTY;
     return 0;
@@ -94,9 +94,9 @@ err_t handle_remove(HandleList *list, handle_t i) {
 // Get the contents of a handle
 err_t handle_get(HandleList *list, handle_t i, Handle *handle) {
     if (i >= list->length)
-        return ERR_INVALID_HANDLE;
+        return ERR_KERNEL_INVALID_HANDLE;
     if (list->handles[i].type == HANDLE_TYPE_EMPTY)
-        return ERR_INVALID_HANDLE;
+        return ERR_KERNEL_INVALID_HANDLE;
     *handle = list->handles[i];
     return 0;
 }

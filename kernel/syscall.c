@@ -12,7 +12,7 @@
 
 err_t syscall_map_pages(u64 start, u64 length, u64 flags) {
     if (flags & ~(MAP_PAGES_WRITE | MAP_PAGES_EXECUTE))
-        return ERR_INVALID_ARG;
+        return ERR_KERNEL_INVALID_ARG;
     return map_user_pages(start, length, flags & MAP_PAGES_WRITE, flags & MAP_PAGES_EXECUTE);
 }
 
