@@ -236,7 +236,7 @@ _Noreturn void framebuffer_kernel_thread_main(void) {
         case FB_MQ_TAG_DATA: {
             // Check message size
             if (message->data_size != fb_height * fb_width * 3) {
-                message_reply_error(message, 1 << 16);
+                message_reply_error(message, ERR_INVALID_ARG);
                 continue;
             }
             // Display the contents of the message
@@ -261,7 +261,7 @@ _Noreturn void framebuffer_kernel_thread_main(void) {
             // Send an empty reply and free the message
             Message *reply = message_alloc(0, NULL);
             if (reply == NULL)
-                message_reply_error(message, 1 << 16);
+                message_reply_error(message, ERR_NO_MEMORY);
             message_reply(message, reply);
             message_free(message);
             break;
@@ -269,13 +269,13 @@ _Noreturn void framebuffer_kernel_thread_main(void) {
         case FB_MQ_TAG_SIZE: {
             // Check message size
             if (message->data_size != 0) {
-                message_reply_error(message, 1 << 16);
+                message_reply_error(message, ERR_INVALID_ARG);
                 continue;
             }
             // Request for screen size
             Message *reply = message_alloc(sizeof(ScreenSize), &screen_size);
             if (reply == NULL)
-                message_reply_error(message, 1 << 16);
+                message_reply_error(message, ERR_NO_MEMORY);
             message_reply(message, reply);
             message_free(message);
             break;

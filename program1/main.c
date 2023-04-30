@@ -93,7 +93,7 @@ void main(void) {
         switch (tag[0]) {
         case 1:
             if (msg_size != sizeof(KeyEvent)) {
-                message_reply_error(msg, 1 << 16);
+                message_reply_error(msg, ERR_INVALID_ARG);
                 continue;
             }
             KeyEvent key_event;
@@ -105,7 +105,7 @@ void main(void) {
             break;
         case 2:
             if (msg_size != sizeof(MouseUpdate)) {
-                message_reply_error(msg, 1 << 16);
+                message_reply_error(msg, ERR_INVALID_ARG);
                 continue;
             }
             MouseUpdate mouse_update;
@@ -116,7 +116,7 @@ void main(void) {
             draw_screen(screen, color, mouse_x, mouse_y);
             break;
         default:
-            message_reply_error(msg, 1 << 16);
+            message_reply_error(msg, ERR_INVALID_ARG);
             break;
         }
     }
