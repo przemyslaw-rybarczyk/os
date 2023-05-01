@@ -19,7 +19,7 @@ typedef struct Message {
 typedef struct MessageQueue MessageQueue;
 typedef struct Channel Channel;
 
-Message *message_alloc(size_t data_size, void *data);
+Message *message_alloc(size_t data_size, const void *data);
 void message_free(Message *message);
 void message_reply(Message *message, Message *reply);
 void message_reply_error(Message *message, err_t error);
@@ -38,7 +38,7 @@ err_t channel_call(Channel *channel, Message *message, Message **reply);
 
 err_t syscall_message_get_length(handle_t i, size_t *length);
 err_t syscall_message_read(handle_t i, void *data);
-err_t syscall_channel_call(handle_t channel_i, size_t message_size, void *message_data_user, handle_t *reply_i_ptr);
+err_t syscall_channel_call(handle_t channel_i, size_t message_size, const void *message_data, handle_t *reply_i_ptr);
 err_t syscall_mqueue_receive(handle_t mqueue_i, uintptr_t tag[2], handle_t *message_i_ptr);
-err_t syscall_message_reply(handle_t message_i, size_t reply_size, void *reply_data_user);
+err_t syscall_message_reply(handle_t message_i, size_t reply_size, const void *reply_data);
 err_t syscall_message_reply_error(handle_t message_i, err_t error);

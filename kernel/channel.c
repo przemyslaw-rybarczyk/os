@@ -29,13 +29,20 @@ typedef struct Channel {
 } Channel;
 
 // Create a message from a given data buffer
-Message *message_alloc(size_t data_size, void *data) {
+Message *message_alloc(size_t data_size, const void *data) {
+    // Allocate message
     Message *message = malloc(sizeof(Message));
     if (message == NULL)
         return NULL;
     memset(message, 0, sizeof(Message));
     message->data_size = data_size;
-    message->data = data;
+    // Allocate message data
+    message->data = malloc(data_size);
+    if (message->data == NULL && data_size != 0) {
+        free(message);
+        return NULL;
+    }
+    memcpy(message->data, data, data_size);
     return message;
 }
 
@@ -217,7 +224,7 @@ err_t channel_call(Channel *channel, Message *message, Message **reply) {
 
 // Verify that a buffer provided by a process is contained within the process address space
 // This does not handle the cases where an address is not mapped by the process - in those cases a page fault will occur and the process will be killed.
-static err_t verify_user_buffer(void *start, size_t length) {
+static err_t verify_user_buffer(const void *start, size_t length) {
     u64 start_addr = (u64)start;
     if (start_addr + length < start_addr)
         return ERR_KERNEL_INVALID_ADDRESS;
@@ -270,11 +277,11 @@ err_t syscall_message_read(handle_t i, void *data) {
 }
 
 // Send a message on a channel and wait for a reply
-err_t syscall_channel_call(handle_t channel_i, size_t message_size, void *message_data_user, handle_t *reply_i_ptr) {
+err_t syscall_channel_call(handle_t channel_i, size_t message_size, const void *message_data, handle_t *reply_i_ptr) {
     err_t err;
     Handle channel_handle;
     // Verify buffers are valid
-    err = verify_user_buffer(message_data_user, message_size);
+    err = verify_user_buffer(message_data, message_size);
     if (err)
         return err;
     if (reply_i_ptr != NULL) {
@@ -288,17 +295,10 @@ err_t syscall_channel_call(handle_t channel_i, size_t message_size, void *messag
         return err;
     if (channel_handle.type != HANDLE_TYPE_CHANNEL)
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
-    // Copy the message data
-    void *message_data = malloc(message_size);
-    if (message_data == NULL && message_size != 0)
-        return ERR_KERNEL_NO_MEMORY;
-    memcpy(message_data, message_data_user, message_size);
     // Create a message
     Message *message = message_alloc(message_size, message_data);
-    if (message == NULL) {
-        free(message_data);
+    if (message == NULL)
         return ERR_KERNEL_NO_MEMORY;
-    }
     // Send the message
     Message *reply;
     err = channel_call(channel_handle.channel, message, &reply);
@@ -344,11 +344,11 @@ err_t syscall_mqueue_receive(handle_t mqueue_i, uintptr_t tag[2], handle_t *mess
     return 0;
 }
 
-err_t syscall_message_reply(handle_t message_i, size_t reply_size, void *reply_data_user) {
+err_t syscall_message_reply(handle_t message_i, size_t reply_size, const void *reply_data) {
     err_t err;
     Handle message_handle;
     // Verify buffer is valid
-    err = verify_user_buffer(reply_data_user, reply_size);
+    err = verify_user_buffer(reply_data, reply_size);
     if (err)
         return err;
     // Get the message from handle
@@ -361,17 +361,10 @@ err_t syscall_message_reply(handle_t message_i, size_t reply_size, void *reply_d
     // If the reply size is zero, the reply is set to NULL and no allocation occurs.
     Message *reply;
     if (reply_size != 0) {
-        // Copy the message data
-        void *reply_data = malloc(reply_size);
-        if (reply_data == NULL && reply_size != 0)
-            return ERR_KERNEL_NO_MEMORY;
-        memcpy(reply_data, reply_data_user, reply_size);
         // Allocate the reply
         reply = message_alloc(reply_size, reply_data);
-        if (reply == NULL) {
-            free(reply_data);
+        if (reply == NULL)
             return ERR_KERNEL_NO_MEMORY;
-        }
     } else {
         reply = NULL;
     }

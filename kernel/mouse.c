@@ -33,21 +33,16 @@ _Noreturn void mouse_kernel_thread_main(void) {
             process_block(NULL);
         }
         mouse_update_available = false;
-        void *message_data = malloc(sizeof(MouseUpdate));
-        if (message_data == NULL) {
-            interrupt_enable();
+        // Allocate a message with the update
+        Message *message = message_alloc(sizeof(MouseUpdate), &mouse_update);
+        if (message == NULL)
             continue;
-        }
-        memcpy(message_data, &mouse_update, sizeof(MouseUpdate));
         // Reset movement change
         mouse_update.diff_x = 0;
         mouse_update.diff_y = 0;
         mouse_update.diff_scroll = 0;
         interrupt_enable();
-        // Send the update in a message
-        Message *message = message_alloc(sizeof(MouseUpdate), message_data);
-        if (message == NULL)
-            continue;
+        // Send the update message
         channel_call(mouse_channel, message, NULL);
     }
 }
