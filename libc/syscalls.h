@@ -13,6 +13,7 @@
 //   - map_pages() will return ERR_INVALID_ADDRESS if trying to map region that includes kernel memory
 // - The following syscalls may return ERR_NO_MEMORY:
 //     map_pages(), channel_call(), mqueue_receive(), message_reply()
+//   - message_reply() with length 0 will not return ERR_NO_MEMORY
 // - The following syscalls may return ERR_INVALID_ARG if one of their arguments has an invalid value that:
 //     map_pages(), message_reply_error()
 // - map_pages() may also return ERR_PAGE_ALREADY_MAPPED

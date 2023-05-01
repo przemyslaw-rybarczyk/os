@@ -41,6 +41,8 @@ Message *message_alloc(size_t data_size, void *data) {
 
 // Free a message along with its data buffer
 void message_free(Message *message) {
+    if (message == NULL)
+        return;
     free(message->data);
     free(message);
 }
@@ -239,7 +241,10 @@ err_t syscall_message_get_length(handle_t i, size_t *length) {
     if (err)
         return err;
     // Copy the length
-    *length = handle.message->data_size;
+    if (handle.message != NULL)
+        *length = handle.message->data_size;
+    else
+        *length = 0;
     return 0;
 }
 
@@ -259,7 +264,8 @@ err_t syscall_message_read(handle_t i, void *data) {
     if (err)
         return err;
     // Copy the data
-    memcpy(data, handle.message->data, handle.message->data_size);
+    if (handle.message != NULL)
+        memcpy(data, handle.message->data, handle.message->data_size);
     return 0;
 }
 
@@ -351,16 +357,23 @@ err_t syscall_message_reply(handle_t message_i, size_t reply_size, void *reply_d
         return err;
     if (message_handle.type != HANDLE_TYPE_MESSAGE)
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
-    // Copy the message data
-    void *reply_data = malloc(reply_size);
-    if (reply_data == NULL && reply_size != 0)
-        return ERR_KERNEL_NO_MEMORY;
-    memcpy(reply_data, reply_data_user, reply_size);
     // Create a reply
-    Message *reply = message_alloc(reply_size, reply_data);
-    if (reply == NULL) {
-        free(reply_data);
-        return ERR_KERNEL_NO_MEMORY;
+    // If the reply size is zero, the reply is set to NULL and no allocation occurs.
+    Message *reply;
+    if (reply_size != 0) {
+        // Copy the message data
+        void *reply_data = malloc(reply_size);
+        if (reply_data == NULL && reply_size != 0)
+            return ERR_KERNEL_NO_MEMORY;
+        memcpy(reply_data, reply_data_user, reply_size);
+        // Allocate the reply
+        reply = message_alloc(reply_size, reply_data);
+        if (reply == NULL) {
+            free(reply_data);
+            return ERR_KERNEL_NO_MEMORY;
+        }
+    } else {
+        reply = NULL;
     }
     // Send the reply
     message_reply(message_handle.message, reply);

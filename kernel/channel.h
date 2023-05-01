@@ -5,6 +5,7 @@
 
 typedef struct Process Process;
 
+// A NULL message pointer is used to represent an empty reply
 typedef struct Message {
     uintptr_t tag[2];
     size_t data_size;
