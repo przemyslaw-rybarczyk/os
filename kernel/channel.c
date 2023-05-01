@@ -372,8 +372,8 @@ err_t syscall_message_reply(handle_t message_i, size_t reply_size, void *reply_d
 err_t syscall_message_reply_error(handle_t message_i, err_t error) {
     err_t err;
     Handle message_handle;
-    // Check error code is not reserved by the kernel
-    if (error >= ERR_KERNEL_MIN)
+    // Check error code is not reserved by the kernel or zero
+    if (error >= ERR_KERNEL_MIN || error == 0)
         return ERR_KERNEL_INVALID_ARG;
     // Get the message from handle
     err = process_get_handle(message_i, &message_handle);
