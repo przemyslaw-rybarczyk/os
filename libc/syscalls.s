@@ -9,6 +9,7 @@ global mqueue_receive
 global message_reply
 global handle_free
 global message_reply_error
+global message_read_bounded
 
 ; This file implements the C interface for system calls
 
@@ -60,4 +61,14 @@ handle_free:
 message_reply_error:
   mov rax, 9
   syscall
+  ret
+
+message_read_bounded:
+  xchg bx, bx
+  push rbx
+  mov rbx, [rsp + 2 * 8]
+  mov rax, 10
+  mov r10, rcx
+  syscall
+  pop rbx
   ret

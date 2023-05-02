@@ -393,3 +393,45 @@ err_t syscall_message_reply_error(handle_t message_i, err_t error) {
     process_clear_handle(message_i);
     return 0;
 }
+
+// Read the contents of a message with bounds checking
+// Functions like message_read(), but if the message size is outside of the given bounds it instead replies with a given error code
+// and returns either ERR_KERNEL_MESSAGE_TOO_SHORT or ERR_KERNEL_MESSAGE_TOO_LONG.
+err_t syscall_message_read_bounded(handle_t i, void *data, size_t *length_ptr, size_t min_length, size_t max_length, err_t err_low, err_t err_high) {
+    err_t err;
+    Handle handle;
+    // Get the message from handle
+    err = process_get_handle(i, &handle);
+    if (err)
+        return err;
+    if (handle.type != HANDLE_TYPE_MESSAGE)
+        return ERR_KERNEL_WRONG_HANDLE_TYPE;
+    // Verify buffer is valid
+    err = verify_user_buffer(length_ptr, sizeof(size_t));
+    if (err)
+        return err;
+    err = verify_user_buffer(data, handle.message->data_size);
+    if (err)
+        return err;
+    // Check provided error codes are not reserved or zero
+    if (err_low >= ERR_KERNEL_MIN || err_low == 0 || err_high >= ERR_KERNEL_MIN || err_high == 0)
+        return ERR_KERNEL_INVALID_ARG;
+    // Perform bounds check
+    size_t length = handle.message != NULL ? handle.message->data_size : 0;
+    if (length < min_length) {
+        message_reply_error(handle.message, err_low);
+        process_clear_handle(i);
+        return ERR_KERNEL_MESSAGE_TOO_SHORT;
+    }
+    if (length > max_length) {
+        message_reply_error(handle.message, err_high);
+        process_clear_handle(i);
+        return ERR_KERNEL_MESSAGE_TOO_LONG;
+    }
+    // Copy the data and length
+    if (handle.message != NULL)
+        memcpy(data, handle.message->data, handle.message->data_size);
+    if (length_ptr != NULL)
+        *length_ptr = length;
+    return 0;
+}

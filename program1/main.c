@@ -91,18 +91,17 @@ void main(void) {
         size_t msg_size;
         message_get_length(msg, &msg_size);
         switch (tag[0]) {
-        case 1:
-            if (msg_size != sizeof(KeyEvent)) {
-                message_reply_error(msg, ERR_INVALID_ARG);
-                continue;
-            }
+        case 1: {
             KeyEvent key_event;
-            message_read(msg, &key_event);
+            err = message_read_bounded(msg, &key_event, NULL, sizeof(KeyEvent), sizeof(KeyEvent), ERR_INVALID_ARG, ERR_INVALID_ARG);
+            if (err)
+                continue;
             if (key_event.pressed == false)
                 color = (color + 1) % COLORS_NUM;
             message_reply(msg, 0, NULL);
             draw_screen(screen, color, mouse_x, mouse_y);
             break;
+        }
         case 2:
             if (msg_size != sizeof(MouseUpdate)) {
                 message_reply_error(msg, ERR_INVALID_ARG);

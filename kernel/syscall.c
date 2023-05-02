@@ -41,4 +41,5 @@ const void * const syscalls[] = {
     syscall_message_reply,
     syscall_handle_free,
     syscall_message_reply_error,
+    syscall_message_read_bounded,
 };

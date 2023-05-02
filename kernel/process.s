@@ -53,7 +53,7 @@ PAGE_WRITE equ 1 << 1
 PAGE_GLOBAL equ 1 << 8
 PAGE_NX equ 1 << 63
 
-SYSCALLS_NUM equ 10
+SYSCALLS_NUM equ 11
 
 ERR_INVALID_SYSCALL_NUMBER equ 0xFFFFFFFFFFFF0001
 
@@ -82,10 +82,14 @@ syscall_handler:
   push r9
   push r10
   push r11
+  ; Push extra arguments
+  push rbx
   ; Perform the system call
   mov rcx, r10
   mov r10, [syscalls + rax * 8]
   call r10
+  ; Remove extra arguments
+  add rsp, 1 * 8
   ; Restore scratch registers and return
   pop r11
   pop r10
