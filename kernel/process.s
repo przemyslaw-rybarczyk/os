@@ -59,6 +59,9 @@ ERR_INVALID_SYSCALL_NUMBER equ 0xFFFFFFFFFFFF0001
 
 section .text
 
+; System call handler
+; The system call number is passed in the RAX register. The arguments are passed in the RDI, RSI, RDX, R10, R8, R9, RBX registers.
+; The return value is given in RAX. All other arguments are left unchanged on return.
 syscall_handler:
   ; Check if the syscall number is valid
   cmp rax, SYSCALLS_NUM
@@ -82,7 +85,7 @@ syscall_handler:
   push r9
   push r10
   push r11
-  ; Push extra arguments
+  ; Push stack arguments
   push rbx
   ; Perform the system call
   mov rcx, r10
