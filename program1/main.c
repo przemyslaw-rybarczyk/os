@@ -65,15 +65,13 @@ static void draw_screen(u8 *screen, int color_i, i32 mouse_x, i32 mouse_y) {
 
 void main(void) {
     err_t err;
-    handle_t screen_size_msg;
-    err = channel_call(2, 0, NULL, &screen_size_msg);
+    handle_t screen_size_reply;
+    err = channel_call(2, 0, NULL, &screen_size_reply);
     if (err)
         return;
-    size_t screen_size_msg_size;
-    err = message_get_length(screen_size_msg, &screen_size_msg_size);
-    if (err || screen_size_msg_size != sizeof(ScreenSize))
+    err = reply_read_bounded(screen_size_reply, &screen_size, NULL, sizeof(ScreenSize), sizeof(ScreenSize));
+    if (err)
         return;
-    message_read(screen_size_msg, &screen_size);
     size_t screen_bytes = screen_size.height * screen_size.width * 3;
     u8 *screen = malloc(screen_bytes);
     if (screen == NULL)

@@ -10,6 +10,7 @@ global message_reply
 global handle_free
 global message_reply_error
 global message_read_bounded
+global reply_read_bounded
 
 ; This file implements the C interface for system calls
 
@@ -71,4 +72,10 @@ message_read_bounded:
   mov r10, rcx
   syscall
   pop rbx
+  ret
+
+reply_read_bounded:
+  mov rax, 11
+  mov r10, rcx
+  syscall
   ret

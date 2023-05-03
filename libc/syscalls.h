@@ -18,7 +18,7 @@
 //     map_pages(), message_reply_error(), message_read_bounded()
 // - map_pages() may return ERR_KERNEL_PAGE_ALREADY_MAPPED
 // - channel_call() may return a user error code
-// - message_read_bounded() may return ERR_KERNEL_MESSAGE_TOO_SHORT or ERR_KERNEL_MESSAGE_TOO_LONG
+// - message_read_bounded() and reply_read_bounded() may return ERR_KERNEL_MESSAGE_TOO_SHORT or ERR_KERNEL_MESSAGE_TOO_LONG
 
 err_t map_pages(u64 start, u64 length, u64 flags);
 _Noreturn void process_exit(void);
@@ -31,3 +31,4 @@ err_t message_reply(handle_t message_i, size_t reply_size, const void *reply_dat
 void handle_free(handle_t i);
 err_t message_reply_error(handle_t message_i, err_t error);
 err_t message_read_bounded(handle_t i, void *data, size_t *length, size_t min_length, size_t max_length, err_t err_low, err_t err_high);
+err_t reply_read_bounded(handle_t i, void *data, size_t *length, size_t min_length, size_t max_length);

@@ -435,3 +435,39 @@ err_t syscall_message_read_bounded(handle_t i, void *data, size_t *length_ptr, s
         *length_ptr = length;
     return 0;
 }
+
+// Read the contents of a reply with bounds checking
+// Functions like message_read_bounded(), but frees the reply instead of replying to it.
+err_t syscall_reply_read_bounded(handle_t i, void *data, size_t *length_ptr, size_t min_length, size_t max_length) {
+    err_t err;
+    Handle handle;
+    // Get the message from handle
+    err = process_get_handle(i, &handle);
+    if (err)
+        return err;
+    if (handle.type != HANDLE_TYPE_REPLY)
+        return ERR_KERNEL_WRONG_HANDLE_TYPE;
+    // Verify buffer is valid
+    err = verify_user_buffer(length_ptr, sizeof(size_t));
+    if (err)
+        return err;
+    err = verify_user_buffer(data, handle.message->data_size);
+    if (err)
+        return err;
+    // Perform bounds check
+    size_t length = handle.message != NULL ? handle.message->data_size : 0;
+    if (length < min_length) {
+        process_clear_handle(i);
+        return ERR_KERNEL_MESSAGE_TOO_SHORT;
+    }
+    if (length > max_length) {
+        process_clear_handle(i);
+        return ERR_KERNEL_MESSAGE_TOO_LONG;
+    }
+    // Copy the data and length
+    if (handle.message != NULL)
+        memcpy(data, handle.message->data, handle.message->data_size);
+    if (length_ptr != NULL)
+        *length_ptr = length;
+    return 0;
+}

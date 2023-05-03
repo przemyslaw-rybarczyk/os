@@ -43,3 +43,4 @@ err_t syscall_mqueue_receive(handle_t mqueue_i, uintptr_t tag[2], handle_t *mess
 err_t syscall_message_reply(handle_t message_i, size_t reply_size, const void *reply_data);
 err_t syscall_message_reply_error(handle_t message_i, err_t error);
 err_t syscall_message_read_bounded(handle_t i, void *data, size_t *length, size_t min_length, size_t max_length, err_t err_low, err_t err_high);
+err_t syscall_reply_read_bounded(handle_t i, void *data, size_t *length_ptr, size_t min_length, size_t max_length);
