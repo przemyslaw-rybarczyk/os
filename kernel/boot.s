@@ -169,7 +169,7 @@ test_cpuid:
   test edx, CPUID_SSE
   jz .no_sse
   test edx, CPUID_FXSR
-  jz .no_sse
+  jz .no_fxsr
   jmp .end
 .no_long_mode:
   mov dl, '0'
@@ -180,7 +180,7 @@ test_cpuid:
 .no_sse:
   mov dl, 'A'
   jmp error
-.no_fsxr:
+.no_fxsr:
   mov dl, 'B'
   jmp error
 .end:
