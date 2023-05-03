@@ -65,7 +65,7 @@ static void draw_screen(u8 *screen, int color_i, i32 mouse_x, i32 mouse_y) {
 
 void main(void) {
     err_t err;
-    err = channel_call_bounded(2, 0, NULL, &screen_size, NULL, sizeof(ScreenSize), sizeof(ScreenSize));
+    err = channel_call_sized(2, 0, NULL, &screen_size, sizeof(ScreenSize));
     if (err)
         return;
     size_t screen_bytes = screen_size.height * screen_size.width * 3;
@@ -87,7 +87,7 @@ void main(void) {
         switch (tag[0]) {
         case 1: {
             KeyEvent key_event;
-            err = message_read_bounded(msg, &key_event, NULL, sizeof(KeyEvent), sizeof(KeyEvent), ERR_INVALID_ARG, ERR_INVALID_ARG);
+            err = message_read_sized(msg, &key_event, sizeof(KeyEvent), ERR_INVALID_ARG);
             if (err)
                 continue;
             if (key_event.pressed == false)
@@ -98,7 +98,7 @@ void main(void) {
         }
         case 2: {
             MouseUpdate mouse_update;
-            err = message_read_bounded(msg, &mouse_update, NULL, sizeof(MouseUpdate), sizeof(MouseUpdate), ERR_INVALID_ARG, ERR_INVALID_ARG);
+            err = message_read_sized(msg, &mouse_update, sizeof(MouseUpdate), ERR_INVALID_ARG);
             if (err)
                 continue;
             mouse_x += mouse_update.diff_x;

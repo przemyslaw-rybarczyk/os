@@ -36,3 +36,19 @@ err_t reply_read_bounded(handle_t i, void *data, size_t *length, size_t min_leng
 err_t channel_call_bounded(
     handle_t channel_i, size_t message_size, const void *message_data,
     void *reply_data, size_t *reply_length, size_t min_length, size_t max_length);
+
+static inline err_t message_read_sized(handle_t i, void *data, size_t length, err_t error) {
+    return message_read_bounded(i, data, NULL, length, length, error, error);
+}
+
+static inline err_t message_read_sized_2(handle_t i, void *data, size_t length, err_t err_low, err_t err_high) {
+    return message_read_bounded(i, data, NULL, length, length, err_low, err_high);
+}
+
+static inline err_t reply_read_sized(handle_t i, void *data, size_t length) {
+    return reply_read_bounded(i, data, NULL, length, length);
+}
+
+static inline err_t channel_call_sized(handle_t i, size_t message_size, const void *message_data, void *reply_data, size_t reply_length) {
+    return channel_call_bounded(i, message_size, message_data, reply_data, NULL, reply_length, reply_length);
+}
