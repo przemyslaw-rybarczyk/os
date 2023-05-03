@@ -11,6 +11,7 @@ global handle_free
 global message_reply_error
 global message_read_bounded
 global reply_read_bounded
+global channel_call_bounded
 
 ; This file implements the C interface for system calls
 
@@ -65,7 +66,6 @@ message_reply_error:
   ret
 
 message_read_bounded:
-  xchg bx, bx
   push rbx
   mov rbx, [rsp + 2 * 8]
   mov rax, 10
@@ -78,4 +78,13 @@ reply_read_bounded:
   mov rax, 11
   mov r10, rcx
   syscall
+  ret
+
+channel_call_bounded:
+  push rbx
+  mov rbx, [rsp + 2 * 8]
+  mov rax, 12
+  mov r10, rcx
+  syscall
+  pop rbx
   ret

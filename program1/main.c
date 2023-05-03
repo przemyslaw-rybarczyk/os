@@ -65,11 +65,7 @@ static void draw_screen(u8 *screen, int color_i, i32 mouse_x, i32 mouse_y) {
 
 void main(void) {
     err_t err;
-    handle_t screen_size_reply;
-    err = channel_call(2, 0, NULL, &screen_size_reply);
-    if (err)
-        return;
-    err = reply_read_bounded(screen_size_reply, &screen_size, NULL, sizeof(ScreenSize), sizeof(ScreenSize));
+    err = channel_call_bounded(2, 0, NULL, &screen_size, NULL, sizeof(ScreenSize), sizeof(ScreenSize));
     if (err)
         return;
     size_t screen_bytes = screen_size.height * screen_size.width * 3;
@@ -100,18 +96,17 @@ void main(void) {
             draw_screen(screen, color, mouse_x, mouse_y);
             break;
         }
-        case 2:
-            if (msg_size != sizeof(MouseUpdate)) {
-                message_reply_error(msg, ERR_INVALID_ARG);
-                continue;
-            }
+        case 2: {
             MouseUpdate mouse_update;
-            message_read(msg, &mouse_update);
+            err = message_read_bounded(msg, &mouse_update, NULL, sizeof(MouseUpdate), sizeof(MouseUpdate), ERR_INVALID_ARG, ERR_INVALID_ARG);
+            if (err)
+                continue;
             mouse_x += mouse_update.diff_x;
             mouse_y += mouse_update.diff_y;
             message_reply(msg, 0, NULL);
             draw_screen(screen, color, mouse_x, mouse_y);
             break;
+        }
         default:
             message_reply_error(msg, ERR_INVALID_ARG);
             break;
