@@ -139,7 +139,7 @@ union long_double_cast {
 #endif
 
 // 10^19 - the largest power of 10 that can fit in a u64
-#define POW_10_19 10000000000000000000ull
+#define POW_10_19 UINT64_C(10000000000000000000)
 
 // Print a floating-point number
 // `uppercase` determines whether nan and inf are printed in lowercase or uppercase.

@@ -7,9 +7,9 @@
 
 #include "font.h"
 
-#define CPUID_SSSE3 (1ull << 9)
+#define CPUID_SSSE3 (UINT64_C(1) << 9)
 
-#define FB_PML4E 0x1FDull
+#define FB_PML4E UINT64_C(0x1FD)
 
 typedef struct VBEModeInfo {
     u16 attrs;

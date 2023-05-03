@@ -3,14 +3,14 @@
 #include "types.h"
 #include "error.h"
 
-#define PAGE_PRESENT (1ull << 0)
-#define PAGE_WRITE (1ull << 1)
-#define PAGE_USER (1ull << 2)
-#define PAGE_LARGE (1ull << 7)
-#define PAGE_GLOBAL (1ull << 8)
-#define PAGE_NX (1ull << 63)
+#define PAGE_PRESENT (UINT64_C(1) << 0)
+#define PAGE_WRITE (UINT64_C(1) << 1)
+#define PAGE_USER (UINT64_C(1) << 2)
+#define PAGE_LARGE (UINT64_C(1) << 7)
+#define PAGE_GLOBAL (UINT64_C(1) << 8)
+#define PAGE_NX (UINT64_C(1) << 63)
 
-#define PAGE_MASK 0x000FFFFFFFFFF000ull
+#define PAGE_MASK UINT64_C(0x000FFFFFFFFFF000)
 
 #define PAGE_BITS 12
 #define LARGE_PAGE_BITS 21
@@ -20,24 +20,24 @@
 #define PML4_BITS 48
 #define PAGE_MAP_LEVEL_BITS 9
 
-#define PAGE_SIZE (1ull << PAGE_BITS)
-#define LARGE_PAGE_SIZE (1ull << LARGE_PAGE_BITS)
-#define PT_SIZE (1ull << PT_BITS)
-#define PD_SIZE (1ull << PD_BITS)
-#define PDPT_SIZE (1ull << PDPT_BITS)
-#define PML4_SIZE (1ull << PML4_BITS)
-#define PAGE_MAP_LEVEL_SIZE (1ull << PAGE_MAP_LEVEL_BITS)
+#define PAGE_SIZE (UINT64_C(1) << PAGE_BITS)
+#define LARGE_PAGE_SIZE (UINT64_C(1) << LARGE_PAGE_BITS)
+#define PT_SIZE (UINT64_C(1) << PT_BITS)
+#define PD_SIZE (UINT64_C(1) << PD_BITS)
+#define PDPT_SIZE (UINT64_C(1) << PDPT_BITS)
+#define PML4_SIZE (UINT64_C(1) << PML4_BITS)
+#define PAGE_MAP_LEVEL_SIZE (UINT64_C(1) << PAGE_MAP_LEVEL_BITS)
 
 // Takes an address and fills its first 16 bits with a sign extension of the lower 48 bits
-#define SIGN_EXTEND_ADDR(x) (((((x) >> 47) & 1) ? 0xFFFF000000000000ull : 0) | (x & 0x0000FFFFFFFFFFFFull))
+#define SIGN_EXTEND_ADDR(x) (((((x) >> 47) & 1) ? UINT64_C(0xFFFF000000000000) : 0) | (x & UINT64_C(0x0000FFFFFFFFFFFF)))
 
 // These macros can be used to assemble addresses from their component parts - indices of page tables within other page tables,
 // and the offset of the address relative to the start of the page.
 // The offset can be larger than required, in which case it is truncated.
-#define ASSEMBLE_ADDR(pml4e, pdpte, pde, pte, i) (SIGN_EXTEND_ADDR(((u64)(pml4e) << 39) | ((u64)(pdpte) << 30) | ((u64)(pde) << 21) | ((u64)(pte) << 12) | ((u64)(i) & 0x0000000000000FFFull)))
-#define ASSEMBLE_ADDR_PDE(pml4e, pdpte, pde, i) (SIGN_EXTEND_ADDR(((u64)(pml4e) << 39) | ((u64)(pdpte) << 30) | ((u64)(pde) << 21) | ((u64)(i) & 0x00000000001FFFFFull)))
-#define ASSEMBLE_ADDR_PDPTE(pml4e, pdpte, i) (SIGN_EXTEND_ADDR(((u64)(pml4e) << 39) | ((u64)(pdpte) << 30) | ((u64)(i) & 0x000000003FFFFFFFull)))
-#define ASSEMBLE_ADDR_PML4E(pml4e, i) (SIGN_EXTEND_ADDR(((u64)(pml4e) << 39) | ((u64)(i) & 0x0000007FFFFFFFFFull)))
+#define ASSEMBLE_ADDR(pml4e, pdpte, pde, pte, i) (SIGN_EXTEND_ADDR(((u64)(pml4e) << 39) | ((u64)(pdpte) << 30) | ((u64)(pde) << 21) | ((u64)(pte) << 12) | ((u64)(i) & UINT64_C(0x0000000000000FFF))))
+#define ASSEMBLE_ADDR_PDE(pml4e, pdpte, pde, i) (SIGN_EXTEND_ADDR(((u64)(pml4e) << 39) | ((u64)(pdpte) << 30) | ((u64)(pde) << 21) | ((u64)(i) & UINT64_C(0x00000000001FFFFF))))
+#define ASSEMBLE_ADDR_PDPTE(pml4e, pdpte, i) (SIGN_EXTEND_ADDR(((u64)(pml4e) << 39) | ((u64)(pdpte) << 30) | ((u64)(i) & UINT64_C(0x000000003FFFFFFF))))
+#define ASSEMBLE_ADDR_PML4E(pml4e, i) (SIGN_EXTEND_ADDR(((u64)(pml4e) << 39) | ((u64)(i) & UINT64_C(0x0000007FFFFFFFFF))))
 
 #define ADDR_PML4E(x) (((u64)(x) >> PDPT_BITS) & 0x1FF)
 #define ADDR_PDPTE(x) (((u64)(x) >> PD_BITS) & 0x1FF)
@@ -50,7 +50,7 @@ static inline u64 get_pml4(void) {
     return pml4;
 }
 
-#define IDENTITY_MAPPING_PML4E 0x102ull
+#define IDENTITY_MAPPING_PML4E UINT64_C(0x102)
 #define IDENTITY_MAPPING_SIZE PDPT_SIZE
 
 // Used to access physical memory directly
@@ -58,10 +58,10 @@ static inline u64 get_pml4(void) {
 #define PHYS_ADDR(x) ((void *)(ASSEMBLE_ADDR_PML4E(IDENTITY_MAPPING_PML4E, 0) + (x)))
 
 // Lowest address not accessible to userspace
-#define USER_ADDR_UPPER_BOUND 0x0000800000000000
+#define USER_ADDR_UPPER_BOUND UINT64_C(0x0000800000000000)
 
 // Lowest address used by kernel
-#define KERNEL_ADDR_LOWER_BOUND 0xFFFF800000000000
+#define KERNEL_ADDR_LOWER_BOUND UINT64_C(0xFFFF800000000000)
 
 err_t page_alloc_init(void);
 u64 page_alloc(void);

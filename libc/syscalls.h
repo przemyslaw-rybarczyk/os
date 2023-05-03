@@ -3,8 +3,8 @@
 #include <types.h>
 #include <error.h>
 
-#define MAP_PAGES_WRITE (1ull << 0)
-#define MAP_PAGES_EXECUTE (1ull << 1)
+#define MAP_PAGES_WRITE (UINT64_C(1) << 0)
+#define MAP_PAGES_EXECUTE (UINT64_C(1) << 1)
 
 // Possible return values of system calls:
 // - Every syscall taking a handle as an argument will return ERR_KERNEL_INVALID_HANDLE or ERR_KERNEL_WRONG_HANDLE_TYPE if the handle is invalid

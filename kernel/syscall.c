@@ -7,8 +7,8 @@
 #include "page.h"
 #include "process.h"
 
-#define MAP_PAGES_WRITE (1ull << 0)
-#define MAP_PAGES_EXECUTE (1ull << 1)
+#define MAP_PAGES_WRITE (UINT64_C(1) << 0)
+#define MAP_PAGES_EXECUTE (UINT64_C(1) << 1)
 
 err_t syscall_map_pages(u64 start, u64 length, u64 flags) {
     if (flags & ~(MAP_PAGES_WRITE | MAP_PAGES_EXECUTE))

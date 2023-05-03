@@ -10,7 +10,7 @@
 #define MEMORY_RANGE_ACPI_ATTR_VALID (1 << 0)
 #define MEMORY_RANGE_ACPI_ATTR_NONVOLATILE (1 << 1)
 
-#define PAGE_STACK_PML4E 0x1FCull
+#define PAGE_STACK_PML4E UINT64_C(0x1FC)
 #define PAGE_STACK_BOTTOM (u64 *)ASSEMBLE_ADDR_PML4E(PAGE_STACK_PML4E, 0)
 
 #define ID_MAP_INIT_AREA ASSEMBLE_ADDR_PDPTE(0x1FD, 0x002, 0)
@@ -52,7 +52,7 @@ err_t page_alloc_init(void) {
         // Add each page in the range to the page stack
         for (u64 page = page_start; page < page_end; page += PAGE_SIZE) {
             // Discard low memory pages, as many of them are used by the bootloader
-            if (page < (1ull << 20))
+            if (page < (UINT64_C(1) << 20))
                 continue;
             // Discard pages that would go outside the identity mapping
             if (page >= IDENTITY_MAPPING_SIZE)

@@ -7,8 +7,8 @@
 #include "string.h"
 #include "spinlock.h"
 
-#define HEAP_START ASSEMBLE_ADDR_PML4E(0x100ull, 0)
-#define HEAP_END_MAX ASSEMBLE_ADDR_PML4E(0x101ull, 0)
+#define HEAP_START ASSEMBLE_ADDR_PML4E(UINT64_C(0x100), 0)
+#define HEAP_END_MAX ASSEMBLE_ADDR_PML4E(UINT64_C(0x101), 0)
 
 #else
 
@@ -16,17 +16,17 @@
 #include <string.h>
 #include <syscalls.h>
 
-#define HEAP_START 0x0000008000000000ull
-#define HEAP_END_MAX 0x0000010000000000ull
+#define HEAP_START UINT64_C(0x0000008000000000)
+#define HEAP_END_MAX UINT64_C(0x0000010000000000)
 
 #endif
 
 #define MALLOC_ALIGNMENT 16
-#define INIT_HEAP_SIZE (1ull << 20)
-#define MIN_HEAP_EXTEND_SIZE (1ull << 20)
+#define INIT_HEAP_SIZE (UINT64_C(1) << 20)
+#define MIN_HEAP_EXTEND_SIZE (UINT64_C(1) << 20)
 
 #ifndef _KERNEL
-#define PAGE_SIZE (1ull << 12)
+#define PAGE_SIZE (UINT64_C(1) << 12)
 #endif
 
 static u64 heap_end = HEAP_START;

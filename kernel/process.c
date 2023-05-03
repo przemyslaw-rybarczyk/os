@@ -17,7 +17,7 @@
 #include "stack.h"
 #include "string.h"
 
-#define RFLAGS_IF (1ull << 9)
+#define RFLAGS_IF (UINT64_C(1) << 9)
 
 typedef struct FXSAVEArea {
     u16 fcw;

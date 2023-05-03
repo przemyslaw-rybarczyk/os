@@ -5,7 +5,7 @@
 #include "smp.h"
 #include "spinlock.h"
 
-#define STACK_PML4E 0x1FEull
+#define STACK_PML4E UINT64_C(0x1FE)
 #define KERNEL_INIT_STACK ASSEMBLE_ADDR_PML4E(STACK_PML4E, 0)
 #define KERNEL_STACK_AREA_END (KERNEL_INIT_STACK + PDPT_SIZE)
 
