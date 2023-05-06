@@ -1,5 +1,14 @@
+#ifdef _KERNEL
+
 #include "types.h"
 #include "string.h"
+
+#else
+
+#include <zr/types.h>
+#include <string.h>
+
+#endif
 
 int memcmp(const void *p1, const void *p2, size_t n) {
     const u8 *s1 = p1;

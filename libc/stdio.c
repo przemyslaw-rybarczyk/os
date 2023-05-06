@@ -1,11 +1,11 @@
-#include "types.h"
+#include <zr/types.h>
 #include <stdio.h>
 
 #include <float.h>
 #include <stdarg.h>
 #include <string.h>
 
-#include <syscalls.h>
+#include <zr/syscalls.h>
 
 #define CHANNEL_STDOUT 1
 

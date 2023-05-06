@@ -1,7 +1,6 @@
-#include "types.h"
-
 #ifdef _KERNEL
 
+#include "types.h"
 #include "alloc.h"
 #include "page.h"
 #include "string.h"
@@ -14,7 +13,8 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <syscalls.h>
+#include <zr/syscalls.h>
+#include <zr/types.h>
 
 #define HEAP_START UINT64_C(0x0000008000000000)
 #define HEAP_END_MAX UINT64_C(0x0000010000000000)

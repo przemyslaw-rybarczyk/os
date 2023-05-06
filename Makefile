@@ -6,7 +6,7 @@ KERNEL_CFLAGS = -target x86_64-pc-none-elf -ffreestanding -masm=intel -fno-PIC -
 KERNEL_LDFLAGS = -target x86_64-pc-none-elf -ffreestanding -static -nostdlib -O2
 
 # Flags for building programs and libraries
-USER_CFLAGS = -target x86_64-pc-none-elf -ffreestanding -masm=intel -fno-PIC -nostdlibinc -O2 -Wall -Wextra -fomit-frame-pointer -Ilibc
+USER_CFLAGS = -target x86_64-pc-none-elf -ffreestanding -masm=intel -fno-PIC -nostdlibinc -O2 -Wall -Wextra -fomit-frame-pointer -Ilibc/include
 USER_LDFLAGS = -target x86_64-pc-none-elf -ffreestanding -static -nostdlib -O2
 
 # All subprojects other than the kernel are either programs or libraries
@@ -21,9 +21,10 @@ libc_DEPS =
 # Generates the header and object list for a subproject
 # $(1) = name of subproject
 define defs_template =
-$(1)_HEADERS = $$(wildcard $(1)/*.h)
-$(1)_ASM_HEADERS = $$(wildcard $(1)/*.inc)
-$(1)_OBJECTS = $$(patsubst %.c,$$(BUILD)/%.o,$$(wildcard $(1)/*.c)) $$(patsubst %.s,$$(BUILD)/%.s.o,$$(wildcard $(1)/*.s))
+$(1)_INCLUDE = $$(wildcard $(1)/include/*.h $(1)/include/**/*.h)
+$(1)_HEADERS = $$(wildcard $(1)/*.h $(1)/**/*.h)
+$(1)_ASM_HEADERS = $$(wildcard $(1)/*.inc $(1)/**/*.inc)
+$(1)_OBJECTS = $$(patsubst %.c,$$(BUILD)/%.o,$$(wildcard $(1)/*.c $(1)/**/*.c)) $$(patsubst %.s,$$(BUILD)/%.s.o,$$(wildcard $(1)/*.s $(1)/**/*.s))
 endef
 
 # Generate all header and object lists
@@ -52,7 +53,7 @@ $$($(1)_OBJECTS): | $$(BUILD)/$(1)
 $$(BUILD)/$(1)/%.s.o: $(1)/%.s $$($(1)_ASM_HEADERS) $$(foreach dep,$(2),$$($$(dep)_ASM_HEADERS))
 	$$(asm_recipe)
 
-$$(BUILD)/$(1)/%.o: $(1)/%.c $$($(1)_HEADERS) $$(foreach dep,$(2),$$($$(dep)_HEADERS))
+$$(BUILD)/$(1)/%.o: $(1)/%.c $$($(1)_HEADERS) $$(foreach dep,$(2),$$($$(dep)_INCLUDE))
 	$$(call c_recipe,$(3))
 
 endef

@@ -1,8 +1,9 @@
-#include <types.h>
+#include <zr/types.h>
 
 #include <stdlib.h>
 #include <string.h>
-#include <syscalls.h>
+
+#include <zr/syscalls.h>
 
 typedef struct ScreenSize {
     size_t width;

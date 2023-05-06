@@ -1,6 +1,6 @@
-#include "types.h"
+#include <zr/types.h>
 
-#include <syscalls.h>
+#include <zr/syscalls.h>
 
 void main(void) {
 }

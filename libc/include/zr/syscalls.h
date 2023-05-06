@@ -1,7 +1,7 @@
 #pragma once
 
-#include <types.h>
-#include <error.h>
+#include <zr/types.h>
+#include <zr/error.h>
 
 #define MAP_PAGES_WRITE (UINT64_C(1) << 0)
 #define MAP_PAGES_EXECUTE (UINT64_C(1) << 1)
