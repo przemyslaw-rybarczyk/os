@@ -25,7 +25,7 @@ typedef struct Channel {
     spinlock_t lock;
     size_t refcount;
     MessageQueue *queue;
-    uintptr_t tag[2];
+    MessageTag tag;
 } Channel;
 
 // Create a message from a given data buffer
@@ -208,17 +208,15 @@ void channel_del_ref(Channel *channel) {
 }
 
 // Set the channel's message queue and tag
-void channel_set_mqueue(Channel *channel, MessageQueue *mqueue, uintptr_t tag[2]) {
+void channel_set_mqueue(Channel *channel, MessageQueue *mqueue, MessageTag tag) {
     mqueue_add_ref(mqueue);
     channel->queue = mqueue;
-    channel->tag[0] = tag[0];
-    channel->tag[1] = tag[1];
+    channel->tag = tag;
 }
 
 // Send a message on a channel and wait for a reply
 err_t channel_call(Channel *channel, Message *message, Message **reply) {
-    message->tag[0] = channel->tag[0];
-    message->tag[1] = channel->tag[1];
+    message->tag = channel->tag;
     return mqueue_call(channel->queue, message, reply);
 }
 
@@ -303,10 +301,15 @@ err_t syscall_channel_call(handle_t channel_i, size_t message_size, const void *
 }
 
 // Get a message from a channel
-err_t syscall_mqueue_receive(handle_t mqueue_i, uintptr_t tag[2], handle_t *message_i_ptr) {
+err_t syscall_mqueue_receive(handle_t mqueue_i, MessageTag *tag_ptr, handle_t *message_i_ptr) {
     err_t err;
     Handle mqueue_handle;
     // Verify buffer is valid
+    if (tag_ptr != NULL) {
+        err = verify_user_buffer(tag_ptr, sizeof(MessageTag));
+        if (err)
+            return err;
+    }
     err = verify_user_buffer(message_i_ptr, sizeof(handle_t));
     if (err)
         return err;
@@ -320,10 +323,8 @@ err_t syscall_mqueue_receive(handle_t mqueue_i, uintptr_t tag[2], handle_t *mess
     Message *message;
     mqueue_receive(mqueue_handle.mqueue, &message);
     // Return the tag
-    if (tag != NULL) {
-        tag[0] = message->tag[0];
-        tag[1] = message->tag[1];
-    }
+    if (tag_ptr != NULL)
+        *tag_ptr = message->tag;
     // Add the handle
     err = handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_MESSAGE, {.message = message}}, message_i_ptr);
     if (err) {

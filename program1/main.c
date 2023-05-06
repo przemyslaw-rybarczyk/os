@@ -81,10 +81,10 @@ void main(void) {
     err = mqueue_create(&event_mqueue);
     if (err)
         return;
-    err = mqueue_add_channel(event_mqueue, "keyboard/data", (uintptr_t[2]){1, 0});
+    err = mqueue_add_channel(event_mqueue, "keyboard/data", (MessageTag){1, 0});
     if (err)
         return;
-    err = mqueue_add_channel(event_mqueue, "mouse/data", (uintptr_t[2]){2, 0});
+    err = mqueue_add_channel(event_mqueue, "mouse/data", (MessageTag){2, 0});
     if (err)
         return;
     size_t screen_bytes = screen_size.height * screen_size.width * 3;
@@ -96,14 +96,14 @@ void main(void) {
     i32 mouse_y = screen_size.height / 2;
     draw_screen(screen, color, mouse_x, mouse_y);
     while (1) {
-        uintptr_t tag[2];
+        MessageTag tag;
         handle_t msg;
-        err = mqueue_receive(event_mqueue, tag, &msg);
+        err = mqueue_receive(event_mqueue, &tag, &msg);
         if (err)
             continue;
         size_t msg_size;
         message_get_length(msg, &msg_size);
-        switch (tag[0]) {
+        switch (tag.data[0]) {
         case 1: {
             KeyEvent key_event;
             err = message_read_sized(msg, &key_event, sizeof(KeyEvent), ERR_INVALID_ARG);

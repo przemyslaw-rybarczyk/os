@@ -104,5 +104,6 @@ mqueue_create:
 
 mqueue_add_channel:
   mov rax, 15
+  mov r10, rcx
   syscall
   ret

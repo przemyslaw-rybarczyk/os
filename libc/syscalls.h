@@ -6,6 +6,10 @@
 #define MAP_PAGES_WRITE (UINT64_C(1) << 0)
 #define MAP_PAGES_EXECUTE (UINT64_C(1) << 1)
 
+typedef struct MessageTag {
+    uintptr_t data[2];
+} MessageTag;
+
 // Possible return values of system calls:
 // - Every syscall taking a handle as an argument will return ERR_KERNEL_INVALID_HANDLE or ERR_KERNEL_WRONG_HANDLE_TYPE if the handle is invalid
 //   - handle_free() is an exception, as it returns void
@@ -28,7 +32,7 @@ void process_yield(void);
 err_t message_get_length(handle_t i, size_t *length);
 err_t message_read(handle_t i, void *data);
 err_t channel_call(handle_t channel_i, size_t message_size, const void *message_data, handle_t *reply_i_ptr);
-err_t mqueue_receive(handle_t mqueue_i, uintptr_t tag[2], handle_t *message_i_ptr);
+err_t mqueue_receive(handle_t mqueue_i, MessageTag *tag, handle_t *message_i_ptr);
 err_t message_reply(handle_t message_i, size_t reply_size, const void *reply_data);
 void handle_free(handle_t i);
 err_t message_reply_error(handle_t message_i, err_t error);
@@ -39,7 +43,7 @@ err_t channel_call_bounded(
     void *reply_data, size_t *reply_length, size_t min_length, size_t max_length);
 err_t channel_get(const char *name, handle_t *handle_i);
 err_t mqueue_create(handle_t *handle_i_ptr);
-err_t mqueue_add_channel(handle_t mqueue_i, const char *channel_name, uintptr_t tag[2]);
+err_t mqueue_add_channel(handle_t mqueue_i, const char *channel_name, MessageTag tag);
 
 static inline err_t message_read_sized(handle_t i, void *data, size_t length, err_t error) {
     return message_read_bounded(i, data, NULL, length, length, error, error);

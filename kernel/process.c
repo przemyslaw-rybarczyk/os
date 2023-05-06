@@ -185,8 +185,8 @@ err_t process_setup(void) {
     mouse_channel = channel_alloc();
     if (mouse_channel == NULL)
         return ERR_KERNEL_NO_MEMORY;
-    channel_set_mqueue(framebuffer_data_channel, framebuffer_mqueue, (uintptr_t[2]){FB_MQ_TAG_DATA, 0});
-    channel_set_mqueue(framebuffer_size_channel, framebuffer_mqueue, (uintptr_t[2]){FB_MQ_TAG_SIZE, 0});
+    channel_set_mqueue(framebuffer_data_channel, framebuffer_mqueue, (MessageTag){FB_MQ_TAG_DATA, 0});
+    channel_set_mqueue(framebuffer_size_channel, framebuffer_mqueue, (MessageTag){FB_MQ_TAG_SIZE, 0});
     Process *framebuffer_kernel_thread;
     err = process_create(&framebuffer_kernel_thread, (ResourceList){0, NULL});
     if (err)

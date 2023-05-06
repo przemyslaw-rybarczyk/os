@@ -59,13 +59,10 @@ err_t syscall_channel_get(const char *name_str, handle_t *handle_i_ptr) {
 }
 
 // Get a receiving channel resource and add it to a message queue
-err_t syscall_mqueue_add_channel(handle_t mqueue_i, const char *channel_name_str, uintptr_t tag[2]) {
+err_t syscall_mqueue_add_channel(handle_t mqueue_i, const char *channel_name_str, MessageTag tag) {
     err_t err;
     // Verify buffers are valid
     err = verify_user_buffer(channel_name_str, RESOURCE_NAME_MAX);
-    if (err)
-        return err;
-    err = verify_user_buffer(tag, 2 * sizeof(uintptr_t));
     if (err)
         return err;
     // Get the message queue handle
