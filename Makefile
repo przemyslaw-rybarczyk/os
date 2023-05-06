@@ -2,7 +2,7 @@
 BUILD = build
 
 # Flags for building kernel
-KERNEL_CFLAGS = -target x86_64-pc-none-elf -ffreestanding -masm=intel -fno-PIC -mcmodel=kernel -mno-red-zone -mno-x87 -mno-mmx -mno-sse -mno-sse2 -fno-PIC -nostdlibinc -O2 -Wall -Wextra -fomit-frame-pointer -mstack-alignment=8 -D_KERNEL
+KERNEL_CFLAGS = -target x86_64-pc-none-elf -ffreestanding -masm=intel -fno-PIC -mcmodel=kernel -mno-red-zone -mno-x87 -mno-mmx -mno-sse -mno-sse2 -fno-PIC -nostdlibinc -O2 -Wall -Wextra -fomit-frame-pointer -mstack-alignment=8 -D_KERNEL -Ilibc/include
 KERNEL_LDFLAGS = -target x86_64-pc-none-elf -ffreestanding -static -nostdlib -O2
 
 # Flags for building programs and libraries
