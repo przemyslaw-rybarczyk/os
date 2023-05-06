@@ -20,10 +20,10 @@ ResourceName resource_name(const char *str) {
 }
 
 // Get an element of a resource list by its name
-static err_t resource_list_get(ResourceList *list, ResourceName name, Resource *resource) {
+static err_t resource_list_get(ResourceList *list, ResourceName name, size_t *i_ptr) {
     for (size_t i = 0; i < list->length; i++) {
         if (memcmp(list->entries[i].name.bytes, name.bytes, RESOURCE_NAME_MAX) == 0) {
-            *resource = list->entries[i].resource;
+            *i_ptr = i;
             return 0;
         }
     }
@@ -41,16 +41,20 @@ err_t syscall_channel_get(const char *name_str, handle_t *handle_i_ptr) {
     if (err)
         return err;
     // Get the resource
-    Resource resource;
-    err = resource_list_get(&cpu_local->current_process->resources, resource_name(name_str), &resource);
+    ResourceList *resources = &cpu_local->current_process->resources;
+    size_t channel_i;
+    err = resource_list_get(resources, resource_name(name_str), &channel_i);
     if (err)
         return err;
-    if (resource.type != RESOURCE_TYPE_CHANNEL_SEND)
+    Resource *channel_resource = &resources->entries[channel_i].resource;
+    if (channel_resource->type != RESOURCE_TYPE_CHANNEL_SEND)
         return ERR_KERNEL_WRONG_RESOURCE_TYPE;
     // Add the handle
-    err = handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_CHANNEL, {.channel = resource.channel}}, handle_i_ptr);
+    err = handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_CHANNEL, {.channel = channel_resource->channel}}, handle_i_ptr);
     if (err)
         return err;
+    // Remove the resource
+    channel_resource->type = RESOURCE_TYPE_EMPTY;
     return 0;
 }
 
@@ -72,13 +76,17 @@ err_t syscall_mqueue_add_channel(handle_t mqueue_i, const char *channel_name_str
     if (mqueue_handle.type != HANDLE_TYPE_MESSAGE_QUEUE)
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Get the channel resource
-    Resource channel_resource;
-    err = resource_list_get(&cpu_local->current_process->resources, resource_name(channel_name_str), &channel_resource);
+    ResourceList *resources = &cpu_local->current_process->resources;
+    size_t channel_i;
+    err = resource_list_get(resources, resource_name(channel_name_str), &channel_i);
     if (err)
         return err;
-    if (channel_resource.type != RESOURCE_TYPE_CHANNEL_RECEIVE)
+    Resource *channel_resource = &resources->entries[channel_i].resource;
+    if (channel_resource->type != RESOURCE_TYPE_CHANNEL_RECEIVE)
         return ERR_KERNEL_WRONG_RESOURCE_TYPE;
     // Add the channel to the message queue
-    channel_set_mqueue(channel_resource.channel, mqueue_handle.mqueue, tag);
+    channel_set_mqueue(channel_resource->channel, mqueue_handle.mqueue, tag);
+    // Remove the resource
+    channel_resource->type = RESOURCE_TYPE_EMPTY;
     return 0;
 }

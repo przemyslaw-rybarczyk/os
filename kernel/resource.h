@@ -8,6 +8,7 @@
 #define RESOURCE_NAME_MAX 32
 
 typedef enum ResourceType {
+    RESOURCE_TYPE_EMPTY,
     RESOURCE_TYPE_CHANNEL_SEND,
     RESOURCE_TYPE_CHANNEL_RECEIVE,
 } ResourceType;
