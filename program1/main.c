@@ -44,6 +44,8 @@ static u8 colors[COLORS_NUM][3] = {
 
 #define CURSOR_SIZE 2
 
+static handle_t video_data_channel;
+
 static void draw_screen(u8 *screen, int color_i, i32 mouse_x, i32 mouse_y) {
     size_t screen_bytes = screen_size.height * screen_size.width * 3;
     for (i32 y = 0; (size_t)y < screen_size.height; y++) {
@@ -60,12 +62,29 @@ static void draw_screen(u8 *screen, int color_i, i32 mouse_x, i32 mouse_y) {
             }
         }
     }
-    channel_call(1, screen_bytes, screen, NULL);
+    channel_call(video_data_channel, screen_bytes, screen, NULL);
 }
 
 void main(void) {
     err_t err;
-    err = channel_call_sized(2, 0, NULL, &screen_size, sizeof(ScreenSize));
+    handle_t video_size_channel;
+    err = channel_get("video/size", &video_size_channel);
+    if (err)
+        return;
+    err = channel_get("video/data", &video_data_channel);
+    if (err)
+        return;
+    err = channel_call_sized(video_size_channel, 0, NULL, &screen_size, sizeof(ScreenSize));
+    if (err)
+        return;
+    handle_t event_mqueue;
+    err = mqueue_create(&event_mqueue);
+    if (err)
+        return;
+    err = mqueue_add_channel(event_mqueue, "keyboard/data", (uintptr_t[2]){1, 0});
+    if (err)
+        return;
+    err = mqueue_add_channel(event_mqueue, "mouse/data", (uintptr_t[2]){2, 0});
     if (err)
         return;
     size_t screen_bytes = screen_size.height * screen_size.width * 3;
@@ -79,7 +98,7 @@ void main(void) {
     while (1) {
         uintptr_t tag[2];
         handle_t msg;
-        err = mqueue_receive(3, tag, &msg);
+        err = mqueue_receive(event_mqueue, tag, &msg);
         if (err)
             continue;
         size_t msg_size;

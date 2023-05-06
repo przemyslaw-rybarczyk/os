@@ -222,17 +222,6 @@ err_t channel_call(Channel *channel, Message *message, Message **reply) {
     return mqueue_call(channel->queue, message, reply);
 }
 
-// Verify that a buffer provided by a process is contained within the process address space
-// This does not handle the cases where an address is not mapped by the process - in those cases a page fault will occur and the process will be killed.
-static err_t verify_user_buffer(const void *start, size_t length) {
-    u64 start_addr = (u64)start;
-    if (start_addr + length < start_addr)
-        return ERR_KERNEL_INVALID_ADDRESS;
-    if (start_addr + length > USER_ADDR_UPPER_BOUND)
-        return ERR_KERNEL_INVALID_ADDRESS;
-    return 0;
-}
-
 // Returns the length of the message
 err_t syscall_message_get_length(handle_t i, size_t *length) {
     err_t err;
@@ -524,5 +513,22 @@ err_t syscall_channel_call_bounded(handle_t channel_i, size_t message_size, cons
     if (reply_length_ptr != NULL)
         *reply_length_ptr = length;
     message_free(reply);
+    return 0;
+}
+
+// Create a new message queue
+err_t syscall_mqueue_create(handle_t *handle_i_ptr) {
+    err_t err;
+    MessageQueue *mqueue = mqueue_alloc();
+    if (mqueue == NULL)
+        return ERR_KERNEL_NO_MEMORY;
+    // Verify buffer is valid
+    err = verify_user_buffer(handle_i_ptr, sizeof(handle_t));
+    if (err)
+        return err;
+    // Add the handle
+    err = process_add_handle((Handle){HANDLE_TYPE_MESSAGE_QUEUE, {.mqueue = mqueue}}, handle_i_ptr);
+    if (err)
+        return err;
     return 0;
 }

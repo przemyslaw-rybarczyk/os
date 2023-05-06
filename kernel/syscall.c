@@ -44,4 +44,7 @@ const void * const syscalls[] = {
     syscall_message_read_bounded,
     syscall_reply_read_bounded,
     syscall_channel_call_bounded,
+    syscall_channel_get,
+    syscall_mqueue_create,
+    syscall_mqueue_add_channel,
 };

@@ -11,6 +11,7 @@
 #include "mouse.h"
 #include "page.h"
 #include "percpu.h"
+#include "resource.h"
 #include "segment.h"
 #include "smp.h"
 #include "spinlock.h"
@@ -40,6 +41,7 @@ typedef struct Process {
     u64 page_map; // physical address of the PML4
     FXSAVEArea *fxsave_area;
     HandleList handles;
+    ResourceList resources;
     struct Process *next_process;
 } Process;
 
@@ -75,7 +77,7 @@ Process *process_queue_remove(ProcessQueue *queue) {
 
 // Create a new process
 // The process is not placed in the queue and its stack is not initialized.
-err_t process_create(Process **process_ptr) {
+err_t process_create(Process **process_ptr, ResourceList resources) {
     err_t err;
     // Allocate a process control block
     Process *process = malloc(sizeof(Process));
@@ -111,6 +113,7 @@ err_t process_create(Process **process_ptr) {
     err = handle_list_init(&process->handles);
     if (err)
         goto fail_handle_list_init;
+    process->resources = resources;
     *process_ptr = process;
     return 0;
 fail_handle_list_init:
@@ -194,41 +197,43 @@ err_t process_setup(void) {
         return ERR_KERNEL_NO_MEMORY;
     channel_set_mqueue(framebuffer_data_channel, framebuffer_mqueue, (uintptr_t[2]){FB_MQ_TAG_DATA, 0});
     channel_set_mqueue(framebuffer_size_channel, framebuffer_mqueue, (uintptr_t[2]){FB_MQ_TAG_SIZE, 0});
-    MessageQueue *input_mqueue = mqueue_alloc();
-    if (input_mqueue == NULL)
-        return ERR_KERNEL_NO_MEMORY;
-    channel_set_mqueue(keyboard_channel, input_mqueue, (uintptr_t[2]){1, 0});
-    channel_set_mqueue(mouse_channel, input_mqueue, (uintptr_t[2]){2, 0});
     Process *framebuffer_kernel_thread;
-    err = process_create(&framebuffer_kernel_thread);
+    err = process_create(&framebuffer_kernel_thread, (ResourceList){0, NULL});
     if (err)
         return err;
-    err = process_create(&keyboard_kernel_thread);
+    err = process_create(&keyboard_kernel_thread, (ResourceList){0, NULL});
     if (err)
         return err;
-    err = process_create(&mouse_kernel_thread);
+    err = process_create(&mouse_kernel_thread, (ResourceList){0, NULL});
     if (err)
         return err;
     process_set_kernel_stack(framebuffer_kernel_thread, framebuffer_kernel_thread_main);
     process_set_kernel_stack(keyboard_kernel_thread, keyboard_kernel_thread_main);
     process_set_kernel_stack(mouse_kernel_thread, mouse_kernel_thread_main);
     Process *client_process;
-    err = process_create(&client_process);
+    ResourceListEntry *client_resources = malloc(4 * sizeof(ResourceListEntry));
+    if (client_resources == NULL)
+        return ERR_KERNEL_NO_MEMORY;
+    client_resources[0] = (ResourceListEntry){
+        resource_name("video/size"), {
+            RESOURCE_TYPE_CHANNEL_SEND,
+            {.channel = framebuffer_size_channel}}};
+    client_resources[1] = (ResourceListEntry){
+        resource_name("video/data"), {
+            RESOURCE_TYPE_CHANNEL_SEND,
+            {.channel = framebuffer_data_channel}}};
+    client_resources[2] = (ResourceListEntry){
+        resource_name("keyboard/data"), {
+            RESOURCE_TYPE_CHANNEL_RECEIVE,
+            {.channel = keyboard_channel}}};
+    client_resources[3] = (ResourceListEntry){
+        resource_name("mouse/data"), {
+            RESOURCE_TYPE_CHANNEL_RECEIVE,
+            {.channel = mouse_channel}}};
+    err = process_create(&client_process, (ResourceList){4, client_resources});
     if (err)
         return err;
     process_set_user_stack(client_process, included_file_program1, included_file_program1_end - included_file_program1);
-    channel_add_ref(framebuffer_data_channel);
-    err = handle_set(&client_process->handles, 1, (Handle){HANDLE_TYPE_CHANNEL, {.channel = framebuffer_data_channel}});
-    if (err)
-        return err;
-    channel_add_ref(framebuffer_size_channel);
-    err = handle_set(&client_process->handles, 2, (Handle){HANDLE_TYPE_CHANNEL, {.channel = framebuffer_size_channel}});
-    if (err)
-        return err;
-    mqueue_add_ref(input_mqueue);
-    err = handle_set(&client_process->handles, 3, (Handle){HANDLE_TYPE_MESSAGE_QUEUE, {.mqueue = input_mqueue}});
-    if (err)
-        return err;
     process_enqueue(framebuffer_kernel_thread);
     process_enqueue(keyboard_kernel_thread);
     process_enqueue(mouse_kernel_thread);
@@ -298,4 +303,8 @@ err_t process_add_handle(Handle handle, handle_t *i_ptr) {
 
 void process_clear_handle(handle_t i) {
     return handle_clear(&cpu_local->current_process->handles, i);
+}
+
+err_t process_resource_list_get(ResourceName name, Resource *resource) {
+    return resource_list_get(&cpu_local->current_process->resources, name, resource);
 }

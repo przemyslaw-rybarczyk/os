@@ -12,6 +12,9 @@ global message_reply_error
 global message_read_bounded
 global reply_read_bounded
 global channel_call_bounded
+global channel_get
+global mqueue_create
+global mqueue_add_channel
 
 ; This file implements the C interface for system calls
 
@@ -87,4 +90,19 @@ channel_call_bounded:
   mov r10, rcx
   syscall
   pop rbx
+  ret
+
+channel_get:
+  mov rax, 13
+  syscall
+  ret
+
+mqueue_create:
+  mov rax, 14
+  syscall
+  ret
+
+mqueue_add_channel:
+  mov rax, 15
+  syscall
   ret

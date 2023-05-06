@@ -45,3 +45,4 @@ err_t syscall_message_reply_error(handle_t message_i, err_t error);
 err_t syscall_message_read_bounded(handle_t i, void *data, size_t *length, size_t min_length, size_t max_length, err_t err_low, err_t err_high);
 err_t syscall_reply_read_bounded(handle_t i, void *data, size_t *length_ptr, size_t min_length, size_t max_length);
 err_t syscall_channel_call_bounded(handle_t channel_i, size_t message_size, const void *message_data, void *reply_data, size_t *reply_length_ptr, size_t min_length, size_t max_length);
+err_t syscall_mqueue_create(handle_t *handle_i_ptr);

@@ -9,10 +9,11 @@
 // Possible return values of system calls:
 // - Every syscall taking a handle as an argument will return ERR_KERNEL_INVALID_HANDLE or ERR_KERNEL_WRONG_HANDLE_TYPE if the handle is invalid
 //   - handle_free() is an exception, as it returns void
+// - Every syscall taking a resource name as argument will return ERR_KERNEL_INVALID_RESOURCE or ERR_KERNEL_WRONG_RESOURCE_TYPE if the resource is invalid
 // - Every syscall taking a pointer as an argument will return ERR_KERNEL_INVALID_ADDRESS if the address is invalid
 //   - map_pages() will return ERR_KERNEL_INVALID_ADDRESS if trying to map region that includes kernel memory
 // - The following syscalls may return ERR_KERNEL_NO_MEMORY:
-//     map_pages(), channel_call(), mqueue_receive(), message_reply(), channel_call_bounded()
+//     map_pages(), channel_call(), mqueue_receive(), message_reply(), channel_call_bounded(), channel_get(), mqueue_create()
 //   - message_reply() with length 0 will not return ERR_KERNEL_NO_MEMORY
 // - The following syscalls may return ERR_KERNEL_INVALID_ARG if one of their arguments has an invalid value:
 //     map_pages(), message_reply_error(), message_read_bounded()
@@ -36,6 +37,9 @@ err_t reply_read_bounded(handle_t i, void *data, size_t *length, size_t min_leng
 err_t channel_call_bounded(
     handle_t channel_i, size_t message_size, const void *message_data,
     void *reply_data, size_t *reply_length, size_t min_length, size_t max_length);
+err_t channel_get(const char *name, handle_t *handle_i);
+err_t mqueue_create(handle_t *handle_i_ptr);
+err_t mqueue_add_channel(handle_t mqueue_i, const char *channel_name, uintptr_t tag[2]);
 
 static inline err_t message_read_sized(handle_t i, void *data, size_t length, err_t error) {
     return message_read_bounded(i, data, NULL, length, length, error, error);

@@ -290,3 +290,14 @@ void page_map_free_contents(u64 page_map_addr) {
         if (page_map[i] & PAGE_PRESENT)
             page_map_free_(page_map[i] & PAGE_MASK, 3);
 }
+
+// Verify that a buffer provided by a process is contained within the process address space
+// This does not handle the cases where an address is not mapped by the process - in those cases a page fault will occur and the process will be killed.
+err_t verify_user_buffer(const void *start, size_t length) {
+    u64 start_addr = (u64)start;
+    if (start_addr + length < start_addr)
+        return ERR_KERNEL_INVALID_ADDRESS;
+    if (start_addr + length > USER_ADDR_UPPER_BOUND)
+        return ERR_KERNEL_INVALID_ADDRESS;
+    return 0;
+}
