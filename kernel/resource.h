@@ -35,6 +35,5 @@ typedef struct ResourceList {
 } ResourceList;
 
 ResourceName resource_name(const char *str);
-err_t resource_list_get(ResourceList *list, ResourceName name, Resource *resource);
 err_t syscall_channel_get(const char *name_str, handle_t *handle_i_ptr);
 err_t syscall_mqueue_add_channel(handle_t mqueue_i, const char *channel_name_str, uintptr_t tag[2]);

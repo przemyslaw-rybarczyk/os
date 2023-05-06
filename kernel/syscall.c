@@ -5,6 +5,7 @@
 #include "framebuffer.h"
 #include "interrupt.h"
 #include "page.h"
+#include "percpu.h"
 #include "process.h"
 
 #define MAP_PAGES_WRITE (UINT64_C(1) << 0)
@@ -26,7 +27,7 @@ err_t syscall_process_yield(void) {
 }
 
 err_t syscall_handle_free(handle_t i) {
-    process_clear_handle(i);
+    handle_clear(&cpu_local->current_process->handles, i);
     return 0;
 }
 

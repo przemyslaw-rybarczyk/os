@@ -227,7 +227,7 @@ err_t syscall_message_get_length(handle_t i, size_t *length) {
     err_t err;
     Handle handle;
     // Get the message from handle
-    err = process_get_handle(i, &handle);
+    err = handle_get(&cpu_local->current_process->handles, i, &handle);
     if (err)
         return err;
     if (handle.type != HANDLE_TYPE_MESSAGE && handle.type != HANDLE_TYPE_REPLY)
@@ -250,7 +250,7 @@ err_t syscall_message_read(handle_t i, void *data) {
     err_t err;
     Handle handle;
     // Get the message from handle
-    err = process_get_handle(i, &handle);
+    err = handle_get(&cpu_local->current_process->handles, i, &handle);
     if (err)
         return err;
     if (handle.type != HANDLE_TYPE_MESSAGE && handle.type != HANDLE_TYPE_REPLY)
@@ -279,7 +279,7 @@ err_t syscall_channel_call(handle_t channel_i, size_t message_size, const void *
             return err;
     }
     // Get the channel from handle
-    err = process_get_handle(channel_i, &channel_handle);
+    err = handle_get(&cpu_local->current_process->handles, channel_i, &channel_handle);
     if (err)
         return err;
     if (channel_handle.type != HANDLE_TYPE_CHANNEL)
@@ -295,7 +295,7 @@ err_t syscall_channel_call(handle_t channel_i, size_t message_size, const void *
         return err;
     // Add the reply handle
     if (reply_i_ptr != NULL) {
-        err = process_add_handle((Handle){HANDLE_TYPE_REPLY, {.message = reply}}, reply_i_ptr);
+        err = handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_REPLY, {.message = reply}}, reply_i_ptr);
         if (err)
             return err;
     }
@@ -311,7 +311,7 @@ err_t syscall_mqueue_receive(handle_t mqueue_i, uintptr_t tag[2], handle_t *mess
     if (err)
         return err;
     // Get the channel from handle
-    err = process_get_handle(mqueue_i, &mqueue_handle);
+    err = handle_get(&cpu_local->current_process->handles, mqueue_i, &mqueue_handle);
     if (err)
         return err;
     if (mqueue_handle.type != HANDLE_TYPE_MESSAGE_QUEUE)
@@ -325,7 +325,7 @@ err_t syscall_mqueue_receive(handle_t mqueue_i, uintptr_t tag[2], handle_t *mess
         tag[1] = message->tag[1];
     }
     // Add the handle
-    err = process_add_handle((Handle){HANDLE_TYPE_MESSAGE, {.message = message}}, message_i_ptr);
+    err = handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_MESSAGE, {.message = message}}, message_i_ptr);
     if (err) {
         mqueue_return_message(mqueue_handle.mqueue, message);
         return err;
@@ -341,7 +341,7 @@ err_t syscall_message_reply(handle_t message_i, size_t reply_size, const void *r
     if (err)
         return err;
     // Get the message from handle
-    err = process_get_handle(message_i, &message_handle);
+    err = handle_get(&cpu_local->current_process->handles, message_i, &message_handle);
     if (err)
         return err;
     if (message_handle.type != HANDLE_TYPE_MESSAGE)
@@ -360,7 +360,7 @@ err_t syscall_message_reply(handle_t message_i, size_t reply_size, const void *r
     // Send the reply
     message_reply(message_handle.message, reply);
     // Free message and handle
-    process_clear_handle(message_i);
+    handle_clear(&cpu_local->current_process->handles, message_i);
     return 0;
 }
 
@@ -371,7 +371,7 @@ err_t syscall_message_reply_error(handle_t message_i, err_t error) {
     if (error >= ERR_KERNEL_MIN || error == 0)
         return ERR_KERNEL_INVALID_ARG;
     // Get the message from handle
-    err = process_get_handle(message_i, &message_handle);
+    err = handle_get(&cpu_local->current_process->handles, message_i, &message_handle);
     if (err)
         return err;
     if (message_handle.type != HANDLE_TYPE_MESSAGE)
@@ -379,7 +379,7 @@ err_t syscall_message_reply_error(handle_t message_i, err_t error) {
     // Send the error
     message_reply_error(message_handle.message, error);
     // Free message and handle
-    process_clear_handle(message_i);
+    handle_clear(&cpu_local->current_process->handles, message_i);
     return 0;
 }
 
@@ -390,7 +390,7 @@ err_t syscall_message_read_bounded(handle_t i, void *data, size_t *length_ptr, s
     err_t err;
     Handle handle;
     // Get the message from handle
-    err = process_get_handle(i, &handle);
+    err = handle_get(&cpu_local->current_process->handles, i, &handle);
     if (err)
         return err;
     if (handle.type != HANDLE_TYPE_MESSAGE)
@@ -411,12 +411,12 @@ err_t syscall_message_read_bounded(handle_t i, void *data, size_t *length_ptr, s
     size_t length = handle.message != NULL ? handle.message->data_size : 0;
     if (length < min_length) {
         message_reply_error(handle.message, err_low);
-        process_clear_handle(i);
+        handle_clear(&cpu_local->current_process->handles, i);
         return ERR_KERNEL_MESSAGE_TOO_SHORT;
     }
     if (length > max_length) {
         message_reply_error(handle.message, err_high);
-        process_clear_handle(i);
+        handle_clear(&cpu_local->current_process->handles, i);
         return ERR_KERNEL_MESSAGE_TOO_LONG;
     }
     // Copy the data and length
@@ -433,7 +433,7 @@ err_t syscall_reply_read_bounded(handle_t i, void *data, size_t *length_ptr, siz
     err_t err;
     Handle handle;
     // Get the message from handle
-    err = process_get_handle(i, &handle);
+    err = handle_get(&cpu_local->current_process->handles, i, &handle);
     if (err)
         return err;
     if (handle.type != HANDLE_TYPE_REPLY)
@@ -450,11 +450,11 @@ err_t syscall_reply_read_bounded(handle_t i, void *data, size_t *length_ptr, siz
     // Perform bounds check
     size_t length = handle.message != NULL ? handle.message->data_size : 0;
     if (length < min_length) {
-        process_clear_handle(i);
+        handle_clear(&cpu_local->current_process->handles, i);
         return ERR_KERNEL_MESSAGE_TOO_SHORT;
     }
     if (length > max_length) {
-        process_clear_handle(i);
+        handle_clear(&cpu_local->current_process->handles, i);
         return ERR_KERNEL_MESSAGE_TOO_LONG;
     }
     // Copy the data and length
@@ -483,7 +483,7 @@ err_t syscall_channel_call_bounded(handle_t channel_i, size_t message_size, cons
             return err;
     }
     // Get the channel from handle
-    err = process_get_handle(channel_i, &channel_handle);
+    err = handle_get(&cpu_local->current_process->handles, channel_i, &channel_handle);
     if (err)
         return err;
     if (channel_handle.type != HANDLE_TYPE_CHANNEL)
@@ -527,7 +527,7 @@ err_t syscall_mqueue_create(handle_t *handle_i_ptr) {
     if (err)
         return err;
     // Add the handle
-    err = process_add_handle((Handle){HANDLE_TYPE_MESSAGE_QUEUE, {.mqueue = mqueue}}, handle_i_ptr);
+    err = handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_MESSAGE_QUEUE, {.mqueue = mqueue}}, handle_i_ptr);
     if (err)
         return err;
     return 0;

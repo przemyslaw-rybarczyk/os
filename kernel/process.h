@@ -10,7 +10,17 @@
 extern u8 tss[];
 extern u8 tss_end[];
 
-typedef struct Process Process;
+typedef struct FXSAVEArea FXSAVEArea;
+
+typedef struct Process {
+    void *rsp;
+    void *kernel_stack;
+    u64 page_map; // physical address of the PML4
+    FXSAVEArea *fxsave_area;
+    HandleList handles;
+    ResourceList resources;
+    struct Process *next_process;
+} Process;
 
 typedef struct ProcessQueue {
     Process *start;
@@ -28,7 +38,3 @@ _Noreturn void process_exit(void);
 void process_switch(void);
 void sched_start(void);
 void process_block(spinlock_t *spinlock);
-err_t process_get_handle(handle_t i, Handle *handle);
-err_t process_add_handle(Handle handle, handle_t *i_ptr);
-void process_clear_handle(handle_t i);
-err_t process_resource_list_get(ResourceName name, Resource *resource);

@@ -35,16 +35,6 @@ typedef struct FXSAVEArea {
     u64 reserved[12];
 } __attribute__((packed)) FXSAVEArea;
 
-typedef struct Process {
-    void *rsp;
-    void *kernel_stack;
-    u64 page_map; // physical address of the PML4
-    FXSAVEArea *fxsave_area;
-    HandleList handles;
-    ResourceList resources;
-    struct Process *next_process;
-} Process;
-
 extern void jump_to_current_process(void);
 extern u8 process_start[];
 
@@ -291,20 +281,4 @@ void sched_switch_process(void) {
     process_queue_add(&scheduler_queue, cpu_local->current_process);
     cpu_local->current_process = next_process;
     spinlock_release(&scheduler_lock);
-}
-
-err_t process_get_handle(handle_t i, Handle *handle) {
-    return handle_get(&cpu_local->current_process->handles, i, handle);
-}
-
-err_t process_add_handle(Handle handle, handle_t *i_ptr) {
-    return handle_add(&cpu_local->current_process->handles, handle, i_ptr);
-}
-
-void process_clear_handle(handle_t i) {
-    return handle_clear(&cpu_local->current_process->handles, i);
-}
-
-err_t process_resource_list_get(ResourceName name, Resource *resource) {
-    return resource_list_get(&cpu_local->current_process->resources, name, resource);
 }
