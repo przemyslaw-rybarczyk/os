@@ -7,14 +7,7 @@
 #include "smp.h"
 #include "string.h"
 
-typedef struct MouseUpdate {
-    i32 diff_x;
-    i32 diff_y;
-    i32 diff_scroll;
-    bool left_button_pressed;
-    bool right_button_pressed;
-    bool middle_button_pressed;
-} MouseUpdate;
+#include <zr/mouse.h>
 
 Process *mouse_kernel_thread;
 Channel *mouse_channel;

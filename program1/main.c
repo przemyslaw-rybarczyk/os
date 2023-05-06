@@ -3,26 +3,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <zr/keyboard.h>
+#include <zr/mouse.h>
 #include <zr/syscalls.h>
-
-typedef struct ScreenSize {
-    size_t width;
-    size_t height;
-} ScreenSize;
-
-typedef struct KeyEvent {
-    u8 keycode;
-    bool pressed;
-} KeyEvent;
-
-typedef struct MouseUpdate {
-    i32 diff_x;
-    i32 diff_y;
-    i32 diff_scroll;
-    bool left_button_pressed;
-    bool right_button_pressed;
-    bool middle_button_pressed;
-} MouseUpdate;
+#include <zr/video.h>
 
 ScreenSize screen_size;
 

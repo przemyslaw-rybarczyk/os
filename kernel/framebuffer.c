@@ -7,6 +7,8 @@
 
 #include "font.h"
 
+#include <zr/video.h>
+
 #define CPUID_SSSE3 (UINT64_C(1) << 9)
 
 #define FB_PML4E UINT64_C(0x1FD)
@@ -212,11 +214,6 @@ void print_hex_u16(u16 n) {
 void print_hex_u8(u8 n) {
     print_hex((u64)n, 2);
 }
-
-typedef struct ScreenSize {
-    size_t width;
-    size_t height;
-} ScreenSize;
 
 Channel *framebuffer_data_channel;
 Channel *framebuffer_size_channel;

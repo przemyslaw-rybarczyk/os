@@ -1,5 +1,7 @@
 #pragma once
 
+#include <zr/types.h>
+
 typedef enum Keycode : u8 {
     KEY_ESCAPE,
     KEY_F1,
@@ -106,3 +108,8 @@ typedef enum Keycode : u8 {
     KEY_KP_8,
     KEY_KP_9,
 } Keycode;
+
+typedef struct KeyEvent {
+    Keycode keycode;
+    bool pressed;
+} KeyEvent;

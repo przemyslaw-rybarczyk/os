@@ -4,15 +4,11 @@
 #include "alloc.h"
 #include "channel.h"
 #include "interrupt.h"
-#include "keycodes.h"
 #include "process.h"
 #include "smp.h"
 #include "string.h"
 
-typedef struct KeyEvent {
-    Keycode keycode;
-    bool pressed;
-} KeyEvent;
+#include <zr/keyboard.h>
 
 Process *keyboard_kernel_thread;
 Channel *keyboard_channel;
