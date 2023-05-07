@@ -231,7 +231,7 @@ err_t syscall_message_get_length(handle_t i, size_t *length) {
     if (handle.type != HANDLE_TYPE_MESSAGE && handle.type != HANDLE_TYPE_REPLY)
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Verify buffer is valid
-    err = verify_user_buffer(length, sizeof(size_t));
+    err = verify_user_buffer(length, sizeof(size_t), true);
     if (err)
         return err;
     // Copy the length
@@ -254,7 +254,7 @@ err_t syscall_message_read(handle_t i, void *data) {
     if (handle.type != HANDLE_TYPE_MESSAGE && handle.type != HANDLE_TYPE_REPLY)
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Verify buffer is valid
-    err = verify_user_buffer(data, handle.message->data_size);
+    err = verify_user_buffer(data, handle.message->data_size, true);
     if (err)
         return err;
     // Copy the data
@@ -268,11 +268,11 @@ err_t syscall_channel_call(handle_t channel_i, size_t message_size, const void *
     err_t err;
     Handle channel_handle;
     // Verify buffers are valid
-    err = verify_user_buffer(message_data, message_size);
+    err = verify_user_buffer(message_data, message_size, false);
     if (err)
         return err;
     if (reply_i_ptr != NULL) {
-        err = verify_user_buffer(reply_i_ptr, sizeof(handle_t));
+        err = verify_user_buffer(reply_i_ptr, sizeof(handle_t), true);
         if (err)
             return err;
     }
@@ -306,11 +306,11 @@ err_t syscall_mqueue_receive(handle_t mqueue_i, MessageTag *tag_ptr, handle_t *m
     Handle mqueue_handle;
     // Verify buffer is valid
     if (tag_ptr != NULL) {
-        err = verify_user_buffer(tag_ptr, sizeof(MessageTag));
+        err = verify_user_buffer(tag_ptr, sizeof(MessageTag), true);
         if (err)
             return err;
     }
-    err = verify_user_buffer(message_i_ptr, sizeof(handle_t));
+    err = verify_user_buffer(message_i_ptr, sizeof(handle_t), true);
     if (err)
         return err;
     // Get the channel from handle
@@ -338,7 +338,7 @@ err_t syscall_message_reply(handle_t message_i, size_t reply_size, const void *r
     err_t err;
     Handle message_handle;
     // Verify buffer is valid
-    err = verify_user_buffer(reply_data, reply_size);
+    err = verify_user_buffer(reply_data, reply_size, false);
     if (err)
         return err;
     // Get the message from handle
@@ -397,11 +397,11 @@ err_t syscall_message_read_bounded(handle_t i, void *data, size_t *length_ptr, s
     if (handle.type != HANDLE_TYPE_MESSAGE)
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Verify buffer is valid
-    err = verify_user_buffer(data, max_length);
+    err = verify_user_buffer(data, max_length, true);
     if (err)
         return err;
     if (length_ptr != NULL) {
-        err = verify_user_buffer(length_ptr, sizeof(size_t));
+        err = verify_user_buffer(length_ptr, sizeof(size_t), true);
         if (err)
             return err;
     }
@@ -440,11 +440,11 @@ err_t syscall_reply_read_bounded(handle_t i, void *data, size_t *length_ptr, siz
     if (handle.type != HANDLE_TYPE_REPLY)
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Verify buffer is valid
-    err = verify_user_buffer(data, max_length);
+    err = verify_user_buffer(data, max_length, true);
     if (err)
         return err;
     if (length_ptr != NULL) {
-        err = verify_user_buffer(length_ptr, sizeof(size_t));
+        err = verify_user_buffer(length_ptr, sizeof(size_t), true);
         if (err)
             return err;
     }
@@ -472,14 +472,14 @@ err_t syscall_channel_call_bounded(handle_t channel_i, size_t message_size, cons
     err_t err;
     Handle channel_handle;
     // Verify buffers are valid
-    err = verify_user_buffer(message_data, message_size);
+    err = verify_user_buffer(message_data, message_size, false);
     if (err)
         return err;
-    err = verify_user_buffer(reply_data, max_length);
+    err = verify_user_buffer(reply_data, max_length, true);
     if (err)
         return err;
     if (reply_length_ptr != NULL) {
-        err = verify_user_buffer(reply_length_ptr, sizeof(size_t));
+        err = verify_user_buffer(reply_length_ptr, sizeof(size_t), true);
         if (err)
             return err;
     }
@@ -524,7 +524,7 @@ err_t syscall_mqueue_create(handle_t *handle_i_ptr) {
     if (mqueue == NULL)
         return ERR_KERNEL_NO_MEMORY;
     // Verify buffer is valid
-    err = verify_user_buffer(handle_i_ptr, sizeof(handle_t));
+    err = verify_user_buffer(handle_i_ptr, sizeof(handle_t), true);
     if (err)
         return err;
     // Add the handle

@@ -34,10 +34,10 @@ static err_t resource_list_get(ResourceList *list, ResourceName name, size_t *i_
 err_t syscall_channel_get(const char *name_str, handle_t *handle_i_ptr) {
     err_t err;
     // Verify buffers are valid
-    err = verify_user_buffer(handle_i_ptr, sizeof(handle_t));
+    err = verify_user_buffer(handle_i_ptr, sizeof(handle_t), true);
     if (err)
         return err;
-    err = verify_user_buffer(name_str, RESOURCE_NAME_MAX);
+    err = verify_user_buffer(name_str, RESOURCE_NAME_MAX, false);
     if (err)
         return err;
     // Get the resource
@@ -62,7 +62,7 @@ err_t syscall_channel_get(const char *name_str, handle_t *handle_i_ptr) {
 err_t syscall_mqueue_add_channel(handle_t mqueue_i, const char *channel_name_str, MessageTag tag) {
     err_t err;
     // Verify buffers are valid
-    err = verify_user_buffer(channel_name_str, RESOURCE_NAME_MAX);
+    err = verify_user_buffer(channel_name_str, RESOURCE_NAME_MAX, false);
     if (err)
         return err;
     // Get the message queue handle

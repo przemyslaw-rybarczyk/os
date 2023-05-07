@@ -99,12 +99,6 @@ void general_exception_handler(u8 interrupt_number, InterruptFrame *interrupt_fr
     if (interrupt_number == INT_PAGE_FAULT) {
         // If the interrupt is a page fault, get the page fault address from CR2
         asm ("mov %0, cr2" : "=r"(page_fault_address));
-        // If the page fault is caused by accessing a user address, kill the process,
-        // as it must be caused by an invalid address being passed to the kernel
-        if (page_fault_address < USER_ADDR_UPPER_BOUND) {
-            interrupt_enable();
-            process_exit();
-        }
     }
     // Stop all other cores
     send_halt_ipi();

@@ -71,4 +71,4 @@ size_t get_free_memory_size(void);
 err_t map_kernel_pages(u64 start, u64 length, bool write, bool execute);
 err_t map_user_pages(u64 start, u64 length, bool write, bool execute);
 void page_map_free_contents(u64 page_map_addr);
-err_t verify_user_buffer(const void *start, size_t length);
+err_t verify_user_buffer(const void *start, size_t length, bool write);

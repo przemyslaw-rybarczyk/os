@@ -291,13 +291,35 @@ void page_map_free_contents(u64 page_map_addr) {
             page_map_free_(page_map[i] & PAGE_MASK, 3);
 }
 
+// Check if the entire range from `start` to `end` inclusive within a page map at address `page_map` mapping the range starting at `page_map_start` of length `1 << page_map_bits` is mapped
+// If `write` is true, also check if write privileges are enabled for the range.
+// Assumes that the page map maps addresses for at least part of the range and that all addresses are truncated to 48 bits.
+static err_t verify_page_map_range(u64 start, u64 end, u64 *page_map, u64 page_map_start, u64 page_map_bits, bool write) {
+    err_t err;
+    u64 mapping_start_index = get_mapping_start_index(start, page_map_start, page_map_bits);
+    u64 mapping_end_index = get_mapping_end_index(end, page_map_start, page_map_bits);
+    for (u64 i = mapping_start_index; i <= mapping_end_index; i++) {
+        if (!(page_map[i] & PAGE_PRESENT))
+            return ERR_KERNEL_INVALID_ADDRESS;
+        if (write && !(page_map[i] & PAGE_WRITE))
+            return ERR_KERNEL_INVALID_ADDRESS;
+        if (page_map_bits > PAGE_BITS) {
+            err = verify_page_map_range(start, end, PHYS_ADDR(page_map[i] & PAGE_MASK), page_map_start + (i << page_map_bits), page_map_bits - 9, write);
+            if (err)
+                return err;
+        }
+    }
+    return 0;
+}
+
 // Verify that a buffer provided by a process is contained within the process address space
-// This does not handle the cases where an address is not mapped by the process - in those cases a page fault will occur and the process will be killed.
-err_t verify_user_buffer(const void *start, size_t length) {
+err_t verify_user_buffer(const void *start, size_t length, bool write) {
+    if (length == 0)
+        return 0;
     u64 start_addr = (u64)start;
     if (start_addr + length < start_addr)
         return ERR_KERNEL_INVALID_ADDRESS;
     if (start_addr + length > USER_ADDR_UPPER_BOUND)
         return ERR_KERNEL_INVALID_ADDRESS;
-    return 0;
+    return verify_page_map_range(start_addr, start_addr + length - 1, PHYS_ADDR(get_pml4()), 0, PDPT_BITS, write);
 }
