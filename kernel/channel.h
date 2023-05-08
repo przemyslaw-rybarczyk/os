@@ -31,6 +31,7 @@ void message_reply_error(Message *message, err_t error);
 MessageQueue *mqueue_alloc(void);
 void mqueue_add_ref(MessageQueue *queue);
 void mqueue_del_ref(MessageQueue *queue);
+void mqueue_close(MessageQueue *queue);
 err_t mqueue_call(MessageQueue *queue, Message *message, Message **reply);
 void mqueue_receive(MessageQueue *queue, Message **message_ptr);
 

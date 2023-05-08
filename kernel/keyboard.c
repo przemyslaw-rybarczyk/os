@@ -21,6 +21,7 @@ static bool waiting_for_key_event = false;
 static KeyEvent keyboard_buffer;
 
 _Noreturn void keyboard_kernel_thread_main(void) {
+    err_t err;
     while (1) {
         // Block until a key event occurs and read it
         interrupt_disable();
@@ -35,7 +36,9 @@ _Noreturn void keyboard_kernel_thread_main(void) {
         Message *message = message_alloc(sizeof(KeyEvent), &event);
         if (message == NULL)
             continue;
-        channel_call(keyboard_channel, message, NULL);
+        err = channel_call(keyboard_channel, message, NULL);
+        if (err)
+            message_free(message);
     }
 }
 

@@ -19,6 +19,7 @@ static void handle_free(Handle handle) {
         channel_del_ref(handle.channel);
         break;
     case HANDLE_TYPE_MESSAGE_QUEUE:
+        mqueue_close(handle.mqueue);
         mqueue_del_ref(handle.mqueue);
         break;
     }

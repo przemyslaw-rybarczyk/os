@@ -14,6 +14,7 @@
 typedef struct MessageQueue {
     spinlock_t lock;
     size_t refcount;
+    bool closed;
     Process *blocked_receiver;
     ProcessQueue blocked_senders;
     size_t length;
@@ -113,6 +114,17 @@ void mqueue_del_ref(MessageQueue *queue) {
     } else {
         spinlock_release(&queue->lock);
     }
+}
+
+// Close a message queue
+void mqueue_close(MessageQueue *queue) {
+    spinlock_acquire(&queue->lock);
+    // Mark the queue as closed
+    queue->closed = true;
+    // Notify all pending messages that the queue has been closed
+    for (Message *message = queue->start; message != NULL; message = message->next_message)
+        message_reply_error(message, ERR_KERNEL_CHANNEL_CLOSED);
+    spinlock_release(&queue->lock);
 }
 
 // Send a message to a message queue and wait for a reply
@@ -217,6 +229,8 @@ void channel_set_mqueue(Channel *channel, MessageQueue *mqueue, MessageTag tag) 
 // Send a message on a channel and wait for a reply
 err_t channel_call(Channel *channel, Message *message, Message **reply) {
     message->tag = channel->tag;
+    if (channel->queue == NULL || channel->queue->closed)
+        return ERR_KERNEL_CHANNEL_CLOSED;
     return mqueue_call(channel->queue, message, reply);
 }
 
