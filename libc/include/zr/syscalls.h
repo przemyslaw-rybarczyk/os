@@ -10,6 +10,20 @@ typedef struct MessageTag {
     uintptr_t data[2];
 } MessageTag;
 
+typedef struct MessageLength {
+    size_t data;
+} MessageLength;
+
+typedef struct Message {
+    MessageLength length;
+    void *data;
+} Message;
+
+typedef struct ErrorReplies {
+    err_t data_low;
+    err_t data_high;
+} ErrorReplies;
+
 // Possible return values of system calls:
 // - Every syscall taking a handle as an argument will return ERR_KERNEL_INVALID_HANDLE or ERR_KERNEL_WRONG_HANDLE_TYPE if the handle is invalid
 //   - handle_free() is an exception, as it returns void
@@ -29,34 +43,28 @@ typedef struct MessageTag {
 err_t map_pages(u64 start, u64 length, u64 flags);
 _Noreturn void process_exit(void);
 void process_yield(void);
-err_t message_get_length(handle_t i, size_t *length);
+err_t message_get_length(handle_t i, MessageLength *length);
 err_t message_read(handle_t i, void *data);
-err_t channel_call(handle_t channel_i, size_t message_size, const void *message_data, handle_t *reply_i_ptr);
+err_t channel_call(handle_t channel_i, const Message *message, handle_t *reply_i_ptr);
 err_t mqueue_receive(handle_t mqueue_i, MessageTag *tag, handle_t *message_i_ptr);
-err_t message_reply(handle_t message_i, size_t reply_size, const void *reply_data);
+err_t message_reply(handle_t message_i, const Message *message);
 void handle_free(handle_t i);
 err_t message_reply_error(handle_t message_i, err_t error);
-err_t message_read_bounded(handle_t i, void *data, size_t *length, size_t min_length, size_t max_length, err_t err_low, err_t err_high);
-err_t reply_read_bounded(handle_t i, void *data, size_t *length, size_t min_length, size_t max_length);
-err_t channel_call_bounded(
-    handle_t channel_i, size_t message_size, const void *message_data,
-    void *reply_data, size_t *reply_length, size_t min_length, size_t max_length);
+err_t message_read_bounded(handle_t i, Message *message, const MessageLength *min_length, const ErrorReplies *errors);
+err_t reply_read_bounded(handle_t i, Message *message, const MessageLength *min_length);
+err_t channel_call_bounded(handle_t channel_i, const Message *message, Message *reply, const MessageLength *min_length);
 err_t channel_get(const char *name, handle_t *handle_i);
 err_t mqueue_create(handle_t *handle_i_ptr);
 err_t mqueue_add_channel(handle_t mqueue_i, const char *channel_name, MessageTag tag);
 
 static inline err_t message_read_sized(handle_t i, void *data, size_t length, err_t error) {
-    return message_read_bounded(i, data, NULL, length, length, error, error);
-}
-
-static inline err_t message_read_sized_2(handle_t i, void *data, size_t length, err_t err_low, err_t err_high) {
-    return message_read_bounded(i, data, NULL, length, length, err_low, err_high);
+    return message_read_bounded(i, &(Message){{length}, data}, NULL, &(ErrorReplies){error, error});
 }
 
 static inline err_t reply_read_sized(handle_t i, void *data, size_t length) {
-    return reply_read_bounded(i, data, NULL, length, length);
+    return reply_read_bounded(i, &(Message){{length}, data}, NULL);
 }
 
-static inline err_t channel_call_sized(handle_t i, size_t message_size, const void *message_data, void *reply_data, size_t reply_length) {
-    return channel_call_bounded(i, message_size, message_data, reply_data, NULL, reply_length, reply_length);
+static inline err_t channel_call_sized(handle_t i, const Message *message, void *reply_data, size_t reply_length) {
+    return channel_call_bounded(i, message, &(Message){{reply_length}, reply_data}, NULL);
 }

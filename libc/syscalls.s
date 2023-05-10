@@ -44,7 +44,6 @@ message_read:
 
 channel_call:
   mov rax, 5
-  mov r10, rcx
   syscall
   ret
 
@@ -69,27 +68,20 @@ message_reply_error:
   ret
 
 message_read_bounded:
-  push rbx
-  mov rbx, [rsp + 2 * 8]
   mov rax, 10
   mov r10, rcx
   syscall
-  pop rbx
   ret
 
 reply_read_bounded:
   mov rax, 11
-  mov r10, rcx
   syscall
   ret
 
 channel_call_bounded:
-  push rbx
-  mov rbx, [rsp + 2 * 8]
   mov rax, 12
   mov r10, rcx
   syscall
-  pop rbx
   ret
 
 channel_get:
@@ -104,6 +96,5 @@ mqueue_create:
 
 mqueue_add_channel:
   mov rax, 15
-  mov r10, rcx
   syscall
   ret

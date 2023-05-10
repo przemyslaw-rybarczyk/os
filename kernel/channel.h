@@ -20,6 +20,20 @@ typedef struct Message {
     struct Message *next_message;
 } Message;
 
+typedef struct MessageLength {
+    size_t data;
+} MessageLength;
+
+typedef struct UserMessage {
+    MessageLength length;
+    void *data;
+} UserMessage;
+
+typedef struct ErrorReplies {
+    err_t data_low;
+    err_t data_high;
+} ErrorReplies;
+
 typedef struct MessageQueue MessageQueue;
 typedef struct Channel Channel;
 
@@ -41,13 +55,13 @@ void channel_del_ref(Channel *channel);
 void channel_set_mqueue(Channel *channel, MessageQueue *mqueue, MessageTag tag);
 err_t channel_call(Channel *channel, Message *message, Message **reply);
 
-err_t syscall_message_get_length(handle_t i, size_t *length);
+err_t syscall_message_get_length(handle_t i, MessageLength *length);
 err_t syscall_message_read(handle_t i, void *data);
-err_t syscall_channel_call(handle_t channel_i, size_t message_size, const void *message_data, handle_t *reply_i_ptr);
+err_t syscall_channel_call(handle_t channel_i, const UserMessage *user_message, handle_t *reply_i_ptr);
 err_t syscall_mqueue_receive(handle_t mqueue_i, MessageTag *tag, handle_t *message_i_ptr);
-err_t syscall_message_reply(handle_t message_i, size_t reply_size, const void *reply_data);
+err_t syscall_message_reply(handle_t message_i, const UserMessage *user_message);
 err_t syscall_message_reply_error(handle_t message_i, err_t error);
-err_t syscall_message_read_bounded(handle_t i, void *data, size_t *length, size_t min_length, size_t max_length, err_t err_low, err_t err_high);
-err_t syscall_reply_read_bounded(handle_t i, void *data, size_t *length_ptr, size_t min_length, size_t max_length);
-err_t syscall_channel_call_bounded(handle_t channel_i, size_t message_size, const void *message_data, void *reply_data, size_t *reply_length_ptr, size_t min_length, size_t max_length);
+err_t syscall_message_read_bounded(handle_t i, UserMessage *user_message, const MessageLength *min_length, const ErrorReplies *errors);
+err_t syscall_reply_read_bounded(handle_t i, UserMessage *user_message, const MessageLength *min_length);
+err_t syscall_channel_call_bounded(handle_t channel_i, const UserMessage *user_message, UserMessage *user_reply, const MessageLength *min_length);
 err_t syscall_mqueue_create(handle_t *handle_i_ptr);

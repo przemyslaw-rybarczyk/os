@@ -47,7 +47,7 @@ static void draw_screen(u8 *screen, int color_i, i32 mouse_x, i32 mouse_y) {
             }
         }
     }
-    channel_call(video_data_channel, screen_bytes, screen, NULL);
+    channel_call(video_data_channel, &(Message){{screen_bytes}, screen}, NULL);
 }
 
 void main(void) {
@@ -59,7 +59,7 @@ void main(void) {
     err = channel_get("video/data", &video_data_channel);
     if (err)
         return;
-    err = channel_call_sized(video_size_channel, 0, NULL, &screen_size, sizeof(ScreenSize));
+    err = channel_call_sized(video_size_channel, NULL, &screen_size, sizeof(ScreenSize));
     if (err)
         return;
     handle_t event_mqueue;
@@ -86,8 +86,6 @@ void main(void) {
         err = mqueue_receive(event_mqueue, &tag, &msg);
         if (err)
             continue;
-        size_t msg_size;
-        message_get_length(msg, &msg_size);
         switch (tag.data[0]) {
         case 1: {
             KeyEvent key_event;
@@ -96,7 +94,7 @@ void main(void) {
                 continue;
             if (key_event.pressed == false)
                 color = (color + 1) % COLORS_NUM;
-            message_reply(msg, 0, NULL);
+            message_reply(msg, NULL);
             draw_screen(screen, color, mouse_x, mouse_y);
             break;
         }
@@ -107,7 +105,7 @@ void main(void) {
                 continue;
             mouse_x += mouse_update.diff_x;
             mouse_y += mouse_update.diff_y;
-            message_reply(msg, 0, NULL);
+            message_reply(msg, NULL);
             draw_screen(screen, color, mouse_x, mouse_y);
             break;
         }
