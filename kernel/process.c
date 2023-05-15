@@ -201,6 +201,7 @@ err_t process_setup(void) {
     process_set_kernel_stack(keyboard_kernel_thread, keyboard_kernel_thread_main);
     process_set_kernel_stack(mouse_kernel_thread, mouse_kernel_thread_main);
     Process *client_process;
+    Process *client_process_2;
     ResourceListEntry *client_resources = malloc(4 * sizeof(ResourceListEntry));
     if (client_resources == NULL)
         return ERR_KERNEL_NO_MEMORY;
@@ -224,10 +225,20 @@ err_t process_setup(void) {
     if (err)
         return err;
     process_set_user_stack(client_process, included_file_program1, included_file_program1_end - included_file_program1);
+    err = process_create(&client_process_2, (ResourceList){4, client_resources});
+    if (err)
+        return err;
+    process_set_user_stack(client_process_2, included_file_program2, included_file_program2_end - included_file_program2);
+    Channel *ch = channel_alloc();
+    MessageQueue *mq = mqueue_alloc();
+    channel_set_mqueue(ch, mq, (MessageTag){0, 0});
+    handle_set(&client_process->handles, 3, (Handle){HANDLE_TYPE_MESSAGE_QUEUE, {.mqueue = mq}});
+    handle_set(&client_process_2->handles, 3, (Handle){HANDLE_TYPE_CHANNEL, {.channel = ch}});
     process_enqueue(framebuffer_kernel_thread);
     process_enqueue(keyboard_kernel_thread);
     process_enqueue(mouse_kernel_thread);
     process_enqueue(client_process);
+    process_enqueue(client_process_2);
     return 0;
 }
 

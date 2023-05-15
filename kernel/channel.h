@@ -3,39 +3,31 @@
 #include "types.h"
 #include "error.h"
 
+#include <zr/syscalls.h>
+
+typedef struct Channel Channel;
+typedef struct MessageQueue MessageQueue;
 typedef struct Process Process;
 
-typedef struct MessageTag {
-    uintptr_t data[2];
-} MessageTag;
+typedef struct AttachedHandle {
+    AttachedHandleType type;
+    union {
+        Channel *channel;
+    };
+} AttachedHandle;
 
 // A NULL message pointer is used to represent an empty reply
 typedef struct Message {
     MessageTag tag;
     size_t data_size;
     void *data;
+    size_t handles_size;
+    AttachedHandle *handles;
     err_t *reply_error;
     struct Message **reply;
     Process *blocked_sender;
     struct Message *next_message;
 } Message;
-
-typedef struct MessageLength {
-    size_t data;
-} MessageLength;
-
-typedef struct UserMessage {
-    MessageLength length;
-    void *data;
-} UserMessage;
-
-typedef struct ErrorReplies {
-    err_t data_low;
-    err_t data_high;
-} ErrorReplies;
-
-typedef struct MessageQueue MessageQueue;
-typedef struct Channel Channel;
 
 Message *message_alloc(size_t data_size, const void *data);
 void message_free(Message *message);
@@ -56,12 +48,12 @@ void channel_set_mqueue(Channel *channel, MessageQueue *mqueue, MessageTag tag);
 err_t channel_call(Channel *channel, Message *message, Message **reply);
 
 err_t syscall_message_get_length(handle_t i, MessageLength *length);
-err_t syscall_message_read(handle_t i, void *data);
-err_t syscall_channel_call(handle_t channel_i, const UserMessage *user_message, handle_t *reply_i_ptr);
+err_t syscall_message_read(handle_t i, void *data, ReceiveAttachedHandle *handles);
+err_t syscall_channel_call(handle_t channel_i, const SendMessage *user_message, handle_t *reply_i_ptr);
 err_t syscall_mqueue_receive(handle_t mqueue_i, MessageTag *tag, handle_t *message_i_ptr);
-err_t syscall_message_reply(handle_t message_i, const UserMessage *user_message);
+err_t syscall_message_reply(handle_t message_i, const SendMessage *user_message);
 err_t syscall_message_reply_error(handle_t message_i, err_t error);
-err_t syscall_message_read_bounded(handle_t i, UserMessage *user_message, const MessageLength *min_length, const ErrorReplies *errors);
-err_t syscall_reply_read_bounded(handle_t i, UserMessage *user_message, const MessageLength *min_length);
-err_t syscall_channel_call_bounded(handle_t channel_i, const UserMessage *user_message, UserMessage *user_reply, const MessageLength *min_length);
+err_t syscall_message_read_bounded(handle_t i, ReceiveMessage *user_message, const MessageLength *min_length, const ErrorReplies *errors);
+err_t syscall_reply_read_bounded(handle_t i, ReceiveMessage *user_message, const MessageLength *min_length);
+err_t syscall_channel_call_bounded(handle_t channel_i, const SendMessage *user_message, ReceiveMessage *user_reply, const MessageLength *min_length);
 err_t syscall_mqueue_create(handle_t *handle_i_ptr);

@@ -47,7 +47,7 @@ static void draw_screen(u8 *screen, int color_i, i32 mouse_x, i32 mouse_y) {
             }
         }
     }
-    channel_call(video_data_channel, &(Message){{screen_bytes}, screen}, NULL);
+    channel_call(video_data_channel, &(SendMessage){{screen_bytes, 0}, screen, NULL}, NULL);
 }
 
 void main(void) {
@@ -56,9 +56,18 @@ void main(void) {
     err = channel_get("video/size", &video_size_channel);
     if (err)
         return;
-    err = channel_get("video/data", &video_data_channel);
+    handle_t msg2;
+    err = mqueue_receive(3, NULL, &msg2);
     if (err)
         return;
+    ReceiveAttachedHandle msg2_handles[] = {{ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}};
+    err = message_read_bounded(msg2, &(ReceiveMessage){{0, 1}, NULL, msg2_handles}, NULL, &error_replies(ERR_INVALID_ARG));
+    if (err)
+        return;
+    video_data_channel = msg2_handles[0].handle_i;
+//    err = channel_get("video/data", &video_data_channel);
+//    if (err)
+//        return;
     err = channel_call_sized(video_size_channel, NULL, &screen_size, sizeof(ScreenSize));
     if (err)
         return;

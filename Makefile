@@ -18,13 +18,20 @@ program1_DEPS = libc
 program2_DEPS = libc
 libc_DEPS =
 
+# Recursively search for files with a given extension
+# Currently only searches seven levels down, but this should be enough for any purpose.
+# $(1) = subfolder to search, $(2) = extension
+define search =
+$(wildcard $(1)/*$(2) $(1)/*/*$(2) $(1)/*/*/*$(2) $(1)/*/*/*/*$(2) $(1)/*/*/*/*/*$(2) $(1)/*/*/*/*/*/*$(2) $(1)/*/*/*/*/*/*/*$(2) $(1)/*/*/*/*/*/*/*/*$(2))
+endef
+
 # Generates the header and object list for a subproject
 # $(1) = name of subproject
 define defs_template =
-$(1)_INCLUDE = $$(wildcard $(1)/include/*.h $(1)/include/**/*.h)
-$(1)_HEADERS = $$(wildcard $(1)/*.h $(1)/**/*.h)
-$(1)_ASM_HEADERS = $$(wildcard $(1)/*.inc $(1)/**/*.inc)
-$(1)_OBJECTS = $$(patsubst %.c,$$(BUILD)/%.o,$$(wildcard $(1)/*.c $(1)/**/*.c)) $$(patsubst %.s,$$(BUILD)/%.s.o,$$(wildcard $(1)/*.s $(1)/**/*.s))
+$(1)_INCLUDE = $$(call search,$(1)/include,.h)
+$(1)_HEADERS = $$(call search,$(1),.h)
+$(1)_ASM_HEADERS = $$(call search,$(1),.inc)
+$(1)_OBJECTS = $$(patsubst %.c,$$(BUILD)/%.o,$$(call search,$(1),.c)) $$(patsubst %.s,$$(BUILD)/%.s.o,$$(call search,$(1),.s))
 endef
 
 # Generate all header and object lists

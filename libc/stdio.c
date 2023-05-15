@@ -11,7 +11,7 @@
 
 int putchar(int c) {
     c = (unsigned char)c;
-    channel_call(CHANNEL_STDOUT, 1, &c, NULL);
+    channel_call(CHANNEL_STDOUT, &(SendMessage){{1, 0}, &c, NULL}, NULL);
     return c;
 }
 
