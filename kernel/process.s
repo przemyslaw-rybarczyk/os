@@ -21,6 +21,7 @@ extern process_free_contents
 extern page_free
 extern free
 extern stack_free
+extern idle_page_map
 
 struc Process
   .rsp: resq 1
@@ -189,8 +190,10 @@ process_exit:
   ; From this point on, interrupts must be disabled.
   ; If a context switch occurred while the process is being freed, it wouldn't be possible to come back to it.
   call interrupt_disable
-  ; Switch to the idle stack
+  ; Switch to the idle stack and page map
   mov rsp, gs:[PerCPU.idle_stack]
+  mov rdx, idle_page_map
+  mov cr3, rdx
   ; Free the PML4
   mov rdi, [rbx + Process.page_map]
   call page_free

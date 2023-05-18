@@ -4,6 +4,7 @@ extern last_kernel_stack
 extern pd_fb
 extern pdpt_page_stack
 extern pt_id_map_init
+global idle_page_map
 
 ; Variables declared by linker script
 extern KERNEL_LMA
@@ -39,6 +40,8 @@ pt_id_map_init equ 0x72000
 pdpt_page_stack equ 0x71000
 boot_page_tables_start equ 0x71000
 boot_page_tables_length equ 0x80000 - boot_page_tables_start
+
+idle_page_map equ pml4
 
 ; Addresses of variables used by the bootloader
 
