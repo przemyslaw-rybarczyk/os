@@ -75,7 +75,7 @@ $(BUILD)/image.bin: $(kernel_OBJECTS) kernel/linker.ld
 $(BUILD)/kernel/included_programs.s.o: kernel/included_programs.s $(PROGRAM_EXECUTABLES)
 	$(asm_recipe)
 
-$(eval $(call common_template,kernel,,$(KERNEL_CFLAGS)))
+$(eval $(call common_template,kernel,libc,$(KERNEL_CFLAGS)))
 
 # Defines the rules for building a library
 # $(1) = name of library, $(2) = library dependencies

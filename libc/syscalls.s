@@ -15,6 +15,8 @@ global channel_call_bounded
 global channel_get
 global mqueue_create
 global mqueue_add_channel
+global mqueue_add_channel_resource
+global channel_create
 
 ; This file implements the C interface for system calls
 
@@ -96,5 +98,17 @@ mqueue_create:
 
 mqueue_add_channel:
   mov rax, 15
+  mov r10, rcx
+  syscall
+  ret
+
+mqueue_add_channel_resource:
+  mov rax, 16
+  mov r10, rcx
+  syscall
+  ret
+
+channel_create:
+  mov rax, 17
   syscall
   ret

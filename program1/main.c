@@ -56,14 +56,21 @@ void main(void) {
     err = channel_get("video/size", &video_size_channel);
     if (err)
         return;
-    handle_t msg2;
-    err = mqueue_receive(3, NULL, &msg2);
+    handle_t chin, chout, msg2;
+    err = channel_create(&chin, &chout);
+    if (err)
+        return;
+    err = channel_call(3, &(SendMessage){{0, 1}, NULL, &(SendAttachedHandle){ATTACHED_HANDLE_FLAG_MOVE, chout}}, NULL);
+    if (err)
+        return;
+    err = channel_call(chin, &(SendMessage){{sizeof(u64), 0}, &(u64){UINT64_C(0x0123456789ABCDEF)}, NULL}, &msg2);
     if (err)
         return;
     ReceiveAttachedHandle msg2_handles[] = {{ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}};
-    err = message_read_bounded(msg2, &(ReceiveMessage){{0, 1}, NULL, msg2_handles}, NULL, &error_replies(ERR_INVALID_ARG));
+    err = reply_read_bounded(msg2, &(ReceiveMessage){{0, 1}, NULL, msg2_handles}, NULL);
     if (err)
         return;
+    handle_free(msg2);
     video_data_channel = msg2_handles[0].handle_i;
 //    err = channel_get("video/data", &video_data_channel);
 //    if (err)
@@ -75,10 +82,10 @@ void main(void) {
     err = mqueue_create(&event_mqueue);
     if (err)
         return;
-    err = mqueue_add_channel(event_mqueue, "keyboard/data", (MessageTag){1, 0});
+    err = mqueue_add_channel_resource(event_mqueue, "keyboard/data", (MessageTag){1, 0});
     if (err)
         return;
-    err = mqueue_add_channel(event_mqueue, "mouse/data", (MessageTag){2, 0});
+    err = mqueue_add_channel_resource(event_mqueue, "mouse/data", (MessageTag){2, 0});
     if (err)
         return;
     size_t screen_bytes = screen_size.height * screen_size.width * 3;

@@ -44,7 +44,7 @@ void mqueue_receive(MessageQueue *queue, Message **message_ptr);
 Channel *channel_alloc(void);
 void channel_add_ref(Channel *channel);
 void channel_del_ref(Channel *channel);
-void channel_set_mqueue(Channel *channel, MessageQueue *mqueue, MessageTag tag);
+err_t channel_set_mqueue(Channel *channel, MessageQueue *mqueue, MessageTag tag);
 err_t channel_call(Channel *channel, Message *message, Message **reply);
 
 err_t syscall_message_get_length(handle_t i, MessageLength *length);
@@ -57,3 +57,5 @@ err_t syscall_message_read_bounded(handle_t i, ReceiveMessage *user_message, con
 err_t syscall_reply_read_bounded(handle_t i, ReceiveMessage *user_message, const MessageLength *min_length);
 err_t syscall_channel_call_bounded(handle_t channel_i, const SendMessage *user_message, ReceiveMessage *user_reply, const MessageLength *min_length);
 err_t syscall_mqueue_create(handle_t *handle_i_ptr);
+err_t syscall_mqueue_add_channel(handle_t mqueue_i, handle_t channel_i, MessageTag tag);
+err_t syscall_channel_create(handle_t *channel_send_i_ptr, handle_t *channel_receive_i_ptr);

@@ -232,8 +232,8 @@ err_t process_setup(void) {
     Channel *ch = channel_alloc();
     MessageQueue *mq = mqueue_alloc();
     channel_set_mqueue(ch, mq, (MessageTag){0, 0});
-    handle_set(&client_process->handles, 3, (Handle){HANDLE_TYPE_MESSAGE_QUEUE, {.mqueue = mq}});
-    handle_set(&client_process_2->handles, 3, (Handle){HANDLE_TYPE_CHANNEL, {.channel = ch}});
+    handle_set(&client_process->handles, 3, (Handle){HANDLE_TYPE_CHANNEL_SEND, {.channel = ch}});
+    handle_set(&client_process_2->handles, 3, (Handle){HANDLE_TYPE_MESSAGE_QUEUE, {.mqueue = mq}});
     process_enqueue(framebuffer_kernel_thread);
     process_enqueue(keyboard_kernel_thread);
     process_enqueue(mouse_kernel_thread);

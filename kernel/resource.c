@@ -50,7 +50,7 @@ err_t syscall_channel_get(const char *name_str, handle_t *handle_i_ptr) {
     if (channel_resource->type != RESOURCE_TYPE_CHANNEL_SEND)
         return ERR_KERNEL_WRONG_RESOURCE_TYPE;
     // Add the handle
-    err = handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_CHANNEL, {.channel = channel_resource->channel}}, handle_i_ptr);
+    err = handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_CHANNEL_SEND, {.channel = channel_resource->channel}}, handle_i_ptr);
     if (err)
         return err;
     // Remove the resource
@@ -59,7 +59,7 @@ err_t syscall_channel_get(const char *name_str, handle_t *handle_i_ptr) {
 }
 
 // Get a receiving channel resource and add it to a message queue
-err_t syscall_mqueue_add_channel(handle_t mqueue_i, const char *channel_name_str, MessageTag tag) {
+err_t syscall_mqueue_add_channel_resource(handle_t mqueue_i, const char *channel_name_str, MessageTag tag) {
     err_t err;
     // Verify buffers are valid
     err = verify_user_buffer(channel_name_str, RESOURCE_NAME_MAX, false);
@@ -82,7 +82,9 @@ err_t syscall_mqueue_add_channel(handle_t mqueue_i, const char *channel_name_str
     if (channel_resource->type != RESOURCE_TYPE_CHANNEL_RECEIVE)
         return ERR_KERNEL_WRONG_RESOURCE_TYPE;
     // Add the channel to the message queue
-    channel_set_mqueue(channel_resource->channel, mqueue_handle.mqueue, tag);
+    err = channel_set_mqueue(channel_resource->channel, mqueue_handle.mqueue, tag);
+    if (err)
+        return err;
     // Remove the resource
     channel_resource->type = RESOURCE_TYPE_EMPTY;
     return 0;

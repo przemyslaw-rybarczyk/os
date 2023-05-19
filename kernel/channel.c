@@ -28,11 +28,13 @@ typedef struct Channel {
     size_t refcount;
     MessageQueue *queue;
     MessageTag tag;
+    ProcessQueue blocked_senders;
 } Channel;
 
 static void attached_handle_free(AttachedHandle handle) {
     switch (handle.type) {
     case ATTACHED_HANDLE_TYPE_CHANNEL_SEND:
+    case ATTACHED_HANDLE_TYPE_CHANNEL_RECEIVE:
         channel_del_ref(handle.channel);
         break;
     }
@@ -117,9 +119,17 @@ static err_t message_alloc_user(const SendMessage *user_message, Message **messa
         if (err)
             goto fail;
         switch (handle.type) {
-        case HANDLE_TYPE_CHANNEL:
+        case HANDLE_TYPE_CHANNEL_SEND:
             channel_add_ref(handle.channel);
             handles[i] = (AttachedHandle){ATTACHED_HANDLE_TYPE_CHANNEL_SEND, {.channel = handle.channel}};
+            break;
+        case HANDLE_TYPE_CHANNEL_RECEIVE:
+            if (!(user_message->handles[i].flags & ATTACHED_HANDLE_FLAG_MOVE)) {
+                err = ERR_KERNEL_UNCOPIEABLE_HANDLE_TYPE;
+                goto fail;
+            }
+            channel_add_ref(handle.channel);
+            handles[i] = (AttachedHandle){ATTACHED_HANDLE_TYPE_CHANNEL_RECEIVE, {.channel = handle.channel}};
             break;
         default:
             err = ERR_KERNEL_WRONG_HANDLE_TYPE;
@@ -171,12 +181,20 @@ static err_t message_read_user(const Message *message, ReceiveMessage *user_mess
     // Read the handles
     for (size_t i = 0; i < message->handles_size; i++) {
         switch (message->handles[i].type) {
-        case ATTACHED_HANDLE_TYPE_CHANNEL_SEND:
+        case ATTACHED_HANDLE_TYPE_CHANNEL_SEND: {
             channel_add_ref(message->handles[i].channel);
             handle_t handle_i;
-            handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_CHANNEL, {.channel = message->handles[i].channel}}, &handle_i);
+            handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_CHANNEL_SEND, {.channel = message->handles[i].channel}}, &handle_i);
             user_message->handles[i] = (ReceiveAttachedHandle){ATTACHED_HANDLE_TYPE_CHANNEL_SEND, handle_i};
             break;
+        }
+        case ATTACHED_HANDLE_TYPE_CHANNEL_RECEIVE: {
+            channel_add_ref(message->handles[i].channel);
+            handle_t handle_i;
+            handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_CHANNEL_RECEIVE, {.channel = message->handles[i].channel}}, &handle_i);
+            user_message->handles[i] = (ReceiveAttachedHandle){ATTACHED_HANDLE_TYPE_CHANNEL_RECEIVE, handle_i};
+            break;
+        }
         }
     }
     return 0;
@@ -187,13 +205,8 @@ void message_free(Message *message) {
     if (message == NULL)
         return;
     free(message->data);
-    for (size_t i = 0; i < message->handles_size; i++) {
-        switch (message->handles[i].type) {
-        case ATTACHED_HANDLE_TYPE_CHANNEL_SEND:
-            channel_del_ref(message->handles[i].channel);
-            break;
-        }
-    }
+    for (size_t i = 0; i < message->handles_size; i++)
+        attached_handle_free(message->handles[i]);
     free(message);
 }
 
@@ -344,7 +357,8 @@ void channel_del_ref(Channel *channel) {
     spinlock_acquire(&channel->lock);
     channel->refcount -= 1;
     if (channel->refcount == 0) {
-        mqueue_del_ref(channel->queue);
+        if (channel->queue != NULL)
+            mqueue_del_ref(channel->queue);
         free(channel);
     } else {
         spinlock_release(&channel->lock);
@@ -352,18 +366,37 @@ void channel_del_ref(Channel *channel) {
 }
 
 // Set the channel's message queue and tag
-void channel_set_mqueue(Channel *channel, MessageQueue *mqueue, MessageTag tag) {
+err_t channel_set_mqueue(Channel *channel, MessageQueue *mqueue, MessageTag tag) {
+    spinlock_acquire(&channel->lock);
+    if (channel->queue != NULL) {
+        spinlock_release(&channel->lock);
+        return ERR_KERNEL_MQUEUE_ALREADY_SET;
+    }
     mqueue_add_ref(mqueue);
     channel->queue = mqueue;
     channel->tag = tag;
+    for (Process *process = process_queue_remove(&channel->blocked_senders); process != NULL; process = process_queue_remove(&channel->blocked_senders))
+        process_enqueue(process);
+    spinlock_release(&channel->lock);
+    return 0;
 }
 
 // Send a message on a channel and wait for a reply
 err_t channel_call(Channel *channel, Message *message, Message **reply) {
+    spinlock_acquire(&channel->lock);
     message->tag = channel->tag;
-    if (channel->queue == NULL || channel->queue->closed)
+    if (channel->queue == NULL) {
+        process_queue_add(&channel->blocked_senders, cpu_local->current_process);
+        process_block(&channel->lock);
+        spinlock_acquire(&channel->lock);
+    }
+    if (channel->queue->closed) {
+        spinlock_release(&channel->lock);
         return ERR_KERNEL_CHANNEL_CLOSED;
-    return mqueue_call(channel->queue, message, reply);
+    }
+    MessageQueue *queue = channel->queue;
+    spinlock_release(&channel->lock);
+    return mqueue_call(queue, message, reply);
 }
 
 // Returns the length of the message
@@ -426,7 +459,7 @@ err_t syscall_channel_call(handle_t channel_i, const SendMessage *user_message, 
     err = handle_get(&cpu_local->current_process->handles, channel_i, &channel_handle);
     if (err)
         return err;
-    if (channel_handle.type != HANDLE_TYPE_CHANNEL)
+    if (channel_handle.type != HANDLE_TYPE_CHANNEL_SEND)
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Create a message
     Message *message;
@@ -653,7 +686,7 @@ err_t syscall_channel_call_bounded(handle_t channel_i, const SendMessage *user_m
     err = handle_get(&cpu_local->current_process->handles, channel_i, &channel_handle);
     if (err)
         return err;
-    if (channel_handle.type != HANDLE_TYPE_CHANNEL)
+    if (channel_handle.type != HANDLE_TYPE_CHANNEL_SEND)
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Create a message
     Message *message;
@@ -695,16 +728,70 @@ err_t syscall_channel_call_bounded(handle_t channel_i, const SendMessage *user_m
 // Create a new message queue
 err_t syscall_mqueue_create(handle_t *handle_i_ptr) {
     err_t err;
-    MessageQueue *mqueue = mqueue_alloc();
-    if (mqueue == NULL)
-        return ERR_KERNEL_NO_MEMORY;
     // Verify buffer is valid
     err = verify_user_buffer(handle_i_ptr, sizeof(handle_t), true);
     if (err)
         return err;
+    // Allocate the message queue
+    MessageQueue *mqueue = mqueue_alloc();
+    if (mqueue == NULL)
+        return ERR_KERNEL_NO_MEMORY;
     // Add the handle
     err = handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_MESSAGE_QUEUE, {.mqueue = mqueue}}, handle_i_ptr);
+    if (err) {
+        mqueue_del_ref(mqueue);
+        return err;
+    }
+    return 0;
+}
+
+err_t syscall_mqueue_add_channel(handle_t mqueue_i, handle_t channel_i, MessageTag tag) {
+    err_t err;
+    // Get the handles
+    Handle mqueue_handle;
+    Handle channel_handle;
+    err = handle_get(&cpu_local->current_process->handles, mqueue_i, &mqueue_handle);
     if (err)
         return err;
+    err = handle_get(&cpu_local->current_process->handles, channel_i, &channel_handle);
+    if (err)
+        return err;
+    // Check handle types
+    if (mqueue_handle.type != HANDLE_TYPE_MESSAGE_QUEUE)
+        return ERR_KERNEL_WRONG_HANDLE_TYPE;
+    if (channel_handle.type != HANDLE_TYPE_CHANNEL_RECEIVE)
+        return ERR_KERNEL_WRONG_HANDLE_TYPE;
+    // Add the channel to the message queue
+    err = channel_set_mqueue(channel_handle.channel, mqueue_handle.mqueue, tag);
+    if (err)
+        return err;
+    // Remove the channel handle
+    handle_clear(&cpu_local->current_process->handles, channel_i);
+    return 0;
+}
+
+err_t syscall_channel_create(handle_t *channel_send_i_ptr, handle_t *channel_receive_i_ptr) {
+    err_t err;
+    // Verify buffers are valid
+    err = verify_user_buffer(channel_send_i_ptr, sizeof(handle_t), true);
+    if (err)
+        return err;
+    err = verify_user_buffer(channel_receive_i_ptr, sizeof(handle_t), true);
+    if (err)
+        return err;
+    // Allocate the channel
+    Channel *channel = channel_alloc();
+    if (channel == NULL)
+        return ERR_KERNEL_NO_MEMORY;
+    // Increment refcount since two references are created
+    channel_add_ref(channel);
+    // Add the handles
+    err = handles_reserve(&cpu_local->current_process->handles, 2);
+    if (err) {
+        channel_del_ref(channel);
+        return err;
+    }
+    handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_CHANNEL_SEND, {.channel = channel}}, channel_send_i_ptr);
+    handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_CHANNEL_RECEIVE, {.channel = channel}}, channel_receive_i_ptr);
     return 0;
 }
