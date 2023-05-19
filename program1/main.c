@@ -75,7 +75,7 @@ void main(void) {
 //    err = channel_get("video/data", &video_data_channel);
 //    if (err)
 //        return;
-    err = channel_call_sized(video_size_channel, NULL, &screen_size, sizeof(ScreenSize));
+    err = channel_call_sized(video_size_channel, NULL, sizeof(ScreenSize), &screen_size);
     if (err)
         return;
     handle_t event_mqueue;
@@ -105,7 +105,7 @@ void main(void) {
         switch (tag.data[0]) {
         case 1: {
             KeyEvent key_event;
-            err = message_read_sized(msg, &key_event, sizeof(KeyEvent), ERR_INVALID_ARG);
+            err = message_read_sized(msg, sizeof(KeyEvent), &key_event, ERR_INVALID_ARG);
             if (err)
                 continue;
             if (key_event.pressed == false)
@@ -116,7 +116,7 @@ void main(void) {
         }
         case 2: {
             MouseUpdate mouse_update;
-            err = message_read_sized(msg, &mouse_update, sizeof(MouseUpdate), ERR_INVALID_ARG);
+            err = message_read_sized(msg, sizeof(MouseUpdate), &mouse_update, ERR_INVALID_ARG);
             if (err)
                 continue;
             mouse_x += mouse_update.diff_x;

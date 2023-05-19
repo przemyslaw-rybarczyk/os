@@ -28,7 +28,7 @@ void main(void) {
     if (err)
         return;
     u64 key;
-    err = message_read_sized(msg2, &key, sizeof(u64), ERR_INVALID_ARG);
+    err = message_read_sized(msg2, sizeof(u64), &key, ERR_INVALID_ARG);
     if (err)
         return;
     if (key != UINT64_C(0x0123456789ABCDEF))
