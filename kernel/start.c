@@ -57,6 +57,7 @@ void kernel_start(void *stack) {
     smp_init();
     pit_init();
     smp_init_sync();
+    remove_identity_mapping();
     process_setup();
     sched_start();
 halt:
