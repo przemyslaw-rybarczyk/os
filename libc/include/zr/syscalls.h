@@ -32,19 +32,6 @@ typedef struct ReceiveAttachedHandle {
     handle_t handle_i;
 } ReceiveAttachedHandle;
 
-typedef struct ReceiveMessage {
-    MessageLength length;
-    void *data;
-    ReceiveAttachedHandle *handles;
-} ReceiveMessage;
-
-typedef struct ErrorReplies {
-    err_t data_low;
-    err_t data_high;
-    err_t handles_low;
-    err_t handles_high;
-} ErrorReplies;
-
 typedef struct SendMessageData {
     size_t length;
     const void *data;
@@ -61,6 +48,20 @@ typedef struct SendMessage {
     size_t handles_buffers_num;
     const SendMessageHandles *handles_buffers;
 } SendMessage;
+
+typedef struct ReceiveMessage {
+    size_t data_length;
+    void *data;
+    size_t handles_length;
+    ReceiveAttachedHandle *handles;
+} ReceiveMessage;
+
+typedef struct ErrorReplies {
+    err_t data_low;
+    err_t data_high;
+    err_t handles_low;
+    err_t handles_high;
+} ErrorReplies;
 
 #ifndef _KERNEL
 

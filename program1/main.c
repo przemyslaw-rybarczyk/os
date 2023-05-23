@@ -67,7 +67,7 @@ void main(void) {
     if (err)
         return;
     ReceiveAttachedHandle msg2_handles[] = {{ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}};
-    err = reply_read_bounded(msg2, &(ReceiveMessage){{0, 1}, NULL, msg2_handles}, NULL);
+    err = reply_read_bounded(msg2, &(ReceiveMessage){0, NULL, 1, msg2_handles}, NULL);
     if (err)
         return;
     handle_free(msg2);
@@ -75,7 +75,7 @@ void main(void) {
 //    err = channel_get("video/data", &video_data_channel);
 //    if (err)
 //        return;
-    err = channel_call_bounded(video_size_channel, NULL, &(ReceiveMessage){{sizeof(ScreenSize), 0}, &screen_size, NULL}, NULL);
+    err = channel_call_bounded(video_size_channel, NULL, &(ReceiveMessage){sizeof(ScreenSize), &screen_size, 0, NULL}, NULL);
     if (err)
         return;
     handle_t event_mqueue;
@@ -105,7 +105,7 @@ void main(void) {
         switch (tag.data[0]) {
         case 1: {
             KeyEvent key_event;
-            err = message_read_bounded(msg, &(ReceiveMessage){{sizeof(KeyEvent), 0}, &key_event, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
+            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
             if (err)
                 continue;
             if (key_event.pressed == false)
@@ -116,7 +116,7 @@ void main(void) {
         }
         case 2: {
             MouseUpdate mouse_update;
-            err = message_read_bounded(msg, &(ReceiveMessage){{sizeof(MouseUpdate), 0}, &mouse_update, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
+            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(MouseUpdate), &mouse_update, 0, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
             if (err)
                 continue;
             mouse_x += mouse_update.diff_x;

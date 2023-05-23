@@ -13,7 +13,7 @@ void main(void) {
     if (err)
         return;
     ReceiveAttachedHandle msg1_handles[] = {{ATTACHED_HANDLE_TYPE_CHANNEL_RECEIVE, 0}};
-    err = message_read_bounded(msg1, &(ReceiveMessage){{0, 1}, NULL, msg1_handles}, NULL, &error_replies(ERR_INVALID_ARG));
+    err = message_read_bounded(msg1, &(ReceiveMessage){0, NULL, 1, msg1_handles}, NULL, &error_replies(ERR_INVALID_ARG));
     if (err)
         return;
     message_reply(msg1, NULL);
@@ -28,7 +28,7 @@ void main(void) {
     if (err)
         return;
     u64 key;
-    err = message_read_bounded(msg2, &(ReceiveMessage){{sizeof(u64), 0}, &key, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
+    err = message_read_bounded(msg2, &(ReceiveMessage){sizeof(u64), &key, 0, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
     if (err)
         return;
     if (key != UINT64_C(0x0123456789ABCDEF))
