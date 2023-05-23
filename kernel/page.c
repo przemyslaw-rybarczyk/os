@@ -324,6 +324,7 @@ err_t verify_user_buffer(const void *start, size_t length, bool write) {
     return verify_page_map_range(start_addr, start_addr + length - 1, PHYS_ADDR(get_pml4()), 0, PDPT_BITS, write);
 }
 
+// Remove the identity mapping present when booting from the idle page map
 void remove_identity_mapping(void) {
     u64 *page_map = PHYS_ADDR(get_pml4());
     for (size_t i = 0; i < 0x100; i++)
