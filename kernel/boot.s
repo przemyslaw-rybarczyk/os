@@ -109,6 +109,9 @@ PAGE_SIZE equ 1 << 12
 
 ; Kernel constants
 
+; Maximum number of sectors that can reliably be read at once
+SECTORS_PER_LOAD equ 0x7F
+
 DEVICES_PML4E equ 0x1FD
 FB_PDPTE equ 0x000
 ID_MAP_INIT_PDPTE equ 0x002
@@ -281,6 +284,13 @@ load_kernel:
   mov dl, '3'
   jmp error
 .int13_supported:
+  ; Since we can only reliably load 127 sectors at once, we have to make multiple BIOS calls.
+  ; We first loop, loading 127 sectors in each iteration. After the loop the remaining sectors are loaded.
+.loop:
+  mov dx, [int13_dap.start]
+  add dx, SECTORS_PER_LOAD
+  cmp dx, kernel_sector_count
+  jae .loop_end
   ; INT 13h AH=42h - Extended Read Sectors From Drive
   ; Load the rest of the kernel at 0x7E00, right after the boot sector.
   ; DL holds index of drive to read from. SI holds pointer to the Disk Address Packet.
@@ -291,11 +301,69 @@ load_kernel:
   int 0x13
   jc .fail
   test ah, ah
-  jz .end
+  jnz .fail
+  add word [int13_dap.segment], SECTORS_PER_LOAD * 32
+  add word [int13_dap.start], SECTORS_PER_LOAD
+  jmp .loop
+.loop_end:
+  mov dx, kernel_sector_count
+  sub dx, [int13_dap.start]
+  mov [int13_dap.sectors], dx
+  mov dl, [drive_index]
+  mov ah, 0x42
+  mov si, int13_dap
+  int 0x13
+  jc .fail
+  test ah, ah
+  jnz .fail
+  jmp .end
 .fail:
   mov dl, '4'
   jmp error
 .end:
+  jmp get_video_mode
+
+; Disk Address Packet
+; The segment is set so that the offset is 0.
+; This allows loading up to 64 KiB, as the entire load buffer must fit inside a single segment.
+; Since the boot sector is already loaded, we start loading from sector 1.
+align 4
+int13_dap:
+  db 0x10 ; size of DAP
+  db 0 ; unused
+.sectors:
+  dw SECTORS_PER_LOAD ; number of sectors to read
+.offset:
+  dw 0x0000 ; offset of load buffer
+.segment:
+  dw 0x07E0 ; segment of load buffer
+.start:
+  dq 1 ; first sector to load
+
+error_msg: db `Error \0`
+
+; Halts with error code in dl displayed
+error:
+  cld
+  mov si, error_msg
+  mov ah, 0x0E
+.loop:
+  lodsb
+  test al, al
+  jz .end
+  int 0x10
+  jmp .loop
+.end:
+  mov al, dl
+  int 0x10
+.halt:
+  cli
+  hlt
+  jmp .halt
+
+; Fill the rest of the boot sector with zeroes and place the boot signature at the end.
+times 0x1FE - ($-$$) db 0
+dw 0xAA55
 
 ; Go through the available video modes and find the best one
 ; We use VBE 2.0 functions for this. Each one is called with INT 10h AH=4Fh and AL set to the function number.
@@ -406,44 +474,6 @@ get_video_mode:
 .end:
   jmp enter_protected_mode
 
-; Disk Address Packet
-; The segment is set so that the offset is 0.
-; This allows loading up to 64 KiB, as the entire load buffer must fit inside a single segment.
-; Since the boot sector is already loaded, we start loading from sector 1.
-align 4
-int13_dap:
-  db 0x10 ; size of DAP
-  db 0 ; unused
-  dw kernel_sector_count - 1 ; number of sectors to read
-  dw 0x0000 ; offset of load buffer
-  dw 0x07E0 ; segment of load buffer
-  dq 1 ; first sector to load
-
-error_msg: db `Error \0`
-
-; Halts with error code in dl displayed
-error:
-  cld
-  mov si, error_msg
-  mov ah, 0x0E
-.loop:
-  lodsb
-  test al, al
-  jz .end
-  int 0x10
-  jmp .loop
-.end:
-  mov al, dl
-  int 0x10
-.halt:
-  cli
-  hlt
-  jmp .halt
-
-; Fill the rest of the boot sector with zeroes and place the boot signature at the end.
-times 0x1FE - ($-$$) db 0
-dw 0xAA55
-
 ; Global Descriptor Table for use in protected mode
 ; The only difference is that the flags in the kernel code segment field has the DB flag set instead of the L flag.
 align 8
@@ -506,6 +536,74 @@ enter_protected_mode:
   mov cr0, eax
   ; Jump to enter protected mode
   jmp SEGMENT_KERNEL_CODE:protected_mode_start
+
+; Pad so that AP initialization code starts at 0x8000
+times 0x400 - ($-$$) db 0
+
+bits 16
+
+start_ap:
+  cli
+  ; Set data segment register
+  mov ax, 0
+  mov ds, ax
+  ; Load GDT
+  lgdt [gdtr32]
+  ; Set PE in CR0
+  mov eax, cr0
+  or eax, CR0_PE
+  mov cr0, eax
+  ; Jump to enter protected mode
+  jmp SEGMENT_KERNEL_CODE:protected_mode_start_ap
+
+bits 32
+
+; Set up paging and enter long mode
+protected_mode_start_ap:
+  ; Enable PAE, PGE, OSFXSR, and OSXMMEXCPT in CR4
+  mov eax, cr4
+  or eax, CR4_PAE | CR4_PGE | CR4_OSFXSR | CR4_OSXMMEXCPT
+  mov cr4, eax
+  ; Set CR3 to address of PML4
+  mov eax, pml4
+  mov cr3, eax
+  ; Set SCE, LME, and NXE in EFER MSR
+  mov ecx, EFER_MSR
+  rdmsr
+  or eax, EFER_MSR_SCE | EFER_MSR_LME | EFER_MSR_NXE
+  wrmsr
+  ; Set PG and clear EM in CR0
+  mov eax, cr0
+  or eax, CR0_PG | CR0_MP
+  and eax, ~CR0_EM
+  mov cr0, eax
+  ; Load GDT
+  lgdt [gdtr]
+  ; Jump to enter long mode
+  jmp SEGMENT_KERNEL_CODE:long_mode_start_ap
+
+bits 64
+
+long_mode_start_ap:
+  ; Set data segment registers
+  mov ax, SEGMENT_KERNEL_DATA
+  mov ds, ax
+  mov es, ax
+  mov fs, ax
+  mov gs, ax
+  mov ss, ax
+  ; Load initial kernel stack
+  mov rax, 2 * PAGE_SIZE
+  lock xadd [last_kernel_stack], rax
+  lea rsp, [rax + 3 * PAGE_SIZE]
+  ; Finally, enter the kernel
+  mov rdi, rsp
+  call kernel_start_ap
+  ; Loop forever if kernel exits - this shouldn't happen
+.halt:
+  cli
+  hlt
+  jmp .halt
 
 bits 32
 
@@ -621,74 +719,6 @@ long_mode_start:
   ; Finally, enter the kernel
   mov rdi, rsp
   call kernel_start
-  ; Loop forever if kernel exits - this shouldn't happen
-.halt:
-  cli
-  hlt
-  jmp .halt
-
-; Pad so that AP initialization code starts at 0x8000
-times 0x400 - ($-$$) db 0
-
-bits 16
-
-start_ap:
-  cli
-  ; Set data segment register
-  mov ax, 0
-  mov ds, ax
-  ; Load GDT
-  lgdt [gdtr32]
-  ; Set PE in CR0
-  mov eax, cr0
-  or eax, CR0_PE
-  mov cr0, eax
-  ; Jump to enter protected mode
-  jmp SEGMENT_KERNEL_CODE:protected_mode_start_ap
-
-bits 32
-
-; Set up paging and enter long mode
-protected_mode_start_ap:
-  ; Enable PAE, PGE, OSFXSR, and OSXMMEXCPT in CR4
-  mov eax, cr4
-  or eax, CR4_PAE | CR4_PGE | CR4_OSFXSR | CR4_OSXMMEXCPT
-  mov cr4, eax
-  ; Set CR3 to address of PML4
-  mov eax, pml4
-  mov cr3, eax
-  ; Set SCE, LME, and NXE in EFER MSR
-  mov ecx, EFER_MSR
-  rdmsr
-  or eax, EFER_MSR_SCE | EFER_MSR_LME | EFER_MSR_NXE
-  wrmsr
-  ; Set PG and clear EM in CR0
-  mov eax, cr0
-  or eax, CR0_PG | CR0_MP
-  and eax, ~CR0_EM
-  mov cr0, eax
-  ; Load GDT
-  lgdt [gdtr]
-  ; Jump to enter long mode
-  jmp SEGMENT_KERNEL_CODE:long_mode_start_ap
-
-bits 64
-
-long_mode_start_ap:
-  ; Set data segment registers
-  mov ax, SEGMENT_KERNEL_DATA
-  mov ds, ax
-  mov es, ax
-  mov fs, ax
-  mov gs, ax
-  mov ss, ax
-  ; Load initial kernel stack
-  mov rax, 2 * PAGE_SIZE
-  lock xadd [last_kernel_stack], rax
-  lea rsp, [rax + 3 * PAGE_SIZE]
-  ; Finally, enter the kernel
-  mov rdi, rsp
-  call kernel_start_ap
   ; Loop forever if kernel exits - this shouldn't happen
 .halt:
   cli
