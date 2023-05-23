@@ -7,22 +7,10 @@
 #include "percpu.h"
 #include "process.h"
 
-// Convert a string to a resource name
-// The string is truncated if longer than RESOURCE_NAME_MAX bytes.
-ResourceName resource_name(const char *str) {
-    ResourceName name;
-    size_t i = 0;
-    for (; i < RESOURCE_NAME_MAX && str[i] != 0; i++)
-        name.bytes[i] = str[i];
-    for (; i < RESOURCE_NAME_MAX; i++)
-        name.bytes[i] = 0;
-    return name;
-}
-
 // Get an element of a resource list by its name
-static err_t resource_list_get(ResourceList *list, ResourceName name, size_t *i_ptr) {
+static err_t resource_list_get(ResourceList *list, ResourceName *name, size_t *i_ptr) {
     for (size_t i = 0; i < list->length; i++) {
-        if (memcmp(list->entries[i].name.bytes, name.bytes, RESOURCE_NAME_MAX) == 0) {
+        if (memcmp(list->entries[i].name.bytes, name->bytes, RESOURCE_NAME_MAX) == 0) {
             *i_ptr = i;
             return 0;
         }
@@ -31,19 +19,19 @@ static err_t resource_list_get(ResourceList *list, ResourceName name, size_t *i_
 }
 
 // Get a sending channel resource and bind it to a handle
-err_t syscall_channel_get(const char *name_str, handle_t *handle_i_ptr) {
+err_t syscall_channel_get(ResourceName *name, handle_t *handle_i_ptr) {
     err_t err;
     // Verify buffers are valid
     err = verify_user_buffer(handle_i_ptr, sizeof(handle_t), true);
     if (err)
         return err;
-    err = verify_user_buffer(name_str, RESOURCE_NAME_MAX, false);
+    err = verify_user_buffer(name, sizeof(ResourceName), false);
     if (err)
         return err;
     // Get the resource
     ResourceList *resources = &cpu_local->current_process->resources;
     size_t channel_i;
-    err = resource_list_get(resources, resource_name(name_str), &channel_i);
+    err = resource_list_get(resources, name, &channel_i);
     if (err)
         return err;
     Resource *channel_resource = &resources->entries[channel_i].resource;
@@ -59,10 +47,10 @@ err_t syscall_channel_get(const char *name_str, handle_t *handle_i_ptr) {
 }
 
 // Get a receiving channel resource and add it to a message queue
-err_t syscall_mqueue_add_channel_resource(handle_t mqueue_i, const char *channel_name_str, MessageTag tag) {
+err_t syscall_mqueue_add_channel_resource(handle_t mqueue_i, ResourceName *channel_name, MessageTag tag) {
     err_t err;
     // Verify buffers are valid
-    err = verify_user_buffer(channel_name_str, RESOURCE_NAME_MAX, false);
+    err = verify_user_buffer(channel_name, sizeof(ResourceName), false);
     if (err)
         return err;
     // Get the message queue handle
@@ -75,7 +63,7 @@ err_t syscall_mqueue_add_channel_resource(handle_t mqueue_i, const char *channel
     // Get the channel resource
     ResourceList *resources = &cpu_local->current_process->resources;
     size_t channel_i;
-    err = resource_list_get(resources, resource_name(channel_name_str), &channel_i);
+    err = resource_list_get(resources, channel_name, &channel_i);
     if (err)
         return err;
     Resource *channel_resource = &resources->entries[channel_i].resource;

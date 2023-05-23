@@ -3,9 +3,9 @@
 #include "types.h"
 #include "error.h"
 
-#include "channel.h"
+#include <zr/syscalls.h>
 
-#define RESOURCE_NAME_MAX 32
+#include "channel.h"
 
 typedef enum ResourceType {
     RESOURCE_TYPE_EMPTY,
@@ -20,11 +20,6 @@ typedef struct Resource {
     };
 } Resource;
 
-typedef struct ResourceName {
-    // The name is a string of nonzero bytes, padded with zeroes if shorter than the maximum length
-    u8 bytes[RESOURCE_NAME_MAX];
-} ResourceName;
-
 typedef struct ResourceListEntry {
     ResourceName name;
     Resource resource;
@@ -35,6 +30,5 @@ typedef struct ResourceList {
     ResourceListEntry *entries;
 } ResourceList;
 
-ResourceName resource_name(const char *str);
-err_t syscall_channel_get(const char *name_str, handle_t *handle_i_ptr);
-err_t syscall_mqueue_add_channel_resource(handle_t mqueue_i, const char *channel_name_str, MessageTag tag);
+err_t syscall_channel_get(ResourceName *name, handle_t *handle_i_ptr);
+err_t syscall_mqueue_add_channel_resource(handle_t mqueue_i, ResourceName *channel_name, MessageTag tag);

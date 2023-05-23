@@ -5,7 +5,7 @@
 void main(void) {
     err_t err;
     handle_t video_data_channel;
-    err = channel_get("video/data", &video_data_channel);
+    err = channel_get(&resource_name("video/data"), &video_data_channel);
     if (err)
         return;
     handle_t msg1;

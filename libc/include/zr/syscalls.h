@@ -63,6 +63,26 @@ typedef struct ErrorReplies {
     err_t handles_high;
 } ErrorReplies;
 
+#define RESOURCE_NAME_MAX 32
+
+typedef struct ResourceName {
+    u8 bytes[RESOURCE_NAME_MAX];
+} ResourceName;
+
+// Convert a string to a resource name
+// The string is padded with zeroes if shorter than RESOURCE_NAME_MAX and truncated if longer.
+static inline ResourceName resource_name(const char *str) {
+    ResourceName name;
+    size_t i = 0;
+    for (; i < RESOURCE_NAME_MAX && str[i] != 0; i++)
+        name.bytes[i] = str[i];
+    for (; i < RESOURCE_NAME_MAX; i++)
+        name.bytes[i] = 0;
+    return name;
+}
+
+#define resource_name(str) (*(ResourceName[]){resource_name(str)})
+
 #ifndef _KERNEL
 
 err_t map_pages(u64 start, u64 length, u64 flags);
@@ -78,10 +98,10 @@ err_t message_reply_error(handle_t message_i, err_t error);
 err_t message_read_bounded(handle_t i, ReceiveMessage *message, const MessageLength *min_length, const ErrorReplies *errors);
 err_t reply_read_bounded(handle_t i, ReceiveMessage *message, const MessageLength *min_length);
 err_t channel_call_bounded(handle_t channel_i, const SendMessage *message, ReceiveMessage *reply, const MessageLength *min_length);
-err_t channel_get(const char *name, handle_t *handle_i);
+err_t channel_get(const ResourceName *name, handle_t *handle_i);
 err_t mqueue_create(handle_t *handle_i_ptr);
 err_t mqueue_add_channel(handle_t mqueue_i, handle_t channel_i, MessageTag tag);
-err_t mqueue_add_channel_resource(handle_t mqueue_i, const char *channel_name, MessageTag tag);
+err_t mqueue_add_channel_resource(handle_t mqueue_i, const ResourceName *channel_name, MessageTag tag);
 err_t channel_create(handle_t *channel_send_i, handle_t *channel_receive_i);
 
 #define error_replies(error) ((ErrorReplies){(error), (error), (error), (error)})

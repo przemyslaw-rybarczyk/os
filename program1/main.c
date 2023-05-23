@@ -53,7 +53,7 @@ static void draw_screen(u8 *screen, int color_i, i32 mouse_x, i32 mouse_y) {
 void main(void) {
     err_t err;
     handle_t video_size_channel;
-    err = channel_get("video/size", &video_size_channel);
+    err = channel_get(&resource_name("video/size"), &video_size_channel);
     if (err)
         return;
     handle_t chin, chout, msg2;
@@ -72,7 +72,7 @@ void main(void) {
         return;
     handle_free(msg2);
     video_data_channel = msg2_handles[0].handle_i;
-//    err = channel_get("video/data", &video_data_channel);
+//    err = channel_get(&resource_name("video/data"), &video_data_channel);
 //    if (err)
 //        return;
     err = channel_call_bounded(video_size_channel, NULL, &(ReceiveMessage){sizeof(ScreenSize), &screen_size, 0, NULL}, NULL);
@@ -82,10 +82,10 @@ void main(void) {
     err = mqueue_create(&event_mqueue);
     if (err)
         return;
-    err = mqueue_add_channel_resource(event_mqueue, "keyboard/data", (MessageTag){1, 0});
+    err = mqueue_add_channel_resource(event_mqueue, &resource_name("keyboard/data"), (MessageTag){1, 0});
     if (err)
         return;
-    err = mqueue_add_channel_resource(event_mqueue, "mouse/data", (MessageTag){2, 0});
+    err = mqueue_add_channel_resource(event_mqueue, &resource_name("mouse/data"), (MessageTag){2, 0});
     if (err)
         return;
     size_t screen_bytes = screen_size.height * screen_size.width * 3;
