@@ -267,7 +267,7 @@ _Noreturn void framebuffer_kernel_thread_main(void) {
                 continue;
             }
             // Request for screen size
-            Message *reply = message_alloc(sizeof(ScreenSize), &screen_size);
+            Message *reply = message_alloc_copy(sizeof(ScreenSize), &screen_size);
             if (reply == NULL)
                 message_reply_error(message, ERR_NO_MEMORY);
             message_reply(message, reply);

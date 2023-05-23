@@ -32,12 +32,6 @@ typedef struct ReceiveAttachedHandle {
     handle_t handle_i;
 } ReceiveAttachedHandle;
 
-typedef struct SendMessage {
-    MessageLength length;
-    const void *data;
-    const SendAttachedHandle *handles;
-} SendMessage;
-
 typedef struct ReceiveMessage {
     MessageLength length;
     void *data;
@@ -50,6 +44,23 @@ typedef struct ErrorReplies {
     err_t handles_low;
     err_t handles_high;
 } ErrorReplies;
+
+typedef struct SendMessageData {
+    size_t length;
+    const void *data;
+} SendMessageData;
+
+typedef struct SendMessageHandles {
+    size_t length;
+    const SendAttachedHandle *handles;
+} SendMessageHandles;
+
+typedef struct SendMessage {
+    size_t data_buffers_num;
+    const SendMessageData *data_buffers;
+    size_t handles_buffers_num;
+    const SendMessageHandles *handles_buffers;
+} SendMessage;
 
 #ifndef _KERNEL
 
@@ -73,17 +84,5 @@ err_t mqueue_add_channel_resource(handle_t mqueue_i, const char *channel_name, M
 err_t channel_create(handle_t *channel_send_i, handle_t *channel_receive_i);
 
 #define error_replies(error) ((ErrorReplies){(error), (error), (error), (error)})
-
-static inline err_t message_read_sized(handle_t i, size_t length, void *data, err_t error) {
-    return message_read_bounded(i, &(ReceiveMessage){{length, 0}, data, NULL}, NULL, &(ErrorReplies){error, error, error, error});
-}
-
-static inline err_t reply_read_sized(handle_t i, size_t length, void *data) {
-    return reply_read_bounded(i, &(ReceiveMessage){{length, 0}, data, NULL}, NULL);
-}
-
-static inline err_t channel_call_sized(handle_t i, const SendMessage *message, size_t reply_length, void *reply_data) {
-    return channel_call_bounded(i, message, &(ReceiveMessage){{reply_length, 0}, reply_data, NULL}, NULL);
-}
 
 #endif

@@ -28,10 +28,10 @@ void main(void) {
     if (err)
         return;
     u64 key;
-    err = message_read_sized(msg2, sizeof(u64), &key, ERR_INVALID_ARG);
+    err = message_read_bounded(msg2, &(ReceiveMessage){{sizeof(u64), 0}, &key, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
     if (err)
         return;
     if (key != UINT64_C(0x0123456789ABCDEF))
         return;
-    message_reply(msg2, &(SendMessage){{0, 1}, NULL, &(SendAttachedHandle){0, video_data_channel}});
+    message_reply(msg2, &(SendMessage){0, NULL, 1, &(SendMessageHandles){1, &(SendAttachedHandle){0, video_data_channel}}});
 }

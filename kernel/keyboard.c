@@ -33,7 +33,7 @@ _Noreturn void keyboard_kernel_thread_main(void) {
         KeyEvent event = keyboard_buffer;
         interrupt_enable();
         // Send the key event in a message
-        Message *message = message_alloc(sizeof(KeyEvent), &event);
+        Message *message = message_alloc_copy(sizeof(KeyEvent), &event);
         if (message == NULL)
             continue;
         err = channel_call(keyboard_channel, message, NULL);

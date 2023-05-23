@@ -42,14 +42,24 @@ static void attached_handle_free(AttachedHandle handle) {
 
 static err_t verify_user_send_message(const SendMessage *user_message) {
     err_t err;
-    if (user_message != NULL) {
-        err = verify_user_buffer(user_message, sizeof(SendMessage), false);
+    if (user_message == NULL)
+        return 0;
+    err = verify_user_buffer(user_message, sizeof(SendMessage), false);
+    if (err)
+        return err;
+    err = verify_user_buffer(user_message->data_buffers, user_message->data_buffers_num * sizeof(SendMessageData), false);
+    if (err)
+        return err;
+    for (size_t i = 0; i < user_message->data_buffers_num; i++) {
+        err = verify_user_buffer(user_message->data_buffers[i].data, user_message->data_buffers[i].length, false);
         if (err)
             return err;
-        err = verify_user_buffer(user_message->data, user_message->length.data, false);
-        if (err)
-            return err;
-        err = verify_user_buffer(user_message->handles, user_message->length.handles * sizeof(SendAttachedHandle), false);
+    }
+    err = verify_user_buffer(user_message->handles_buffers, user_message->handles_buffers_num * sizeof(SendMessageHandles), false);
+    if (err)
+        return err;
+    for (size_t i = 0; i < user_message->handles_buffers_num; i++) {
+        err = verify_user_buffer(user_message->handles_buffers[i].handles, user_message->handles_buffers[i].length * sizeof(SendAttachedHandle), false);
         if (err)
             return err;
     }
@@ -71,7 +81,7 @@ static err_t verify_user_receive_message(const ReceiveMessage *user_message) {
 }
 
 // Create a message from a given data buffer
-Message *message_alloc(size_t data_size, const void *data) {
+Message *message_alloc_copy(size_t data_size, const void *data) {
     // Allocate message
     Message *message = malloc(sizeof(Message));
     if (message == NULL)
@@ -91,65 +101,106 @@ Message *message_alloc(size_t data_size, const void *data) {
 }
 
 // Create a message from a user-provided message specification
-static err_t message_alloc_user(const SendMessage *user_message, Message **message_ptr) {
+static err_t message_alloc_user(const SendMessage *user_message, Message **message_ptr, bool is_reply) {
     err_t err;
     // If the user message is NULL, allocate an empty message
     if (user_message == NULL) {
-        Message *message = message_alloc(0, NULL);
+        // Handle empty reply without allocations
+        if (is_reply) {
+            *message_ptr = NULL;
+            return 0;
+        }
+        Message *message = malloc(sizeof(Message));
         if (message == NULL)
             return ERR_KERNEL_NO_MEMORY;
+        memset(message, 0, sizeof(Message));
         *message_ptr = message;
         return 0;
     }
+    // Calculate total data and handles length
+    size_t data_length = 0;
+    for (size_t i = 0; i < user_message->data_buffers_num; i++)
+        data_length += user_message->data_buffers[i].length;
+    size_t handles_length = 0;
+    for (size_t i = 0; i < user_message->handles_buffers_num; i++)
+        handles_length += user_message->handles_buffers[i].length;
+    // Handle empty reply without allocations
+    if (is_reply && data_length == 0 && handles_length == 0) {
+        *message_ptr = NULL;
+        return 0;
+    }
+    // Allocate data buffer
+    void *data = malloc(data_length);
+    if (data_length != 0 && data == NULL)
+        return ERR_KERNEL_NO_MEMORY;
     // Allocate handle list
-    AttachedHandle *handles = malloc(user_message->length.handles * sizeof(AttachedHandle));
-    if (user_message->length.handles != 0 && handles == NULL) {
+    AttachedHandle *handles = malloc(handles_length * sizeof(AttachedHandle));
+    if (handles_length != 0 && handles == NULL) {
+        free(data);
         return ERR_KERNEL_NO_MEMORY;
     }
     // Copy the handles
-    for (size_t i = 0; i < user_message->length.handles; i++) {
-        // Confirm flags are valid
-        if (user_message->handles[i].flags & ~ATTACHED_HANDLE_FLAG_MOVE) {
-            err = ERR_KERNEL_INVALID_ARG;
-            goto fail;
-        }
-        // Copy the handle data
-        Handle handle;
-        err = handle_get(&cpu_local->current_process->handles, user_message->handles[i].handle_i, &handle);
-        if (err)
-            goto fail;
-        switch (handle.type) {
-        case HANDLE_TYPE_CHANNEL_SEND:
-            channel_add_ref(handle.channel);
-            handles[i] = (AttachedHandle){ATTACHED_HANDLE_TYPE_CHANNEL_SEND, {.channel = handle.channel}};
-            break;
-        case HANDLE_TYPE_CHANNEL_RECEIVE:
-            if (!(user_message->handles[i].flags & ATTACHED_HANDLE_FLAG_MOVE)) {
-                err = ERR_KERNEL_UNCOPIEABLE_HANDLE_TYPE;
+    size_t handles_offset = 0;
+    for (size_t buffer_i = 0; buffer_i < user_message->handles_buffers_num; buffer_i++) {
+        const SendMessageHandles *buffer = &user_message->handles_buffers[buffer_i];
+        for (size_t handle_i = 0; handle_i < buffer->length; handle_i++) {
+            // Confirm flags are valid
+            if (buffer->handles[handle_i].flags & ~ATTACHED_HANDLE_FLAG_MOVE) {
+                err = ERR_KERNEL_INVALID_ARG;
                 goto fail;
             }
-            channel_add_ref(handle.channel);
-            handles[i] = (AttachedHandle){ATTACHED_HANDLE_TYPE_CHANNEL_RECEIVE, {.channel = handle.channel}};
-            break;
-        default:
-            err = ERR_KERNEL_WRONG_HANDLE_TYPE;
-            goto fail;
+            // Copy the handle data
+            Handle handle;
+            err = handle_get(&cpu_local->current_process->handles, buffer->handles[handle_i].handle_i, &handle);
+            if (err)
+                goto fail;
+            switch (handle.type) {
+            case HANDLE_TYPE_CHANNEL_SEND:
+                channel_add_ref(handle.channel);
+                handles[handles_offset + handle_i] = (AttachedHandle){ATTACHED_HANDLE_TYPE_CHANNEL_SEND, {.channel = handle.channel}};
+                break;
+            case HANDLE_TYPE_CHANNEL_RECEIVE:
+                if (!(buffer->handles[handle_i].flags & ATTACHED_HANDLE_FLAG_MOVE)) {
+                    err = ERR_KERNEL_UNCOPIEABLE_HANDLE_TYPE;
+                    goto fail;
+                }
+                channel_add_ref(handle.channel);
+                handles[handles_offset + handle_i] = (AttachedHandle){ATTACHED_HANDLE_TYPE_CHANNEL_RECEIVE, {.channel = handle.channel}};
+                break;
+            default:
+                err = ERR_KERNEL_WRONG_HANDLE_TYPE;
+                goto fail;
+            }
+            // Remove the original handle if move flag is set
+            if (buffer->handles[handle_i].flags & ATTACHED_HANDLE_FLAG_MOVE)
+                handle_clear(&cpu_local->current_process->handles, buffer->handles[handle_i].handle_i);
+            continue;
+    fail:
+            for (size_t j = 0; j < handles_offset + handle_i; j++)
+                attached_handle_free(handles[j]);
+            free(handles);
+            free(data);
+            return err;
         }
-        // Remove the original handle if move flag is set
-        if (user_message->handles[i].flags & ATTACHED_HANDLE_FLAG_MOVE)
-            handle_clear(&cpu_local->current_process->handles, user_message->handles[i].handle_i);
-        continue;
-fail:
-        for (size_t j = 0; j < i; j++)
-            attached_handle_free(handles[j]);
-        free(handles);
-        return err;
+        handles_offset += buffer->length;
+    }
+    // Copy the data
+    size_t data_offset = 0;
+    for (size_t i = 0; i < user_message->data_buffers_num; i++) {
+        memcpy(data + data_offset, user_message->data_buffers[i].data, user_message->data_buffers[i].length);
+        data_offset += user_message->data_buffers[i].length;
     }
     // Allocate the message
-    Message *message = message_alloc(user_message->length.data, user_message->data);
-    if (message == NULL)
+    Message *message = malloc(sizeof(Message));
+    if (message == NULL) {
+        free(handles);
+        free(data);
         return ERR_KERNEL_NO_MEMORY;
-    message->handles_size = user_message->length.handles;
+    }
+    memset(message, 0, sizeof(Message));
+    message->data_size = data_length;
+    message->data = data;
+    message->handles_size = handles_length;
     message->handles = handles;
     *message_ptr = message;
     return 0;
@@ -463,7 +514,7 @@ err_t syscall_channel_call(handle_t channel_i, const SendMessage *user_message, 
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Create a message
     Message *message;
-    err = message_alloc_user(user_message, &message);
+    err = message_alloc_user(user_message, &message, false);
     if (err)
         return err;
     // Send the message
@@ -527,16 +578,10 @@ err_t syscall_message_reply(handle_t message_i, const SendMessage *user_reply) {
     if (message_handle.type != HANDLE_TYPE_MESSAGE)
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Create a reply
-    // If the reply size is zero, the reply is set to NULL and no allocation occurs.
     Message *reply;
-    if (user_reply != NULL && (user_reply->length.data != 0 || user_reply->length.handles != 0)) {
-        // Allocate the reply
-        err = message_alloc_user(user_reply, &reply);
-        if (err)
-            return err;
-    } else {
-        reply = NULL;
-    }
+    err = message_alloc_user(user_reply, &reply, true);
+    if (err)
+        return err;
     // Send the reply
     message_reply(message_handle.message, reply);
     // Free message and handle
@@ -690,7 +735,7 @@ err_t syscall_channel_call_bounded(handle_t channel_i, const SendMessage *user_m
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Create a message
     Message *message;
-    err = message_alloc_user(user_message, &message);
+    err = message_alloc_user(user_message, &message, false);
     if (err)
         return err;
     // Send the message

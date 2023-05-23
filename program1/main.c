@@ -47,7 +47,7 @@ static void draw_screen(u8 *screen, int color_i, i32 mouse_x, i32 mouse_y) {
             }
         }
     }
-    channel_call(video_data_channel, &(SendMessage){{screen_bytes, 0}, screen, NULL}, NULL);
+    channel_call(video_data_channel, &(SendMessage){1, &(SendMessageData){screen_bytes, screen}, 0, NULL}, NULL);
 }
 
 void main(void) {
@@ -60,10 +60,10 @@ void main(void) {
     err = channel_create(&chin, &chout);
     if (err)
         return;
-    err = channel_call(3, &(SendMessage){{0, 1}, NULL, &(SendAttachedHandle){ATTACHED_HANDLE_FLAG_MOVE, chout}}, NULL);
+    err = channel_call(3, &(SendMessage){0, NULL, 1, &(SendMessageHandles){1, &(SendAttachedHandle){ATTACHED_HANDLE_FLAG_MOVE, chout}}}, NULL);
     if (err)
         return;
-    err = channel_call(chin, &(SendMessage){{sizeof(u64), 0}, &(u64){UINT64_C(0x0123456789ABCDEF)}, NULL}, &msg2);
+    err = channel_call(chin, &(SendMessage){2, (SendMessageData[]){{sizeof(u32), &(u32){UINT32_C(0x89ABCDEF)}}, {sizeof(u32), &(u32){UINT32_C(0x01234567)}}}, 0, NULL}, &msg2);
     if (err)
         return;
     ReceiveAttachedHandle msg2_handles[] = {{ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}};
@@ -75,7 +75,7 @@ void main(void) {
 //    err = channel_get("video/data", &video_data_channel);
 //    if (err)
 //        return;
-    err = channel_call_sized(video_size_channel, NULL, sizeof(ScreenSize), &screen_size);
+    err = channel_call_bounded(video_size_channel, NULL, &(ReceiveMessage){{sizeof(ScreenSize), 0}, &screen_size, NULL}, NULL);
     if (err)
         return;
     handle_t event_mqueue;
@@ -105,7 +105,7 @@ void main(void) {
         switch (tag.data[0]) {
         case 1: {
             KeyEvent key_event;
-            err = message_read_sized(msg, sizeof(KeyEvent), &key_event, ERR_INVALID_ARG);
+            err = message_read_bounded(msg, &(ReceiveMessage){{sizeof(KeyEvent), 0}, &key_event, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
             if (err)
                 continue;
             if (key_event.pressed == false)
@@ -116,7 +116,7 @@ void main(void) {
         }
         case 2: {
             MouseUpdate mouse_update;
-            err = message_read_sized(msg, sizeof(MouseUpdate), &mouse_update, ERR_INVALID_ARG);
+            err = message_read_bounded(msg, &(ReceiveMessage){{sizeof(MouseUpdate), 0}, &mouse_update, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
             if (err)
                 continue;
             mouse_x += mouse_update.diff_x;

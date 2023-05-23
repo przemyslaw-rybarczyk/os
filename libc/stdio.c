@@ -10,8 +10,8 @@
 #define CHANNEL_STDOUT 1
 
 int putchar(int c) {
-    c = (unsigned char)c;
-    channel_call(CHANNEL_STDOUT, &(SendMessage){{1, 0}, &c, NULL}, NULL);
+    unsigned char c_ = (unsigned char)c;
+    channel_call(CHANNEL_STDOUT, &(SendMessage){1, &(SendMessageData){1, &c_}, 0, NULL}, NULL);
     return c;
 }
 

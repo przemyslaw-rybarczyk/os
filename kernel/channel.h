@@ -29,7 +29,7 @@ typedef struct Message {
     struct Message *next_message;
 } Message;
 
-Message *message_alloc(size_t data_size, const void *data);
+Message *message_alloc_copy(size_t data_size, const void *data);
 void message_free(Message *message);
 void message_reply(Message *message, Message *reply);
 void message_reply_error(Message *message, err_t error);

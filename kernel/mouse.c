@@ -28,7 +28,7 @@ _Noreturn void mouse_kernel_thread_main(void) {
         }
         mouse_update_available = false;
         // Allocate a message with the update
-        Message *message = message_alloc(sizeof(MouseUpdate), &mouse_update);
+        Message *message = message_alloc_copy(sizeof(MouseUpdate), &mouse_update);
         if (message == NULL)
             continue;
         // Reset movement change
