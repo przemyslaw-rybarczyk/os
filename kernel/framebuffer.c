@@ -234,6 +234,7 @@ _Noreturn void framebuffer_kernel_thread_main(void) {
             // Check message size
             if (message->data_size != fb_height * fb_width * 3) {
                 message_reply_error(message, ERR_INVALID_ARG);
+                message_free(message);
                 continue;
             }
             // Display the contents of the message
@@ -264,12 +265,16 @@ _Noreturn void framebuffer_kernel_thread_main(void) {
             // Check message size
             if (message->data_size != 0) {
                 message_reply_error(message, ERR_INVALID_ARG);
+                message_free(message);
                 continue;
             }
             // Request for screen size
             Message *reply = message_alloc_copy(sizeof(ScreenSize), &screen_size);
-            if (reply == NULL)
+            if (reply == NULL) {
                 message_reply_error(message, ERR_NO_MEMORY);
+                message_free(message);
+                continue;
+            }
             message_reply(message, reply);
             message_free(message);
             break;

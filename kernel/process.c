@@ -313,12 +313,14 @@ _Noreturn void process_spawn_kernel_thread_main(void) {
         mqueue_receive(process_spawn_mqueue, &message);
         if (message->data_size < message->handles_size * sizeof(ResourceName)) {
             message_reply_error(message, ERR_INVALID_ARG);
+            message_free(message);
             continue;
         }
         // Create resource list
         ResourceListEntry *resources = malloc(message->handles_size * sizeof(ResourceListEntry));
         if (message->handles_size != 0 && resources == NULL) {
             message_reply_error(message, ERR_NO_MEMORY);
+            message_free(message);
             continue;
         }
         for (size_t i = 0; i < message->handles_size; i++) {
@@ -339,6 +341,8 @@ _Noreturn void process_spawn_kernel_thread_main(void) {
         err = process_create(&process, (ResourceList){message->handles_size, resources});
         if (err) {
             message_reply_error(message, user_error_code(err));
+            message_free(message);
+            free(resources);
             continue;
         }
         // Set up the process stack to load provided ELF file and free the message upon starting
