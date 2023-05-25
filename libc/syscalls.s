@@ -12,7 +12,7 @@ global message_reply_error
 global message_read_bounded
 global reply_read_bounded
 global channel_call_bounded
-global channel_get
+global resource_get
 global mqueue_create
 global mqueue_add_channel
 global mqueue_add_channel_resource
@@ -86,7 +86,7 @@ channel_call_bounded:
   syscall
   ret
 
-channel_get:
+resource_get:
   mov rax, 13
   syscall
   ret

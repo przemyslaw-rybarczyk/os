@@ -119,9 +119,11 @@ fail_process_alloc:
 }
 
 // Set up the stack for a user process running a given executable file
-void process_set_user_stack(Process *process, const u8 *file, size_t file_length) {
+// The message passed, if not NULL, will be freed after the process is loaded.
+void process_set_user_stack(Process *process, const u8 *file, size_t file_length, Message *message) {
     u64 *rsp = process->kernel_stack;
     // Arguments to process_start()
+    *--rsp = (u64)message;
     *--rsp = file_length;
     *--rsp = (u64)file;
     // Used by process_switch() - return address, saved registers and interrupt disable count
@@ -167,11 +169,14 @@ void process_enqueue(Process *process) {
     interrupt_enable();
 }
 
-// Initialize processes
+// Set up the initial processes
 err_t process_setup(void) {
     err_t err;
     framebuffer_mqueue = mqueue_alloc();
     if (framebuffer_mqueue == NULL)
+        return ERR_KERNEL_NO_MEMORY;
+    process_spawn_mqueue = mqueue_alloc();
+    if (process_spawn_mqueue == NULL)
         return ERR_KERNEL_NO_MEMORY;
     framebuffer_data_channel = channel_alloc();
     if (framebuffer_data_channel == NULL)
@@ -185,8 +190,12 @@ err_t process_setup(void) {
     mouse_channel = channel_alloc();
     if (mouse_channel == NULL)
         return ERR_KERNEL_NO_MEMORY;
+    process_spawn_channel = channel_alloc();
+    if (process_spawn_channel == NULL)
+        return ERR_KERNEL_NO_MEMORY;
     channel_set_mqueue(framebuffer_data_channel, framebuffer_mqueue, (MessageTag){FB_MQ_TAG_DATA, 0});
     channel_set_mqueue(framebuffer_size_channel, framebuffer_mqueue, (MessageTag){FB_MQ_TAG_SIZE, 0});
+    channel_set_mqueue(process_spawn_channel, process_spawn_mqueue, (MessageTag){0, 0});
     Process *framebuffer_kernel_thread;
     err = process_create(&framebuffer_kernel_thread, (ResourceList){0, NULL});
     if (err)
@@ -197,48 +206,46 @@ err_t process_setup(void) {
     err = process_create(&mouse_kernel_thread, (ResourceList){0, NULL});
     if (err)
         return err;
+    err = process_create(&process_spawn_kernel_thread, (ResourceList){0, NULL});
+    if (err)
+        return err;
     process_set_kernel_stack(framebuffer_kernel_thread, framebuffer_kernel_thread_main);
     process_set_kernel_stack(keyboard_kernel_thread, keyboard_kernel_thread_main);
     process_set_kernel_stack(mouse_kernel_thread, mouse_kernel_thread_main);
-    Process *client_process;
-    Process *client_process_2;
-    ResourceListEntry *client_resources = malloc(4 * sizeof(ResourceListEntry));
-    if (client_resources == NULL)
+    process_set_kernel_stack(process_spawn_kernel_thread, process_spawn_kernel_thread_main);
+    Process *init_process;
+    ResourceListEntry *init_resources = malloc(5 * sizeof(ResourceListEntry));
+    if (init_resources == NULL)
         return ERR_KERNEL_NO_MEMORY;
-    client_resources[0] = (ResourceListEntry){
+    init_resources[0] = (ResourceListEntry){
         resource_name("video/size"), {
             RESOURCE_TYPE_CHANNEL_SEND,
             {.channel = framebuffer_size_channel}}};
-    client_resources[1] = (ResourceListEntry){
+    init_resources[1] = (ResourceListEntry){
         resource_name("video/data"), {
             RESOURCE_TYPE_CHANNEL_SEND,
             {.channel = framebuffer_data_channel}}};
-    client_resources[2] = (ResourceListEntry){
+    init_resources[2] = (ResourceListEntry){
         resource_name("keyboard/data"), {
             RESOURCE_TYPE_CHANNEL_RECEIVE,
             {.channel = keyboard_channel}}};
-    client_resources[3] = (ResourceListEntry){
+    init_resources[3] = (ResourceListEntry){
         resource_name("mouse/data"), {
             RESOURCE_TYPE_CHANNEL_RECEIVE,
             {.channel = mouse_channel}}};
-    err = process_create(&client_process, (ResourceList){4, client_resources});
+    init_resources[4] = (ResourceListEntry){
+        resource_name("process/spawn"), {
+            RESOURCE_TYPE_CHANNEL_SEND,
+            {.channel = process_spawn_channel}}};
+    err = process_create(&init_process, (ResourceList){5, init_resources});
     if (err)
         return err;
-    process_set_user_stack(client_process, included_file_program1, included_file_program1_end - included_file_program1);
-    err = process_create(&client_process_2, (ResourceList){4, client_resources});
-    if (err)
-        return err;
-    process_set_user_stack(client_process_2, included_file_program2, included_file_program2_end - included_file_program2);
-    Channel *ch = channel_alloc();
-    MessageQueue *mq = mqueue_alloc();
-    channel_set_mqueue(ch, mq, (MessageTag){0, 0});
-    handle_set(&client_process->handles, 3, (Handle){HANDLE_TYPE_CHANNEL_SEND, {.channel = ch}});
-    handle_set(&client_process_2->handles, 3, (Handle){HANDLE_TYPE_MESSAGE_QUEUE, {.mqueue = mq}});
+    process_set_user_stack(init_process, included_file_window, included_file_window_end - included_file_window, NULL);
     process_enqueue(framebuffer_kernel_thread);
     process_enqueue(keyboard_kernel_thread);
     process_enqueue(mouse_kernel_thread);
-    process_enqueue(client_process);
-    process_enqueue(client_process_2);
+    process_enqueue(process_spawn_kernel_thread);
+    process_enqueue(init_process);
     return 0;
 }
 
@@ -292,4 +299,52 @@ void sched_switch_process(void) {
     process_queue_add(&scheduler_queue, cpu_local->current_process);
     cpu_local->current_process = next_process;
     spinlock_release(&scheduler_lock);
+}
+
+Process *process_spawn_kernel_thread;
+Channel *process_spawn_channel;
+MessageQueue *process_spawn_mqueue;
+
+_Noreturn void process_spawn_kernel_thread_main(void) {
+    err_t err;
+    while (1) {
+        Message *message;
+        // Get message from user process
+        mqueue_receive(process_spawn_mqueue, &message);
+        if (message->data_size < message->handles_size * sizeof(ResourceName)) {
+            message_reply_error(message, ERR_INVALID_ARG);
+            continue;
+        }
+        // Create resource list
+        ResourceListEntry *resources = malloc(message->handles_size * sizeof(ResourceListEntry));
+        if (message->handles_size != 0 && resources == NULL) {
+            message_reply_error(message, ERR_NO_MEMORY);
+            continue;
+        }
+        for (size_t i = 0; i < message->handles_size; i++) {
+            resources[i].name = ((ResourceName *)message->data)[i];
+            switch (message->handles[i].type) {
+            case ATTACHED_HANDLE_TYPE_CHANNEL_SEND:
+                channel_add_ref(message->handles[i].channel);
+                resources[i].resource = (Resource){RESOURCE_TYPE_CHANNEL_SEND, .channel = message->handles[i].channel};
+                break;
+            case ATTACHED_HANDLE_TYPE_CHANNEL_RECEIVE:
+                channel_add_ref(message->handles[i].channel);
+                resources[i].resource = (Resource){RESOURCE_TYPE_CHANNEL_RECEIVE, .channel = message->handles[i].channel};
+                break;
+            }
+        }
+        // Create the process
+        Process *process;
+        err = process_create(&process, (ResourceList){message->handles_size, resources});
+        if (err) {
+            message_reply_error(message, user_error_code(err));
+            continue;
+        }
+        // Set up the process stack to load provided ELF file and free the message upon starting
+        size_t file_offset = message->handles_size * sizeof(ResourceName);
+        process_set_user_stack(process, message->data + file_offset, message->data_size - file_offset, message);
+        process_enqueue(process);
+        message_reply(message, NULL);
+    }
 }

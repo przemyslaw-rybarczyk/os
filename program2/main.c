@@ -5,11 +5,20 @@
 void main(void) {
     err_t err;
     handle_t video_data_channel;
-    err = channel_get(&resource_name("video/data"), &video_data_channel);
+    err = resource_get(&resource_name("video/data"), RESOURCE_TYPE_CHANNEL_SEND, &video_data_channel);
     if (err)
         return;
+    handle_t test_channel;
+    err = resource_get(&resource_name("test/1"), RESOURCE_TYPE_CHANNEL_RECEIVE, &test_channel);
+    if (err)
+        return;
+    handle_t test_mqueue;
+    err = mqueue_create(&test_mqueue);
+    if (err)
+        return;
+    mqueue_add_channel(test_mqueue, test_channel, (MessageTag){0, 0});
     handle_t msg1;
-    err = mqueue_receive(3, NULL, &msg1);
+    err = mqueue_receive(test_mqueue, NULL, &msg1);
     if (err)
         return;
     ReceiveAttachedHandle msg1_handles[] = {{ATTACHED_HANDLE_TYPE_CHANNEL_RECEIVE, 0}};

@@ -19,7 +19,7 @@ static err_t resource_list_get(ResourceList *list, ResourceName *name, size_t *i
 }
 
 // Get a sending channel resource and bind it to a handle
-err_t syscall_channel_get(ResourceName *name, handle_t *handle_i_ptr) {
+err_t syscall_resource_get(ResourceName *name, ResourceType type, handle_t *handle_i_ptr) {
     err_t err;
     // Verify buffers are valid
     err = verify_user_buffer(handle_i_ptr, sizeof(handle_t), true);
@@ -35,12 +35,23 @@ err_t syscall_channel_get(ResourceName *name, handle_t *handle_i_ptr) {
     if (err)
         return err;
     Resource *channel_resource = &resources->entries[channel_i].resource;
-    if (channel_resource->type != RESOURCE_TYPE_CHANNEL_SEND)
+    if (channel_resource->type != type)
         return ERR_KERNEL_WRONG_RESOURCE_TYPE;
     // Add the handle
-    err = handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_CHANNEL_SEND, {.channel = channel_resource->channel}}, handle_i_ptr);
-    if (err)
-        return err;
+    switch (type) {
+    case RESOURCE_TYPE_EMPTY:
+        return ERR_KERNEL_WRONG_RESOURCE_TYPE;
+    case RESOURCE_TYPE_CHANNEL_SEND:
+        err = handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_CHANNEL_SEND, {.channel = channel_resource->channel}}, handle_i_ptr);
+        if (err)
+            return err;
+        break;
+    case RESOURCE_TYPE_CHANNEL_RECEIVE:
+        err = handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_CHANNEL_RECEIVE, {.channel = channel_resource->channel}}, handle_i_ptr);
+        if (err)
+            return err;
+        break;
+    }
     // Remove the resource
     channel_resource->type = RESOURCE_TYPE_EMPTY;
     return 0;

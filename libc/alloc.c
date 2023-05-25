@@ -39,7 +39,11 @@ static err_t heap_extend(size_t increment) {
     increment = (increment + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE;
     // Check the increment won't increase heap size past the limit
     if (heap_end + increment > HEAP_END_MAX || heap_end + increment < heap_end)
+#ifdef _KERNEL
         return ERR_KERNEL_NO_MEMORY;
+#else
+        return ERR_NO_MEMORY;
+#endif
     // Allocate the pages needed to extend the heap
 #ifdef _KERNEL
     err = map_kernel_pages(heap_end, increment, true, false);

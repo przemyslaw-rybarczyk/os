@@ -22,6 +22,7 @@ extern page_free
 extern free
 extern stack_free
 extern idle_page_map
+extern message_free
 
 struc Process
   .rsp: resq 1
@@ -263,7 +264,7 @@ process_switch:
 ; When a process is created, its instruction pointer is set to the start of this function,
 ; which finishes initializing process state and jumps to the actual entry point.
 ; Takes the following arugments from the stack (listed top to bottom):
-; const u8 *file, size_t file_length, u64 arg
+; const u8 *file, size_t file_length, Message *message
 process_start:
   ; Load the process
   pop rdi
@@ -273,8 +274,15 @@ process_start:
   call load_elf_file
   test rax, rax
   jnz .fail
+  ; Free the message
+  mov rdi, [rsp + 8]
+  test rdi, rdi
+  jz .no_message
+  call message_free
+.no_message:
   ; Get process entry point
   pop rax
+  add rsp, 8
   ; Set up the kernel stack for an IRET
   push SEGMENT_USER_DATA | SEGMENT_RING_3
   push 0 ; initialize RSP to 0 - it is the responsibility of user code to allocate a stack

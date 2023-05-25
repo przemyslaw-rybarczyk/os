@@ -27,10 +27,14 @@ typedef struct ProcessQueue {
     Process *end;
 } ProcessQueue;
 
+extern Process *process_spawn_kernel_thread;
+extern Channel *process_spawn_channel;
+extern MessageQueue *process_spawn_mqueue;
+
 void process_queue_add(ProcessQueue *queue, Process *process);
 Process *process_queue_remove(ProcessQueue *queue);
 err_t process_create(Process **process_ptr, ResourceList resources);
-void process_set_user_stack(Process *process, const u8 *file, size_t file_length);
+void process_set_user_stack(Process *process, const u8 *file, size_t file_length, Message *message);
 void userspace_init(void);
 void process_enqueue(Process *process);
 err_t process_setup(void);
@@ -38,3 +42,4 @@ _Noreturn void process_exit(void);
 void process_switch(void);
 void sched_start(void);
 void process_block(spinlock_t *spinlock);
+_Noreturn void process_spawn_kernel_thread_main(void);

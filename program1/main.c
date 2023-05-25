@@ -53,14 +53,18 @@ static void draw_screen(u8 *screen, int color_i, i32 mouse_x, i32 mouse_y) {
 void main(void) {
     err_t err;
     handle_t video_size_channel;
-    err = channel_get(&resource_name("video/size"), &video_size_channel);
+    err = resource_get(&resource_name("video/size"), RESOURCE_TYPE_CHANNEL_SEND, &video_size_channel);
+    if (err)
+        return;
+    handle_t test_channel;
+    err = resource_get(&resource_name("test/1"), RESOURCE_TYPE_CHANNEL_SEND, &test_channel);
     if (err)
         return;
     handle_t chin, chout, msg2;
     err = channel_create(&chin, &chout);
     if (err)
         return;
-    err = channel_call(3, &(SendMessage){0, NULL, 1, &(SendMessageHandles){1, &(SendAttachedHandle){ATTACHED_HANDLE_FLAG_MOVE, chout}}}, NULL);
+    err = channel_call(test_channel, &(SendMessage){0, NULL, 1, &(SendMessageHandles){1, &(SendAttachedHandle){ATTACHED_HANDLE_FLAG_MOVE, chout}}}, NULL);
     if (err)
         return;
     err = channel_call(chin, &(SendMessage){2, (SendMessageData[]){{sizeof(u32), &(u32){UINT32_C(0x89ABCDEF)}}, {sizeof(u32), &(u32){UINT32_C(0x01234567)}}}, 0, NULL}, &msg2);
@@ -72,7 +76,7 @@ void main(void) {
         return;
     handle_free(msg2);
     video_data_channel = msg2_handles[0].handle_i;
-//    err = channel_get(&resource_name("video/data"), &video_data_channel);
+//    err = resource_get(&resource_name("video/data"), RESOURCE_TYPE_CHANNEL_SEND, &video_data_channel);
 //    if (err)
 //        return;
     err = channel_call_bounded(video_size_channel, NULL, &(ReceiveMessage){sizeof(ScreenSize), &screen_size, 0, NULL}, NULL);
