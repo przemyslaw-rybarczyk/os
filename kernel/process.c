@@ -255,6 +255,7 @@ err_t process_setup(void) {
 void process_free_contents(void) {
     page_map_free_contents(cpu_local->current_process->page_map);
     handle_list_free(&cpu_local->current_process->handles);
+    resource_list_free(&cpu_local->current_process->resources);
 }
 
 // Set `cpu_local->current_process` to the next process in the queue

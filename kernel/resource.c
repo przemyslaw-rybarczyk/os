@@ -1,11 +1,30 @@
 #include "types.h"
 #include "resource.h"
 
+#include "alloc.h"
+#include "channel.h"
 #include "handle.h"
 #include "string.h"
 #include "page.h"
 #include "percpu.h"
 #include "process.h"
+
+static void resource_free(Resource resource) {
+    switch (resource.type) {
+    case RESOURCE_TYPE_EMPTY:
+        break;
+    case RESOURCE_TYPE_CHANNEL_SEND:
+    case RESOURCE_TYPE_CHANNEL_RECEIVE:
+        channel_del_ref(resource.channel);
+        break;
+    }
+}
+
+void resource_list_free(ResourceList *list) {
+    for (size_t i = 0; i < list->length; i++)
+        resource_free(list->entries[i].resource);
+    free(list->entries);
+}
 
 // Get an element of a resource list by its name
 static err_t resource_list_get(ResourceList *list, ResourceName *name, size_t *i_ptr) {
