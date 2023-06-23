@@ -213,6 +213,11 @@ err_t process_setup(void) {
     process_set_kernel_stack(keyboard_kernel_thread, keyboard_kernel_thread_main);
     process_set_kernel_stack(mouse_kernel_thread, mouse_kernel_thread_main);
     process_set_kernel_stack(process_spawn_kernel_thread, process_spawn_kernel_thread_main);
+    channel_add_ref(framebuffer_size_channel);
+    channel_add_ref(framebuffer_data_channel);
+    channel_add_ref(keyboard_channel);
+    channel_add_ref(mouse_channel);
+    channel_add_ref(process_spawn_channel);
     Process *init_process;
     ResourceListEntry *init_resources = malloc(5 * sizeof(ResourceListEntry));
     if (init_resources == NULL)
@@ -342,14 +347,13 @@ _Noreturn void process_spawn_kernel_thread_main(void) {
         err = process_create(&process, (ResourceList){message->handles_size, resources});
         if (err) {
             message_reply_error(message, user_error_code(err));
-            message_free(message);
-            free(resources);
+            resource_list_free(&(ResourceList){message->handles_size, resources});
             continue;
         }
+        message_reply(message, NULL);
         // Set up the process stack to load provided ELF file and free the message upon starting
         size_t file_offset = message->handles_size * sizeof(ResourceName);
         process_set_user_stack(process, message->data + file_offset, message->data_size - file_offset, message);
         process_enqueue(process);
-        message_reply(message, NULL);
     }
 }
