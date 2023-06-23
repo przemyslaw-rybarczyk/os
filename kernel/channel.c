@@ -435,7 +435,6 @@ err_t channel_set_mqueue(Channel *channel, MessageQueue *mqueue, MessageTag tag)
 // Send a message on a channel and wait for a reply
 err_t channel_call(Channel *channel, Message *message, Message **reply) {
     spinlock_acquire(&channel->lock);
-    message->tag = channel->tag;
     if (channel->queue == NULL) {
         process_queue_add(&channel->blocked_senders, cpu_local->current_process);
         process_block(&channel->lock);
@@ -445,6 +444,7 @@ err_t channel_call(Channel *channel, Message *message, Message **reply) {
         spinlock_release(&channel->lock);
         return ERR_KERNEL_CHANNEL_CLOSED;
     }
+    message->tag = channel->tag;
     MessageQueue *queue = channel->queue;
     spinlock_release(&channel->lock);
     return mqueue_call(queue, message, reply);
