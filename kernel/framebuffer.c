@@ -257,7 +257,11 @@ _Noreturn void framebuffer_kernel_thread_main(void) {
             print_hex_u64(i);
             framebuffer_unlock();
             // Send an empty reply and free the message
-            message_reply(message, NULL);
+            Message *reply = message_alloc_copy(0, NULL);
+            if (reply == NULL) {
+                continue;
+            }
+            message_reply(message, reply);
             message_free(message);
             break;
         }

@@ -12,7 +12,6 @@ static void handle_free(Handle handle) {
     case HANDLE_TYPE_EMPTY:
         break;
     case HANDLE_TYPE_MESSAGE:
-    case HANDLE_TYPE_REPLY:
         message_free(handle.message);
         break;
     case HANDLE_TYPE_CHANNEL_SEND:

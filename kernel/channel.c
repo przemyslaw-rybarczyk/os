@@ -101,15 +101,10 @@ Message *message_alloc_copy(size_t data_size, const void *data) {
 }
 
 // Create a message from a user-provided message specification
-static err_t message_alloc_user(const SendMessage *user_message, Message **message_ptr, bool is_reply) {
+static err_t message_alloc_user(const SendMessage *user_message, Message **message_ptr) {
     err_t err;
     // If the user message is NULL, allocate an empty message
     if (user_message == NULL) {
-        // Handle empty reply without allocations
-        if (is_reply) {
-            *message_ptr = NULL;
-            return 0;
-        }
         Message *message = malloc(sizeof(Message));
         if (message == NULL)
             return ERR_KERNEL_NO_MEMORY;
@@ -124,11 +119,6 @@ static err_t message_alloc_user(const SendMessage *user_message, Message **messa
     size_t handles_length = 0;
     for (size_t i = 0; i < user_message->handles_buffers_num; i++)
         handles_length += user_message->handles_buffers[i].length;
-    // Handle empty reply without allocations
-    if (is_reply && data_length == 0 && handles_length == 0) {
-        *message_ptr = NULL;
-        return 0;
-    }
     // Allocate data buffer
     void *data = malloc(data_length);
     if (data_length != 0 && data == NULL)
@@ -209,12 +199,6 @@ static err_t message_alloc_user(const SendMessage *user_message, Message **messa
 // Read a message into user-provided buffers
 static err_t message_read_user(const Message *message, ReceiveMessage *user_message, bool check_types) {
     err_t err;
-    // If the message is NULL, treat it as empty
-    if (message == NULL) {
-        user_message->data_length = 0;
-        user_message->handles_length = 0;
-        return 0;
-    }
     user_message->data_length = message->data_size;
     user_message->handles_length = message->handles_size;
     memcpy(user_message->data, message->data, message->data_size);
@@ -253,8 +237,6 @@ static err_t message_read_user(const Message *message, ReceiveMessage *user_mess
 
 // Free a message along with its data buffer
 void message_free(Message *message) {
-    if (message == NULL)
-        return;
     free(message->data);
     for (size_t i = 0; i < message->handles_size; i++)
         attached_handle_free(message->handles[i]);
@@ -458,15 +440,15 @@ err_t syscall_message_get_length(handle_t i, MessageLength *length) {
     err = handle_get(&cpu_local->current_process->handles, i, &handle);
     if (err)
         return err;
-    if (handle.type != HANDLE_TYPE_MESSAGE && handle.type != HANDLE_TYPE_REPLY)
+    if (handle.type != HANDLE_TYPE_MESSAGE)
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Verify buffer is valid
     err = verify_user_buffer(length, sizeof(MessageLength), true);
     if (err)
         return err;
     // Copy the length
-    length->data = handle.message != NULL ? handle.message->data_size : 0;
-    length->handles = handle.message != NULL ? handle.message->handles_size : 0;
+    length->data = handle.message->data_size;
+    length->handles = handle.message->handles_size;
     return 0;
 }
 
@@ -479,7 +461,7 @@ err_t syscall_message_read(handle_t i, void *data, ReceiveAttachedHandle *handle
     err = handle_get(&cpu_local->current_process->handles, i, &handle);
     if (err)
         return err;
-    if (handle.type != HANDLE_TYPE_MESSAGE && handle.type != HANDLE_TYPE_REPLY)
+    if (handle.type != HANDLE_TYPE_MESSAGE)
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Verify buffer is valid
     err = verify_user_buffer(data, handle.message->data_size, true);
@@ -514,7 +496,7 @@ err_t syscall_channel_call(handle_t channel_i, const SendMessage *user_message, 
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Create a message
     Message *message;
-    err = message_alloc_user(user_message, &message, false);
+    err = message_alloc_user(user_message, &message);
     if (err)
         return err;
     // Send the message
@@ -524,7 +506,7 @@ err_t syscall_channel_call(handle_t channel_i, const SendMessage *user_message, 
         return err;
     // Add the reply handle
     if (reply_i_ptr != NULL) {
-        err = handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_REPLY, {.message = reply}}, reply_i_ptr);
+        err = handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_MESSAGE, {.message = reply}}, reply_i_ptr);
         if (err)
             return err;
     }
@@ -579,7 +561,7 @@ err_t syscall_message_reply(handle_t message_i, const SendMessage *user_reply) {
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Create a reply
     Message *reply;
-    err = message_alloc_user(user_reply, &reply, true);
+    err = message_alloc_user(user_reply, &reply);
     if (err)
         return err;
     // Send the reply
@@ -611,6 +593,7 @@ err_t syscall_message_reply_error(handle_t message_i, err_t error) {
 // Read the contents of a message with bounds checking
 // Functions like message_read(), but if the message size is outside of the given bounds it instead replies with a given error code
 // and returns either ERR_KERNEL_MESSAGE_TOO_SHORT or ERR_KERNEL_MESSAGE_TOO_LONG.
+// If `errors` is NULL, does not reply.
 err_t syscall_message_read_bounded(handle_t i, ReceiveMessage *user_message, const MessageLength *min_length, const ErrorReplies *errors) {
     err_t err;
     Handle handle;
@@ -629,80 +612,54 @@ err_t syscall_message_read_bounded(handle_t i, ReceiveMessage *user_message, con
         if (err)
             return err;
     }
-    err = verify_user_buffer(errors, sizeof(ErrorReplies), false);
-    if (err)
-        return err;
-    // Check provided error codes are not reserved or zero
-    if (
-        errors->data_low >= ERR_KERNEL_MIN || errors->data_low == 0 ||
-        errors->data_high >= ERR_KERNEL_MIN || errors->data_high == 0 ||
-        errors->handles_low >= ERR_KERNEL_MIN || errors->handles_low == 0 ||
-        errors->handles_high >= ERR_KERNEL_MIN || errors->handles_high == 0
-    )
-        return ERR_KERNEL_INVALID_ARG;
-    // Perform bounds check
-    size_t data_length = handle.message != NULL ? handle.message->data_size : 0;
-    size_t handles_length = handle.message != NULL ? handle.message->handles_size : 0;
-    if (data_length < (min_length ? min_length->data : user_message->data_length)) {
-        message_reply_error(handle.message, errors->data_low);
-        handle_clear(&cpu_local->current_process->handles, i);
-        return ERR_KERNEL_MESSAGE_DATA_TOO_SHORT;
-    }
-    if (data_length > user_message->data_length) {
-        message_reply_error(handle.message, errors->data_high);
-        handle_clear(&cpu_local->current_process->handles, i);
-        return ERR_KERNEL_MESSAGE_DATA_TOO_LONG;
-    }
-    if (handles_length < (min_length ? min_length->handles : user_message->handles_length)) {
-        message_reply_error(handle.message, errors->handles_low);
-        handle_clear(&cpu_local->current_process->handles, i);
-        return ERR_KERNEL_MESSAGE_HANDLES_TOO_SHORT;
-    }
-    if (handles_length > user_message->handles_length) {
-        message_reply_error(handle.message, errors->handles_high);
-        handle_clear(&cpu_local->current_process->handles, i);
-        return ERR_KERNEL_MESSAGE_HANDLES_TOO_LONG;
-    }
-    // Copy the message data
-    return message_read_user(handle.message, user_message, true);
-}
-
-// Read the contents of a reply with bounds checking
-// Functions like message_read_bounded(), but frees the reply instead of replying to it.
-err_t syscall_reply_read_bounded(handle_t i, ReceiveMessage *user_message, const MessageLength *min_length) {
-    err_t err;
-    Handle handle;
-    // Get the message from handle
-    err = handle_get(&cpu_local->current_process->handles, i, &handle);
-    if (err)
-        return err;
-    if (handle.type != HANDLE_TYPE_REPLY)
-        return ERR_KERNEL_WRONG_HANDLE_TYPE;
-    // Verify buffers are valid
-    err = verify_user_receive_message(user_message);
-    if (err)
-        return err;
-    if (min_length != NULL) {
-        err = verify_user_buffer(min_length, sizeof(MessageLength), false);
+    if (errors != NULL) {
+        err = verify_user_buffer(errors, sizeof(ErrorReplies), false);
         if (err)
             return err;
     }
+    // Check provided error codes are not reserved or zero
+    if (
+        errors != NULL && (
+            errors->data_low >= ERR_KERNEL_MIN || errors->data_low == 0 ||
+            errors->data_high >= ERR_KERNEL_MIN || errors->data_high == 0 ||
+            errors->handles_low >= ERR_KERNEL_MIN || errors->handles_low == 0 ||
+            errors->handles_high >= ERR_KERNEL_MIN || errors->handles_high == 0
+        )
+    ) {
+        return ERR_KERNEL_INVALID_ARG;
+    }
     // Perform bounds check
     size_t data_length = handle.message != NULL ? handle.message->data_size : 0;
     size_t handles_length = handle.message != NULL ? handle.message->handles_size : 0;
     if (data_length < (min_length ? min_length->data : user_message->data_length)) {
+        if (errors != NULL)
+            message_reply_error(handle.message, errors->data_low);
+        else
+            message_free(handle.message);
         handle_clear(&cpu_local->current_process->handles, i);
         return ERR_KERNEL_MESSAGE_DATA_TOO_SHORT;
     }
     if (data_length > user_message->data_length) {
+        if (errors != NULL)
+            message_reply_error(handle.message, errors->data_high);
+        else
+            message_free(handle.message);
         handle_clear(&cpu_local->current_process->handles, i);
         return ERR_KERNEL_MESSAGE_DATA_TOO_LONG;
     }
     if (handles_length < (min_length ? min_length->handles : user_message->handles_length)) {
+        if (errors != NULL)
+            message_reply_error(handle.message, errors->handles_low);
+        else
+            message_free(handle.message);
         handle_clear(&cpu_local->current_process->handles, i);
         return ERR_KERNEL_MESSAGE_HANDLES_TOO_SHORT;
     }
     if (handles_length > user_message->handles_length) {
+        if (errors != NULL)
+            message_reply_error(handle.message, errors->handles_high);
+        else
+            message_free(handle.message);
         handle_clear(&cpu_local->current_process->handles, i);
         return ERR_KERNEL_MESSAGE_HANDLES_TOO_LONG;
     }
@@ -735,7 +692,7 @@ err_t syscall_channel_call_bounded(handle_t channel_i, const SendMessage *user_m
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Create a message
     Message *message;
-    err = message_alloc_user(user_message, &message, false);
+    err = message_alloc_user(user_message, &message);
     if (err)
         return err;
     // Send the message

@@ -71,7 +71,7 @@ void main(void) {
     if (err)
         return;
     ReceiveAttachedHandle msg2_handles[] = {{ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}};
-    err = reply_read_bounded(msg2, &(ReceiveMessage){0, NULL, 1, msg2_handles}, NULL);
+    err = message_read_bounded(msg2, &(ReceiveMessage){0, NULL, 1, msg2_handles}, NULL, NULL);
     if (err)
         return;
     handle_free(msg2);

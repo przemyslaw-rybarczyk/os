@@ -43,7 +43,6 @@ const void * const syscalls[] = {
     syscall_handle_free,
     syscall_message_reply_error,
     syscall_message_read_bounded,
-    syscall_reply_read_bounded,
     syscall_channel_call_bounded,
     syscall_resource_get,
     syscall_mqueue_create,

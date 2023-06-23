@@ -16,7 +16,6 @@ typedef struct AttachedHandle {
     };
 } AttachedHandle;
 
-// A NULL message pointer is used to represent an empty reply
 typedef struct Message {
     MessageTag tag;
     size_t data_size;

@@ -102,7 +102,6 @@ err_t message_reply(handle_t message_i, const SendMessage *message);
 void handle_free(handle_t i);
 err_t message_reply_error(handle_t message_i, err_t error);
 err_t message_read_bounded(handle_t i, ReceiveMessage *message, const MessageLength *min_length, const ErrorReplies *errors);
-err_t reply_read_bounded(handle_t i, ReceiveMessage *message, const MessageLength *min_length);
 err_t channel_call_bounded(handle_t channel_i, const SendMessage *message, ReceiveMessage *reply, const MessageLength *min_length);
 err_t resource_get(const ResourceName *name, ResourceType type, handle_t *handle_i);
 err_t mqueue_create(handle_t *handle_i_ptr);
