@@ -49,4 +49,5 @@ const void * const syscalls[] = {
     syscall_mqueue_add_channel,
     syscall_mqueue_add_channel_resource,
     syscall_channel_create,
+    syscall_channel_send,
 };

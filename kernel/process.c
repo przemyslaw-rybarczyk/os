@@ -350,11 +350,6 @@ _Noreturn void process_spawn_kernel_thread_main(void) {
             resource_list_free(&(ResourceList){message->handles_size, resources});
             continue;
         }
-        Message *reply = message_alloc_copy(0, NULL);
-        if (reply == NULL) {
-            continue;
-        }
-        message_reply(message, reply);
         // Set up the process stack to load provided ELF file and free the message upon starting
         size_t file_offset = message->handles_size * sizeof(ResourceName);
         process_set_user_stack(process, message->data + file_offset, message->data_size - file_offset, message);

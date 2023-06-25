@@ -108,6 +108,7 @@ err_t mqueue_create(handle_t *handle_i_ptr);
 err_t mqueue_add_channel(handle_t mqueue_i, handle_t channel_i, MessageTag tag);
 err_t mqueue_add_channel_resource(handle_t mqueue_i, const ResourceName *channel_name, MessageTag tag);
 err_t channel_create(handle_t *channel_send_i, handle_t *channel_receive_i);
+err_t channel_send(handle_t channel_i, const SendMessage *message);
 
 #define error_replies(error) ((ErrorReplies){(error), (error), (error), (error)})
 

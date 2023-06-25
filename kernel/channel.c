@@ -315,20 +315,17 @@ void mqueue_close(MessageQueue *queue) {
     spinlock_release(&queue->lock);
 }
 
-// Send a message to a message queue and wait for a reply
-err_t mqueue_call(MessageQueue *queue, Message *message, Message **reply) {
-    spinlock_acquire(&queue->lock);
+// Send a message to a message queue - assumes the queue lock is already held
+static err_t mqueue_send_(MessageQueue *queue, Message *message) {
+    // Fail if queue is closed
+    if (queue->closed)
+        return ERR_KERNEL_CHANNEL_CLOSED;
     // If the queue is full, block until there is space
     while (queue->length >= MESSAGE_QUEUE_MAX_LENGTH) {
         process_queue_add(&queue->blocked_senders, cpu_local->current_process);
         process_block(&queue->lock);
         spinlock_acquire(&queue->lock);
     }
-    err_t reply_error;
-    // Set the reply information
-    message->reply_error = &reply_error;
-    message->reply = reply;
-    message->blocked_sender = cpu_local->current_process;
     // Add the message to the queue
     message->next_message = NULL;
     if (queue->start == NULL) {
@@ -343,6 +340,37 @@ err_t mqueue_call(MessageQueue *queue, Message *message, Message **reply) {
     if (queue->blocked_receiver != NULL)
         process_enqueue(queue->blocked_receiver);
     queue->blocked_receiver = NULL;
+    return 0;
+}
+
+// Send a message to a message queue
+static err_t mqueue_send(MessageQueue *queue, Message *message) {
+    err_t err;
+    spinlock_acquire(&queue->lock);
+    err = mqueue_send_(queue, message);
+    if (err) {
+        spinlock_release(&queue->lock);
+        return err;
+    }
+    spinlock_release(&queue->lock);
+    return 0;
+}
+
+// Send a message to a message queue and wait for a reply
+static err_t mqueue_call(MessageQueue *queue, Message *message, Message **reply) {
+    err_t err;
+    // Set the reply information
+    err_t reply_error;
+    message->reply_error = &reply_error;
+    message->reply = reply;
+    message->blocked_sender = cpu_local->current_process;
+    // Send the message
+    spinlock_acquire(&queue->lock);
+    err = mqueue_send_(queue, message);
+    if (err) {
+        spinlock_release(&queue->lock);
+        return err;
+    }
     // Block and wait for a reply
     process_block(&queue->lock);
     return reply_error;
@@ -414,21 +442,34 @@ err_t channel_set_mqueue(Channel *channel, MessageQueue *mqueue, MessageTag tag)
     return 0;
 }
 
-// Send a message on a channel and wait for a reply
-err_t channel_call(Channel *channel, Message *message, Message **reply) {
+// Prepare for sending a message on a channel
+// This is the common part of channel_send() and channel_call().
+static void channel_prepare_for_send(Channel *channel, Message *message, MessageQueue **queue) {
     spinlock_acquire(&channel->lock);
+    // Block if the channel has no assigned queue
     if (channel->queue == NULL) {
         process_queue_add(&channel->blocked_senders, cpu_local->current_process);
         process_block(&channel->lock);
         spinlock_acquire(&channel->lock);
     }
-    if (channel->queue->closed) {
-        spinlock_release(&channel->lock);
-        return ERR_KERNEL_CHANNEL_CLOSED;
-    }
+    // Set message tag
     message->tag = channel->tag;
-    MessageQueue *queue = channel->queue;
+    // Get channel queue
+    *queue = channel->queue;
     spinlock_release(&channel->lock);
+}
+
+// Send a message on a channel
+err_t channel_send(Channel *channel, Message *message) {
+    MessageQueue *queue;
+    channel_prepare_for_send(channel, message, &queue);
+    return mqueue_send(queue, message);
+}
+
+// Send a message on a channel and wait for a reply
+err_t channel_call(Channel *channel, Message *message, Message **reply) {
+    MessageQueue *queue;
+    channel_prepare_for_send(channel, message, &queue);
     return mqueue_call(queue, message, reply);
 }
 
@@ -473,6 +514,32 @@ err_t syscall_message_read(handle_t i, void *data, ReceiveAttachedHandle *handle
     // Copy the data
     ReceiveMessage user_message = (ReceiveMessage){0, data, 0, handles};
     return message_read_user(handle.message, &user_message, false);
+}
+
+// Send a message on a channel
+err_t syscall_channel_send(handle_t channel_i, const SendMessage *user_message) {
+    err_t err;
+    Handle channel_handle;
+    // Verify buffers are valid
+    err = verify_user_send_message(user_message);
+    if (err)
+        return err;
+    // Get the channel from handle
+    err = handle_get(&cpu_local->current_process->handles, channel_i, &channel_handle);
+    if (err)
+        return err;
+    if (channel_handle.type != HANDLE_TYPE_CHANNEL_SEND)
+        return ERR_KERNEL_WRONG_HANDLE_TYPE;
+    // Create a message
+    Message *message;
+    err = message_alloc_user(user_message, &message);
+    if (err)
+        return err;
+    // Send the message
+    err = channel_send(channel_handle.channel, message);
+    if (err)
+        return err;
+    return 0;
 }
 
 // Send a message on a channel and wait for a reply

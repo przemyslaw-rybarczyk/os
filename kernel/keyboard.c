@@ -36,7 +36,7 @@ _Noreturn void keyboard_kernel_thread_main(void) {
         Message *message = message_alloc_copy(sizeof(KeyEvent), &event);
         if (message == NULL)
             continue;
-        err = channel_call(keyboard_channel, message, NULL);
+        err = channel_send(keyboard_channel, message);
         if (err)
             message_free(message);
     }

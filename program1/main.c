@@ -47,7 +47,7 @@ static void draw_screen(u8 *screen, int color_i, i32 mouse_x, i32 mouse_y) {
             }
         }
     }
-    channel_call(video_data_channel, &(SendMessage){1, &(SendMessageData){screen_bytes, screen}, 0, NULL}, NULL);
+    channel_send(video_data_channel, &(SendMessage){1, &(SendMessageData){screen_bytes, screen}, 0, NULL});
 }
 
 void main(void) {
@@ -114,7 +114,6 @@ void main(void) {
                 continue;
             if (key_event.pressed == false)
                 color = (color + 1) % COLORS_NUM;
-            message_reply(msg, NULL);
             draw_screen(screen, color, mouse_x, mouse_y);
             break;
         }
@@ -125,13 +124,9 @@ void main(void) {
                 continue;
             mouse_x += mouse_update.diff_x;
             mouse_y += mouse_update.diff_y;
-            message_reply(msg, NULL);
             draw_screen(screen, color, mouse_x, mouse_y);
             break;
         }
-        default:
-            message_reply_error(msg, ERR_INVALID_ARG);
-            break;
         }
     }
 }

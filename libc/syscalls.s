@@ -16,6 +16,7 @@ global mqueue_create
 global mqueue_add_channel
 global mqueue_add_channel_resource
 global channel_create
+global channel_send
 
 ; This file implements the C interface for system calls
 
@@ -104,5 +105,10 @@ mqueue_add_channel_resource:
 
 channel_create:
   mov rax, 16
+  syscall
+  ret
+
+channel_send:
+  mov rax, 17
   syscall
   ret
