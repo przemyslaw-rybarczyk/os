@@ -56,29 +56,9 @@ void main(void) {
     err = resource_get(&resource_name("video/size"), RESOURCE_TYPE_CHANNEL_SEND, &video_size_channel);
     if (err)
         return;
-    handle_t test_channel;
-    err = resource_get(&resource_name("test/1"), RESOURCE_TYPE_CHANNEL_SEND, &test_channel);
+    err = resource_get(&resource_name("video/data"), RESOURCE_TYPE_CHANNEL_SEND, &video_data_channel);
     if (err)
         return;
-    handle_t chin, chout, msg2;
-    err = channel_create(&chin, &chout);
-    if (err)
-        return;
-    err = channel_call(test_channel, &(SendMessage){0, NULL, 1, &(SendMessageHandles){1, &(SendAttachedHandle){ATTACHED_HANDLE_FLAG_MOVE, chout}}}, NULL);
-    if (err)
-        return;
-    err = channel_call(chin, &(SendMessage){2, (SendMessageData[]){{sizeof(u32), &(u32){UINT32_C(0x89ABCDEF)}}, {sizeof(u32), &(u32){UINT32_C(0x01234567)}}}, 0, NULL}, &msg2);
-    if (err)
-        return;
-    ReceiveAttachedHandle msg2_handles[] = {{ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}};
-    err = message_read_bounded(msg2, &(ReceiveMessage){0, NULL, 1, msg2_handles}, NULL, NULL);
-    if (err)
-        return;
-    handle_free(msg2);
-    video_data_channel = msg2_handles[0].handle_i;
-//    err = resource_get(&resource_name("video/data"), RESOURCE_TYPE_CHANNEL_SEND, &video_data_channel);
-//    if (err)
-//        return;
     err = channel_call_bounded(video_size_channel, NULL, &(ReceiveMessage){sizeof(ScreenSize), &screen_size, 0, NULL}, NULL);
     if (err)
         return;
