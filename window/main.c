@@ -195,12 +195,14 @@ void main(void) {
             err = message_read_bounded(msg, &(ReceiveMessage){3 * x_split * screen_size.height, left_video_buffer, 0, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
             if (err)
                 continue;
+            handle_free(msg);
             draw_screen();
             break;
         case EVENT_RIGHT_VIDEO_DATA:
             err = message_read_bounded(msg, &(ReceiveMessage){3 * (screen_size.width - x_split) * screen_size.height, right_video_buffer, 0, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
             if (err)
                 continue;
+            handle_free(msg);
             draw_screen();
             break;
         }

@@ -92,6 +92,7 @@ void main(void) {
             err = message_read_bounded(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
             if (err)
                 continue;
+            handle_free(msg);
             if (key_event.pressed == false)
                 color = (color + 1) % COLORS_NUM;
             draw_screen(screen, color, mouse_x, mouse_y);
@@ -102,6 +103,7 @@ void main(void) {
             err = message_read_bounded(msg, &(ReceiveMessage){sizeof(MouseUpdate), &mouse_update, 0, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
             if (err)
                 continue;
+            handle_free(msg);
             mouse_x += mouse_update.diff_x;
             mouse_y += mouse_update.diff_y;
             draw_screen(screen, color, mouse_x, mouse_y);
