@@ -156,6 +156,7 @@ void main(void) {
             err = message_read_bounded(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
             if (err)
                 continue;
+            handle_free(msg);
             handle_t keyboard_data_in = cursor_x < (i32)x_split ? left_keyboard_data_in : right_keyboard_data_in;
             channel_send(keyboard_data_in, &(SendMessage){1, &(SendMessageData){sizeof(KeyEvent), &key_event}, 0, NULL});
             break;
@@ -165,6 +166,7 @@ void main(void) {
             err = message_read_bounded(msg, &(ReceiveMessage){sizeof(MouseUpdate), &mouse_update, 0, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
             if (err)
                 continue;
+            handle_free(msg);
             cursor_x += mouse_update.diff_x;
             cursor_y += mouse_update.diff_y;
             if (cursor_x < 0)
