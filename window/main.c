@@ -178,6 +178,8 @@ void main(void) {
             if (cursor_y >= (i32)screen_size.height)
                 cursor_y = screen_size.height - 1;
             handle_t mouse_data_in = cursor_x < (i32)x_split ? left_mouse_data_in : right_mouse_data_in;
+            mouse_update.abs_x = cursor_x - (cursor_x < (i32)x_split ? 0 : x_split);
+            mouse_update.abs_y = cursor_y;
             channel_send(mouse_data_in, &(SendMessage){1, &(SendMessageData){sizeof(MouseUpdate), &mouse_update}, 0, NULL}, FLAG_NONBLOCK);
             break;
         }

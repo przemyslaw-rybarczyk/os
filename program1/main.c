@@ -104,8 +104,8 @@ void main(void) {
             if (err)
                 continue;
             handle_free(msg);
-            mouse_x += mouse_update.diff_x;
-            mouse_y += mouse_update.diff_y;
+            mouse_x = mouse_update.abs_x;
+            mouse_y = mouse_update.abs_y;
             draw_screen(screen, color, mouse_x, mouse_y);
             break;
         }

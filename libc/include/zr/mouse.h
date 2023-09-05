@@ -5,6 +5,8 @@
 typedef struct MouseUpdate {
     i32 diff_x;
     i32 diff_y;
+    i32 abs_x;
+    i32 abs_y;
     i32 diff_scroll;
     bool left_button_pressed;
     bool right_button_pressed;
