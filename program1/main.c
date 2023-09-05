@@ -47,7 +47,7 @@ static void draw_screen(u8 *screen, int color_i, i32 mouse_x, i32 mouse_y) {
             }
         }
     }
-    channel_send(video_data_channel, &(SendMessage){1, &(SendMessageData){screen_bytes, screen}, 0, NULL});
+    channel_send(video_data_channel, &(SendMessage){1, &(SendMessageData){screen_bytes, screen}, 0, NULL}, 0);
 }
 
 void main(void) {
@@ -83,7 +83,7 @@ void main(void) {
     while (1) {
         MessageTag tag;
         handle_t msg;
-        err = mqueue_receive(event_mqueue, &tag, &msg);
+        err = mqueue_receive(event_mqueue, &tag, &msg, 0);
         if (err)
             continue;
         switch (tag.data[0]) {

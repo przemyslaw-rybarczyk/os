@@ -37,7 +37,7 @@ _Noreturn void mouse_kernel_thread_main(void) {
         mouse_update.diff_scroll = 0;
         interrupt_enable();
         // Send the update message
-        err = channel_send(mouse_channel, message);
+        err = channel_send(mouse_channel, message, true);
         if (err)
             message_free(message);
     }

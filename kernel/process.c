@@ -316,7 +316,7 @@ _Noreturn void process_spawn_kernel_thread_main(void) {
     while (1) {
         Message *message;
         // Get message from user process
-        mqueue_receive(process_spawn_mqueue, &message);
+        mqueue_receive(process_spawn_mqueue, &message, false);
         if (message->data_size < message->handles_size * sizeof(ResourceName)) {
             message_reply_error(message, ERR_INVALID_ARG);
             message_free(message);

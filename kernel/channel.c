@@ -316,12 +316,14 @@ void mqueue_close(MessageQueue *queue) {
 }
 
 // Send a message to a message queue - assumes the queue lock is already held
-static err_t mqueue_send_(MessageQueue *queue, Message *message) {
+static err_t mqueue_send_(MessageQueue *queue, Message *message, bool nonblock) {
     // Fail if queue is closed
     if (queue->closed)
         return ERR_KERNEL_CHANNEL_CLOSED;
     // If the queue is full, block until there is space
     while (queue->length >= MESSAGE_QUEUE_MAX_LENGTH) {
+        if (nonblock)
+            return ERR_KERNEL_MQUEUE_FULL;
         process_queue_add(&queue->blocked_senders, cpu_local->current_process);
         process_block(&queue->lock);
         spinlock_acquire(&queue->lock);
@@ -344,10 +346,10 @@ static err_t mqueue_send_(MessageQueue *queue, Message *message) {
 }
 
 // Send a message to a message queue
-static err_t mqueue_send(MessageQueue *queue, Message *message) {
+static err_t mqueue_send(MessageQueue *queue, Message *message, bool nonblock) {
     err_t err;
     spinlock_acquire(&queue->lock);
-    err = mqueue_send_(queue, message);
+    err = mqueue_send_(queue, message, nonblock);
     if (err) {
         spinlock_release(&queue->lock);
         return err;
@@ -366,7 +368,7 @@ static err_t mqueue_call(MessageQueue *queue, Message *message, Message **reply)
     message->blocked_sender = cpu_local->current_process;
     // Send the message
     spinlock_acquire(&queue->lock);
-    err = mqueue_send_(queue, message);
+    err = mqueue_send_(queue, message, false);
     if (err) {
         spinlock_release(&queue->lock);
         return err;
@@ -377,10 +379,14 @@ static err_t mqueue_call(MessageQueue *queue, Message *message, Message **reply)
 }
 
 // Receive a message from a queue
-void mqueue_receive(MessageQueue *queue, Message **message_ptr) {
+err_t mqueue_receive(MessageQueue *queue, Message **message_ptr, bool nonblock) {
     spinlock_acquire(&queue->lock);
     // If there are no messages in the queue, block until a message arrives
     while (queue->start == NULL) {
+        if (nonblock) {
+            spinlock_release(&queue->lock);
+            return ERR_KERNEL_MQUEUE_EMPTY;
+        }
         queue->blocked_receiver = cpu_local->current_process;
         process_block(&queue->lock);
         spinlock_acquire(&queue->lock);
@@ -394,6 +400,7 @@ void mqueue_receive(MessageQueue *queue, Message **message_ptr) {
     if (blocked_sender != NULL)
         process_enqueue(blocked_sender);
     spinlock_release(&queue->lock);
+    return 0;
 }
 
 // Create a channel
@@ -460,10 +467,10 @@ static void channel_prepare_for_send(Channel *channel, Message *message, Message
 }
 
 // Send a message on a channel
-err_t channel_send(Channel *channel, Message *message) {
+err_t channel_send(Channel *channel, Message *message, bool nonblock) {
     MessageQueue *queue;
     channel_prepare_for_send(channel, message, &queue);
-    return mqueue_send(queue, message);
+    return mqueue_send(queue, message, nonblock);
 }
 
 // Send a message on a channel and wait for a reply
@@ -517,9 +524,12 @@ err_t syscall_message_read(handle_t i, void *data, ReceiveAttachedHandle *handle
 }
 
 // Send a message on a channel
-err_t syscall_channel_send(handle_t channel_i, const SendMessage *user_message) {
+err_t syscall_channel_send(handle_t channel_i, const SendMessage *user_message, u64 flags) {
     err_t err;
     Handle channel_handle;
+    // Verify flags are valid
+    if (flags & ~FLAG_NONBLOCK)
+        return ERR_KERNEL_INVALID_ARG;
     // Verify buffers are valid
     err = verify_user_send_message(user_message);
     if (err)
@@ -536,7 +546,7 @@ err_t syscall_channel_send(handle_t channel_i, const SendMessage *user_message) 
     if (err)
         return err;
     // Send the message
-    err = channel_send(channel_handle.channel, message);
+    err = channel_send(channel_handle.channel, message, (bool)(flags & FLAG_NONBLOCK));
     if (err)
         return err;
     return 0;
@@ -581,9 +591,12 @@ err_t syscall_channel_call(handle_t channel_i, const SendMessage *user_message, 
 }
 
 // Get a message from a channel
-err_t syscall_mqueue_receive(handle_t mqueue_i, MessageTag *tag_ptr, handle_t *message_i_ptr) {
+err_t syscall_mqueue_receive(handle_t mqueue_i, MessageTag *tag_ptr, handle_t *message_i_ptr, u64 flags) {
     err_t err;
     Handle mqueue_handle;
+    // Verify flags are valid
+    if (flags & ~FLAG_NONBLOCK)
+        return ERR_KERNEL_INVALID_ARG;
     // Verify buffer is valid
     if (tag_ptr != NULL) {
         err = verify_user_buffer(tag_ptr, sizeof(MessageTag), true);
@@ -601,7 +614,7 @@ err_t syscall_mqueue_receive(handle_t mqueue_i, MessageTag *tag_ptr, handle_t *m
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Receive a message
     Message *message;
-    mqueue_receive(mqueue_handle.mqueue, &message);
+    mqueue_receive(mqueue_handle.mqueue, &message, (bool)(flags & FLAG_NONBLOCK));
     // Return the tag
     if (tag_ptr != NULL)
         *tag_ptr = message->tag;

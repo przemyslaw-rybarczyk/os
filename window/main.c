@@ -48,7 +48,7 @@ static void draw_screen(void) {
             }
         }
     }
-    channel_send(video_data_channel, &(SendMessage){1, &(SendMessageData){3 * screen_size.width * screen_size.height, screen_buffer}, 0, NULL});
+    channel_send(video_data_channel, &(SendMessage){1, &(SendMessageData){3 * screen_size.width * screen_size.height, screen_buffer}, 0, NULL}, 0);
 }
 
 void main(void) {
@@ -105,7 +105,7 @@ void main(void) {
             {sizeof(program_resource_names), program_resource_names},
             {included_file_program1_end - included_file_program1, included_file_program1}},
         1, &(SendMessageHandles){sizeof(program_resource_handles_1) / sizeof(program_resource_handles_1[0]), program_resource_handles_1}
-    });
+    }, 0);
     if (err)
         return;
     err = channel_send(process_spawn_channel, &(SendMessage){
@@ -113,7 +113,7 @@ void main(void) {
             {sizeof(program_resource_names), program_resource_names},
             {included_file_program1_end - included_file_program1, included_file_program1}},
         1, &(SendMessageHandles){sizeof(program_resource_handles_2) / sizeof(program_resource_handles_2[0]), program_resource_handles_2}
-    });
+    }, 0);
     if (err)
         return;
     err = channel_call_bounded(video_size_channel, NULL, &(ReceiveMessage){sizeof(ScreenSize), &screen_size, 0, NULL}, NULL);
@@ -147,7 +147,7 @@ void main(void) {
     while (1) {
         handle_t msg;
         MessageTag tag;
-        err = mqueue_receive(event_queue, &tag, &msg);
+        err = mqueue_receive(event_queue, &tag, &msg, 0);
         if (err)
             continue;
         switch ((EventSource)tag.data[0]) {
@@ -158,7 +158,7 @@ void main(void) {
                 continue;
             handle_free(msg);
             handle_t keyboard_data_in = cursor_x < (i32)x_split ? left_keyboard_data_in : right_keyboard_data_in;
-            channel_send(keyboard_data_in, &(SendMessage){1, &(SendMessageData){sizeof(KeyEvent), &key_event}, 0, NULL});
+            channel_send(keyboard_data_in, &(SendMessage){1, &(SendMessageData){sizeof(KeyEvent), &key_event}, 0, NULL}, FLAG_NONBLOCK);
             break;
         }
         case EVENT_MOUSE_DATA: {
@@ -178,7 +178,7 @@ void main(void) {
             if (cursor_y >= (i32)screen_size.height)
                 cursor_y = screen_size.height - 1;
             handle_t mouse_data_in = cursor_x < (i32)x_split ? left_mouse_data_in : right_mouse_data_in;
-            channel_send(mouse_data_in, &(SendMessage){1, &(SendMessageData){sizeof(MouseUpdate), &mouse_update}, 0, NULL});
+            channel_send(mouse_data_in, &(SendMessage){1, &(SendMessageData){sizeof(MouseUpdate), &mouse_update}, 0, NULL}, FLAG_NONBLOCK);
             break;
         }
         case EVENT_LEFT_VIDEO_SIZE:

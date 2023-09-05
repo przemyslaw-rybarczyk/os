@@ -51,6 +51,7 @@ channel_call:
 
 mqueue_receive:
   mov rax, 6
+  mov r10, rcx
   syscall
   ret
 

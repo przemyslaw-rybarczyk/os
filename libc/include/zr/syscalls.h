@@ -5,6 +5,7 @@
 
 #define MAP_PAGES_WRITE (UINT64_C(1) << 0)
 #define MAP_PAGES_EXECUTE (UINT64_C(1) << 1)
+#define FLAG_NONBLOCK (UINT64_C(1) << 0)
 
 typedef struct MessageTag {
     uintptr_t data[2];
@@ -97,7 +98,7 @@ void process_yield(void);
 err_t message_get_length(handle_t i, MessageLength *length);
 err_t message_read(handle_t i, void *data, ReceiveAttachedHandle *handles);
 err_t channel_call(handle_t channel_i, const SendMessage *message, handle_t *reply_i_ptr);
-err_t mqueue_receive(handle_t mqueue_i, MessageTag *tag, handle_t *message_i_ptr);
+err_t mqueue_receive(handle_t mqueue_i, MessageTag *tag, handle_t *message_i_ptr, u64 flags);
 err_t message_reply(handle_t message_i, const SendMessage *message);
 void handle_free(handle_t i);
 err_t message_reply_error(handle_t message_i, err_t error);
@@ -108,7 +109,7 @@ err_t mqueue_create(handle_t *handle_i_ptr);
 err_t mqueue_add_channel(handle_t mqueue_i, handle_t channel_i, MessageTag tag);
 err_t mqueue_add_channel_resource(handle_t mqueue_i, const ResourceName *channel_name, MessageTag tag);
 err_t channel_create(handle_t *channel_send_i, handle_t *channel_receive_i);
-err_t channel_send(handle_t channel_i, const SendMessage *message);
+err_t channel_send(handle_t channel_i, const SendMessage *message, u64 flags);
 
 #define error_replies(error) ((ErrorReplies){(error), (error), (error), (error)})
 
