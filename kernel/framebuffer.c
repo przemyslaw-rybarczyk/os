@@ -232,7 +232,7 @@ _Noreturn void framebuffer_kernel_thread_main(void) {
         switch (message->tag.data[0]) {
         case FB_MQ_TAG_DATA: {
             // Check message size
-            if (message->data_size != fb_height * fb_width * 3) {
+            if (message->data_size != fb_height * fb_width * 3 || message->handles_size != 0) {
                 message_reply_error(message, ERR_INVALID_ARG);
                 message_free(message);
                 continue;
@@ -261,7 +261,7 @@ _Noreturn void framebuffer_kernel_thread_main(void) {
         }
         case FB_MQ_TAG_SIZE: {
             // Check message size
-            if (message->data_size != 0) {
+            if (message->data_size != 0 || message->handles_size != 0) {
                 message_reply_error(message, ERR_INVALID_ARG);
                 message_free(message);
                 continue;
