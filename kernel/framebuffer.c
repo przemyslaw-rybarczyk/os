@@ -223,9 +223,7 @@ void framebuffer_fast_copy_32_bit(void *screen, const void *data);
 
 _Noreturn void framebuffer_kernel_thread_main(void) {
     ScreenSize screen_size = {fb_width, fb_height};
-    size_t i = 0;
     while (1) {
-        i++;
         Message *message;
         // Get message from framebuffer meessage queue
         mqueue_receive(framebuffer_mqueue, &message, false);
@@ -252,9 +250,6 @@ _Noreturn void framebuffer_kernel_thread_main(void) {
                     }
                 }
             }
-            // Print the frame counter
-            cursor_x = 0;
-            print_hex_u64(i);
             framebuffer_unlock();
             message_free(message);
             break;
