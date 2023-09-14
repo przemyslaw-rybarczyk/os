@@ -82,6 +82,10 @@ static ScreenPos cursor;
 
 static u8 *screen_buffer;
 
+static const u8 border_color_unfocused[3] = {0xB0, 0x90, 0xFF};
+static const u8 border_color_focused[3] = {0x70, 0x50, 0xFF};
+
+#define BORDER_THICKNESS 3
 #define CURSOR_SIZE 5
 
 // Create a new window with an attached process
@@ -191,8 +195,11 @@ static void get_container_size(const Container *container, ScreenSize *container
 
 // Get the size of a window excluding borders
 static void get_window_size(const WindowContainer *window, ScreenSize *window_size) {
+    ScreenSize container_size;
     SplitDirection split_direction;
-    return get_container_size(&window->header, window_size, &split_direction);
+    get_container_size(&window->header, &container_size, &split_direction);
+    window_size->width = container_size.width - 2 * BORDER_THICKNESS;
+    window_size->height = container_size.height - 2 * BORDER_THICKNESS;
 }
 
 // Get the window that the cursor is currently in
@@ -210,8 +217,8 @@ static WindowContainer *get_current_window(ScreenPos *window_origin) {
         switch (container->type) {
         case CONTAINER_WINDOW:
             if (window_origin != NULL) {
-                window_origin->x = origin_x;
-                window_origin->y = origin_y;
+                window_origin->x = origin_x + BORDER_THICKNESS;
+                window_origin->y = origin_y + BORDER_THICKNESS;
             }
             return (WindowContainer *)container;
         case CONTAINER_SPLIT:
@@ -243,17 +250,44 @@ static WindowContainer *get_current_window(ScreenPos *window_origin) {
     }
 }
 
+static WindowContainer *focused_window = NULL;
+
+// Draw a solid rectangle
+static void draw_rectangle(const u8 *color, u32 origin_x, u32 origin_y, u32 width, u32 height) {
+    for (u32 y = 0; y < height; y++) {
+        for (u32 x = 0; x < width; x++) {
+            size_t offset = 3 * (screen_size.width * (origin_y + y) + origin_x + x);
+            screen_buffer[offset + 0] = color[0];
+            screen_buffer[offset + 1] = color[1];
+            screen_buffer[offset + 2] = color[2];
+        }
+    }
+}
+
 // Draw a container onto the screen buffer in the given position
 static void draw_container(const Container *container, u32 origin_x, u32 origin_y, u32 width, u32 height, SplitDirection split_direction) {
     switch (container->type) {
-    case CONTAINER_WINDOW:
-        for (size_t y = 0; y < height; y++)
+    case CONTAINER_WINDOW: {
+        WindowContainer *window = (WindowContainer *)container;
+        // Draw window border
+        const u8 *border_color = window == focused_window ? border_color_focused : border_color_unfocused;
+        draw_rectangle(border_color, origin_x, origin_y, width, BORDER_THICKNESS);
+        draw_rectangle(border_color, origin_x, origin_y + BORDER_THICKNESS, BORDER_THICKNESS, height - 2 * BORDER_THICKNESS);
+        draw_rectangle(border_color, origin_x + width - BORDER_THICKNESS, origin_y + BORDER_THICKNESS, BORDER_THICKNESS, height - 2 * BORDER_THICKNESS);
+        draw_rectangle(border_color, origin_x, origin_y + height - BORDER_THICKNESS, width, BORDER_THICKNESS);
+        // Draw window contents
+        origin_x += BORDER_THICKNESS;
+        origin_y += BORDER_THICKNESS;
+        width -= 2 * BORDER_THICKNESS;
+        height -= 2 * BORDER_THICKNESS;
+        for (u32 y = 0; y < height; y++)
             memcpy(
                 screen_buffer + 3 * (screen_size.width * (origin_y + y) + origin_x),
-                ((WindowContainer *)container)->video_buffer + 3 * width * y,
+                window->video_buffer + 3 * width * y,
                 3 * width
             );
         break;
+    }
     case CONTAINER_SPLIT:
         switch (split_direction) {
         case SPLIT_HORIZONTAL:
@@ -271,6 +305,7 @@ static void draw_container(const Container *container, u32 origin_x, u32 origin_
 
 // Draw the screen
 static void draw_screen(void) {
+    focused_window = get_current_window(NULL);
     // Draw the root container to the screen buffer
     draw_container(root_container, 0, 0, screen_size.width, screen_size.height, root_split_direction);
     // Draw the cursor
