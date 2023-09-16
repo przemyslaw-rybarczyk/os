@@ -28,6 +28,7 @@ static ScreenSize screen_size;
 // The screen is organized as a tree of containers. There are two types: split containers, which are split
 // either vertically or horizontally into smaller containers, and windows.
 // The axis along which a container is split is referred to as its "length".
+// Split containers may not contain other containers split along the same axis.
 
 typedef enum SplitDirection {
     SPLIT_HORIZONTAL,
@@ -41,15 +42,20 @@ typedef struct ScreenPos {
 
 typedef enum ContainerType {
     CONTAINER_WINDOW,
-    CONTAINER_SPLIT,
+    CONTAINER_SPLIT_HORIZONTAL,
+    CONTAINER_SPLIT_VERTICAL,
 } ContainerType;
 
 typedef struct Container {
     ContainerType type;
     // Pointer to the parent
     struct SplitContainer *parent;
+    // Next sibling up or to the left, NULL if there is none
+    struct Container *prev_sibling;
     // Next sibling down or to the right, NULL if there is none
     struct Container *next_sibling;
+    // The window that gets focus when moving to this container
+    struct WindowContainer *focused_window;
     // The fraction of the parent container's length after which this container starts
     // For example, if the parent is split horizontally and the offset_in_parent value is 0.5,
     // the left edge of the container is located at half the parent's width.
@@ -73,11 +79,6 @@ typedef struct SplitContainer {
 // Root of the container tree, covering the whole window
 static Container *root_container = NULL;
 
-// Split direction of the root container
-// The split direction of other containers is not represented directly and is instead inferred from the fact
-// that it is always opposite of its parent's direction.
-static SplitDirection root_split_direction = SPLIT_HORIZONTAL;
-
 static ScreenPos cursor;
 
 static u8 *screen_buffer;
@@ -87,6 +88,21 @@ static const u8 border_color_focused[3] = {0x70, 0x50, 0xFF};
 
 #define BORDER_THICKNESS 3
 #define CURSOR_SIZE 5
+
+typedef enum Direction {
+    DIRECTION_UP,
+    DIRECTION_DOWN,
+    DIRECTION_LEFT,
+    DIRECTION_RIGHT,
+} Direction;
+
+static bool direction_is_horizontal(Direction direction) {
+    return direction == DIRECTION_LEFT || direction == DIRECTION_RIGHT;
+}
+
+static bool direction_is_forward(Direction direction) {
+    return direction == DIRECTION_DOWN || direction == DIRECTION_RIGHT;
+}
 
 // Create a new window with an attached process
 static WindowContainer *create_window(void) {
@@ -168,27 +184,25 @@ static u32 get_child_length(const Container *child, u32 parent_length) {
 }
 
 // Get the size of a container
-static void get_container_size(const Container *container, ScreenSize *container_size, SplitDirection *split_direction) {
+static void get_container_size(const Container *container, ScreenSize *container_size) {
     // If the parent is NULL, this is the root container covering the whole screen
     if (container->parent == NULL) {
         *container_size = screen_size;
-        *split_direction = root_split_direction;
         return;
     }
     // Otherwise, return the appropriate portion of the parent's size
     ScreenSize parent_size;
-    SplitDirection parent_split_direction;
-    get_container_size(&container->parent->header, &parent_size, &parent_split_direction);
-    switch (parent_split_direction) {
-    case SPLIT_HORIZONTAL:
+    get_container_size(&container->parent->header, &parent_size);
+    switch (container->parent->header.type) {
+    case CONTAINER_SPLIT_HORIZONTAL:
         container_size->width = get_child_length(container, parent_size.width);
         container_size->height = parent_size.height;
-        *split_direction = SPLIT_VERTICAL;
         break;
-    case SPLIT_VERTICAL:
+    case CONTAINER_SPLIT_VERTICAL:
         container_size->width = parent_size.width;
         container_size->height = get_child_length(container, parent_size.height);
-        *split_direction = SPLIT_HORIZONTAL;
+        break;
+    default:
         break;
     }
 }
@@ -196,22 +210,20 @@ static void get_container_size(const Container *container, ScreenSize *container
 // Get the size of a window excluding borders
 static void get_window_size(const WindowContainer *window, ScreenSize *window_size) {
     ScreenSize container_size;
-    SplitDirection split_direction;
-    get_container_size(&window->header, &container_size, &split_direction);
+    get_container_size(&window->header, &container_size);
     window_size->width = container_size.width - 2 * BORDER_THICKNESS;
     window_size->height = container_size.height - 2 * BORDER_THICKNESS;
 }
 
 // Get the window that the cursor is currently in
 // Sets window_origin to the origin of the window if it's not null.
-static WindowContainer *get_current_window(ScreenPos *window_origin) {
+static WindowContainer *get_pointed_at_window(ScreenPos *window_origin) {
     const Container *container = root_container;
     // The position and properties of the current container
     u32 origin_x = 0;
     u32 origin_y = 0;
     u32 width = screen_size.width;
     u32 height = screen_size.height;
-    SplitDirection split_direction = root_split_direction;
     // Go down the container tree based on the cursor position until finding a window
     while (1) {
         switch (container->type) {
@@ -221,36 +233,62 @@ static WindowContainer *get_current_window(ScreenPos *window_origin) {
                 window_origin->y = origin_y + BORDER_THICKNESS;
             }
             return (WindowContainer *)container;
-        case CONTAINER_SPLIT:
-            switch (split_direction) {
-            case SPLIT_HORIZONTAL:
-                for (const Container *child = ((SplitContainer *)container)->first_child;; child = child->next_sibling) {
-                    if (child->next_sibling == NULL || cursor.x < (i32)(origin_x + get_child_offset(child->next_sibling, width))) {
-                        origin_x += get_child_offset(child, width);
-                        width = get_child_length(child, width);
-                        split_direction = SPLIT_VERTICAL;
-                        container = child;
-                        break;
-                    }
+        case CONTAINER_SPLIT_HORIZONTAL:
+            for (const Container *child = ((SplitContainer *)container)->first_child;; child = child->next_sibling) {
+                if (child->next_sibling == NULL || cursor.x < (i32)(origin_x + get_child_offset(child->next_sibling, width))) {
+                    origin_x += get_child_offset(child, width);
+                    width = get_child_length(child, width);
+                    container = child;
+                    break;
                 }
-                break;
-            case SPLIT_VERTICAL:
-                for (const Container *child = ((SplitContainer *)container)->first_child;; child = child->next_sibling) {
-                    if (child->next_sibling == NULL || cursor.y < (i32)(origin_y + get_child_offset(child->next_sibling, height))) {
-                        origin_y += get_child_offset(child, height);
-                        height = get_child_length(child, height);
-                        split_direction = SPLIT_HORIZONTAL;
-                        container = child;
-                        break;
-                    }
-                }
-                break;
             }
+            break;
+        case CONTAINER_SPLIT_VERTICAL:
+            for (const Container *child = ((SplitContainer *)container)->first_child;; child = child->next_sibling) {
+                if (child->next_sibling == NULL || cursor.y < (i32)(origin_y + get_child_offset(child->next_sibling, height))) {
+                    origin_y += get_child_offset(child, height);
+                    height = get_child_length(child, height);
+                    container = child;
+                    break;
+                }
+            }
+            break;
         }
     }
 }
 
-static WindowContainer *focused_window = NULL;
+// Set the given window as the focused window
+static void set_focused_window(WindowContainer *window) {
+    // Set the window as the focused window for all its ancestors
+    for (Container *ancestor = &window->header.parent->header; ancestor != NULL; ancestor = &ancestor->parent->header)
+        ancestor->focused_window = window;
+}
+
+// Switch the focused window to the next one in a given direction
+static void move_focused_window(Direction direction) {
+    // If the focused window is at the root, there is nowehere to move to
+    if (root_container->focused_window->header.parent == NULL)
+        return;
+    // Get the lowest ancestor of the window whose parent is split along the direction's axis
+    // This is either the window or its parent, depending on which direction the parent is split.
+    Container *container =
+        root_container->focused_window->header.parent->header.type == (direction_is_horizontal(direction) ? CONTAINER_SPLIT_HORIZONTAL : CONTAINER_SPLIT_VERTICAL)
+        ? &root_container->focused_window->header : &root_container->focused_window->header.parent->header;
+    while (1) {
+        // If these is a sibling in the given direction, set its focused window and the main focused window
+        Container *forward_sibling = direction_is_forward(direction) ? container->next_sibling : container->prev_sibling;
+        if (forward_sibling != NULL) {
+            set_focused_window(forward_sibling->focused_window);
+            return;
+        }
+        // Otherwise, we're already at the edge of the container.
+        // Get the container two levels up, since it will be split along the same direction, and repeat.
+        // If there are no more levels, we're at the edge of the window, so we can't move any further.
+        if (container->parent == NULL || container->parent->header.parent == NULL)
+            return;
+        container = &container->parent->header.parent->header;
+    }
+}
 
 // Draw a solid rectangle
 static void draw_rectangle(const u8 *color, u32 origin_x, u32 origin_y, u32 width, u32 height) {
@@ -264,13 +302,13 @@ static void draw_rectangle(const u8 *color, u32 origin_x, u32 origin_y, u32 widt
     }
 }
 
-// Draw a container onto the screen buffer in the given position
-static void draw_container(const Container *container, u32 origin_x, u32 origin_y, u32 width, u32 height, SplitDirection split_direction) {
+// Draw a container onto the screen buffer at a given position
+static void draw_container(const Container *container, u32 origin_x, u32 origin_y, u32 width, u32 height) {
     switch (container->type) {
     case CONTAINER_WINDOW: {
         WindowContainer *window = (WindowContainer *)container;
         // Draw window border
-        const u8 *border_color = window == focused_window ? border_color_focused : border_color_unfocused;
+        const u8 *border_color = window == root_container->focused_window ? border_color_focused : border_color_unfocused;
         draw_rectangle(border_color, origin_x, origin_y, width, BORDER_THICKNESS);
         draw_rectangle(border_color, origin_x, origin_y + BORDER_THICKNESS, BORDER_THICKNESS, height - 2 * BORDER_THICKNESS);
         draw_rectangle(border_color, origin_x + width - BORDER_THICKNESS, origin_y + BORDER_THICKNESS, BORDER_THICKNESS, height - 2 * BORDER_THICKNESS);
@@ -288,26 +326,21 @@ static void draw_container(const Container *container, u32 origin_x, u32 origin_
             );
         break;
     }
-    case CONTAINER_SPLIT:
-        switch (split_direction) {
-        case SPLIT_HORIZONTAL:
-            for (Container *child = ((SplitContainer *)container)->first_child; child != NULL; child = child->next_sibling)
-                draw_container(child, origin_x + get_child_offset(child, width), origin_y, get_child_length(child, width), height, SPLIT_VERTICAL);
-            break;
-        case SPLIT_VERTICAL:
-            for (Container *child = ((SplitContainer *)container)->first_child; child != NULL; child = child->next_sibling)
-                draw_container(child, origin_x, origin_y + get_child_offset(child, height), width, get_child_length(child, height), SPLIT_HORIZONTAL);
-            break;
-        }
+    case CONTAINER_SPLIT_HORIZONTAL:
+        for (Container *child = ((SplitContainer *)container)->first_child; child != NULL; child = child->next_sibling)
+            draw_container(child, origin_x + get_child_offset(child, width), origin_y, get_child_length(child, width), height);
+        break;
+    case CONTAINER_SPLIT_VERTICAL:
+        for (Container *child = ((SplitContainer *)container)->first_child; child != NULL; child = child->next_sibling)
+            draw_container(child, origin_x, origin_y + get_child_offset(child, height), width, get_child_length(child, height));
         break;
     }
 }
 
 // Draw the screen
 static void draw_screen(void) {
-    focused_window = get_current_window(NULL);
     // Draw the root container to the screen buffer
-    draw_container(root_container, 0, 0, screen_size.width, screen_size.height, root_split_direction);
+    draw_container(root_container, 0, 0, screen_size.width, screen_size.height);
     // Draw the cursor
     for (size_t x = 0; x < CURSOR_SIZE; x++) {
         for (size_t y = 0; y < CURSOR_SIZE; y++) {
@@ -321,6 +354,11 @@ static void draw_screen(void) {
     // Send the screen buffer
     channel_send(video_data_channel, &(SendMessage){1, &(SendMessageData){3 * screen_size.width * screen_size.height, screen_buffer}, 0, NULL}, 0);
 }
+
+typedef enum ModKeys : u32 {
+    MOD_KEY_LEFT_META = UINT32_C(1) << 0,
+    MOD_KEY_RIGHT_META = UINT32_C(1) << 1,
+} ModKeys;
 
 void main(void) {
     err_t err;
@@ -353,11 +391,11 @@ void main(void) {
     SplitContainer *split_1 = malloc(sizeof(SplitContainer));
     if (split_1 == NULL)
         return;
-    split_1->header.type = CONTAINER_SPLIT;
+    split_1->header.type = CONTAINER_SPLIT_HORIZONTAL;
     SplitContainer *split_2 = malloc(sizeof(SplitContainer));
     if (split_2 == NULL)
         return;
-    split_2->header.type = CONTAINER_SPLIT;
+    split_2->header.type = CONTAINER_SPLIT_VERTICAL;
     WindowContainer *window_1 = create_window();
     if (window_1 == NULL)
         return;
@@ -368,26 +406,37 @@ void main(void) {
     if (window_3 == NULL)
         return;
     split_1->header.parent = NULL;
+    split_1->header.prev_sibling = NULL;
     split_1->header.next_sibling = NULL;
+    split_1->header.focused_window = window_1;
     split_1->header.offset_in_parent = 0.0;
     split_1->first_child = (Container *)window_1;
     window_1->header.parent = split_1;
+    window_1->header.prev_sibling = NULL;
     window_1->header.next_sibling = (Container *)split_2;
+    window_1->header.focused_window = window_1;
     window_1->header.offset_in_parent = 0.0;
     split_2->header.parent = split_1;
+    split_2->header.prev_sibling = (Container *)window_1;
     split_2->header.next_sibling = NULL;
+    split_2->header.focused_window = window_2;
     split_2->header.offset_in_parent = 0.3;
     split_2->first_child = (Container *)window_2;
     window_2->header.parent = split_2;
+    window_2->header.prev_sibling = NULL;
     window_2->header.next_sibling = (Container *)window_3;
+    window_2->header.focused_window = window_2;
     window_2->header.offset_in_parent = 0.0;
     window_3->header.parent = split_2;
+    window_3->header.prev_sibling = (Container *)window_2;
     window_3->header.next_sibling = NULL;
+    window_3->header.focused_window = window_3;
     window_3->header.offset_in_parent = 0.4;
     root_container = (Container *)split_1;
     screen_buffer = malloc(3 * screen_size.width * screen_size.height);
     if (screen_buffer == NULL)
         return;
+    ModKeys mod_key_held = 0;
     draw_screen();
     while (1) {
         handle_t msg;
@@ -397,21 +446,65 @@ void main(void) {
             continue;
         switch ((EventSource)tag.data[0]) {
         case EVENT_KEYBOARD_DATA: {
+            // Read key event
             KeyEvent key_event;
             err = message_read_bounded(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
             if (err)
                 continue;
             handle_free(msg);
-            handle_t keyboard_data_in = get_current_window(NULL)->keyboard_data_in;
-            channel_send(keyboard_data_in, &(SendMessage){1, &(SendMessageData){sizeof(KeyEvent), &key_event}, 0, NULL}, FLAG_NONBLOCK);
+            // Handle the event
+            if (key_event.keycode == KEY_LEFT_META && key_event.pressed) {
+                mod_key_held |= MOD_KEY_LEFT_META;
+            } else if (key_event.keycode == KEY_LEFT_META && !key_event.pressed) {
+                mod_key_held &= ~MOD_KEY_LEFT_META;
+            } else if (key_event.keycode == KEY_RIGHT_META && key_event.pressed) {
+                mod_key_held |= MOD_KEY_RIGHT_META;
+            } else if (key_event.keycode == KEY_RIGHT_META && !key_event.pressed) {
+                mod_key_held &= ~MOD_KEY_RIGHT_META;
+            } else if (key_event.pressed && (mod_key_held & (MOD_KEY_LEFT_META | MOD_KEY_RIGHT_META))) {
+                switch (key_event.keycode) {
+                case KEY_LEFT:
+                case KEY_H:
+                    move_focused_window(DIRECTION_LEFT);
+                    draw_screen();
+                    break;
+                case KEY_DOWN:
+                case KEY_J:
+                    move_focused_window(DIRECTION_DOWN);
+                    draw_screen();
+                    break;
+                case KEY_UP:
+                case KEY_K:
+                    move_focused_window(DIRECTION_UP);
+                    draw_screen();
+                    break;
+                case KEY_RIGHT:
+                case KEY_L:
+                    move_focused_window(DIRECTION_RIGHT);
+                    draw_screen();
+                    break;
+                default:
+                    break;
+                }
+            } else if (mod_key_held & (MOD_KEY_LEFT_META | MOD_KEY_RIGHT_META)) {
+                // Ignore key release if it happened while holding mod key
+            } else {
+                // Send the key event to the focused window
+                handle_t keyboard_data_in = root_container->focused_window->keyboard_data_in;
+                channel_send(keyboard_data_in, &(SendMessage){1, &(SendMessageData){sizeof(KeyEvent), &key_event}, 0, NULL}, FLAG_NONBLOCK);
+            }
             break;
         }
         case EVENT_MOUSE_DATA: {
+            // Read mouse update
             MouseUpdate mouse_update;
             err = message_read_bounded(msg, &(ReceiveMessage){sizeof(MouseUpdate), &mouse_update, 0, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
             if (err)
                 continue;
             handle_free(msg);
+            // Get the window pointed at before updating the cursor
+            WindowContainer *old_pointed_at_window = get_pointed_at_window(NULL);
+            // Update the cursor position
             cursor.x += mouse_update.diff_x;
             cursor.y += mouse_update.diff_y;
             if (cursor.x < 0)
@@ -422,8 +515,14 @@ void main(void) {
                 cursor.y = 0;
             if (cursor.y >= (i32)screen_size.height)
                 cursor.y = screen_size.height - 1;
+            // Get the window pointed at after updating the cursor
             ScreenPos window_origin;
-            handle_t mouse_data_in = get_current_window(&window_origin)->mouse_data_in;
+            WindowContainer *pointed_at_window = get_pointed_at_window(&window_origin);
+            // If the cursor moved to another window, focus on it
+            if (pointed_at_window != old_pointed_at_window)
+                set_focused_window(pointed_at_window);
+            // Send the mouse update to the window pointed at
+            handle_t mouse_data_in = pointed_at_window->mouse_data_in;
             mouse_update.abs_x = cursor.x - window_origin.x;
             mouse_update.abs_y = cursor.y - window_origin.y;
             channel_send(mouse_data_in, &(SendMessage){1, &(SendMessageData){sizeof(MouseUpdate), &mouse_update}, 0, NULL}, FLAG_NONBLOCK);
