@@ -89,7 +89,7 @@ void main(void) {
         switch (tag.data[0]) {
         case 1: {
             KeyEvent key_event;
-            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
+            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
             if (err)
                 continue;
             handle_free(msg);
@@ -100,7 +100,7 @@ void main(void) {
         }
         case 2: {
             MouseUpdate mouse_update;
-            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(MouseUpdate), &mouse_update, 0, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
+            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(MouseUpdate), &mouse_update, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
             if (err)
                 continue;
             handle_free(msg);

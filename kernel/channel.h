@@ -47,13 +47,13 @@ err_t channel_send(Channel *channel, Message *message, bool nonblock);
 err_t channel_call(Channel *channel, Message *message, Message **reply);
 
 err_t syscall_message_get_length(handle_t i, MessageLength *length);
-err_t syscall_message_read(handle_t i, void *data, ReceiveAttachedHandle *handles);
+err_t syscall_message_read(handle_t i, ReceiveMessage *user_message, const MessageLength *offset);
 err_t syscall_channel_send(handle_t channel_i, const SendMessage *user_message, u64 flags);
 err_t syscall_channel_call(handle_t channel_i, const SendMessage *user_message, handle_t *reply_i_ptr);
 err_t syscall_mqueue_receive(handle_t mqueue_i, MessageTag *tag, handle_t *message_i_ptr, u64 flags);
 err_t syscall_message_reply(handle_t message_i, const SendMessage *user_message);
 err_t syscall_message_reply_error(handle_t message_i, err_t error);
-err_t syscall_message_read_bounded(handle_t i, ReceiveMessage *user_message, const MessageLength *min_length, const ErrorReplies *errors);
+err_t syscall_message_read_bounded(handle_t i, ReceiveMessage *user_message, const MessageLength *offset, const MessageLength *min_length, const ErrorReplies *errors, u64 flags);
 err_t syscall_reply_read_bounded(handle_t i, ReceiveMessage *user_message, const MessageLength *min_length);
 err_t syscall_channel_call_bounded(handle_t channel_i, const SendMessage *user_message, ReceiveMessage *user_reply, const MessageLength *min_length);
 err_t syscall_mqueue_create(handle_t *handle_i_ptr);

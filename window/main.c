@@ -448,7 +448,7 @@ void main(void) {
         case EVENT_KEYBOARD_DATA: {
             // Read key event
             KeyEvent key_event;
-            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
+            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
             if (err)
                 continue;
             handle_free(msg);
@@ -498,7 +498,7 @@ void main(void) {
         case EVENT_MOUSE_DATA: {
             // Read mouse update
             MouseUpdate mouse_update;
-            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(MouseUpdate), &mouse_update, 0, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
+            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(MouseUpdate), &mouse_update, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
             if (err)
                 continue;
             handle_free(msg);
@@ -531,7 +531,7 @@ void main(void) {
         case EVENT_VIDEO_SIZE: {
             ScreenSize window_size;
             get_window_size((WindowContainer *)tag.data[1], &window_size);
-            err = message_read_bounded(msg, &(ReceiveMessage){0, NULL, 0, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
+            err = message_read_bounded(msg, &(ReceiveMessage){0, NULL, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
             if (err)
                 continue;
             message_reply(msg, &(SendMessage){1, &(SendMessageData){sizeof(ScreenSize), &window_size}, 0, NULL});
@@ -541,7 +541,7 @@ void main(void) {
             ScreenSize window_size;
             WindowContainer *window = (WindowContainer *)tag.data[1];
             get_window_size(window, &window_size);
-            err = message_read_bounded(msg, &(ReceiveMessage){3 * window_size.width * window_size.height, window->video_buffer, 0, NULL}, NULL, &error_replies(ERR_INVALID_ARG));
+            err = message_read_bounded(msg, &(ReceiveMessage){3 * window_size.width * window_size.height, window->video_buffer, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
             if (err)
                 continue;
             handle_free(msg);
