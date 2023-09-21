@@ -65,6 +65,8 @@ typedef struct Container {
 typedef struct WindowContainer {
     Container header;
     // The buffer for the window contents
+    ScreenSize video_buffer_size;
+    size_t video_buffer_capacity;
     u8 *video_buffer;
     // Input channels
     handle_t keyboard_data_in;
@@ -88,6 +90,7 @@ static const u8 border_color_focused[3] = {0x70, 0x50, 0xFF};
 
 #define BORDER_THICKNESS 3
 #define CURSOR_SIZE 5
+#define RESIZE_PIXELS 5
 
 typedef enum Direction {
     DIRECTION_UP,
@@ -103,6 +106,8 @@ static bool direction_is_horizontal(Direction direction) {
 static bool direction_is_forward(Direction direction) {
     return direction == DIRECTION_DOWN || direction == DIRECTION_RIGHT;
 }
+
+#define VIDEO_BUFFER_DEFAULT_SIZE 16384
 
 // Create a new window with an attached process
 static WindowContainer *create_window(void) {
@@ -131,10 +136,11 @@ static WindowContainer *create_window(void) {
     window->header.type = CONTAINER_WINDOW;
     window->keyboard_data_in = keyboard_data_in;
     window->mouse_data_in = mouse_data_in;
-    window->video_buffer = malloc(3 * screen_size.width * screen_size.height);
+    window->video_buffer_size = (ScreenSize){0, 0};
+    window->video_buffer_capacity = VIDEO_BUFFER_DEFAULT_SIZE;
+    window->video_buffer = malloc(window->video_buffer_capacity);
     if (window->video_buffer == NULL)
         goto fail_video_buffer_alloc;
-    memset(window->video_buffer, 0, 3 * screen_size.width * screen_size.height);
     // Spawn process
     ResourceName program_resource_names[] = {resource_name("video/size"), resource_name("video/data"), resource_name("keyboard/data"), resource_name("mouse/data")};
     SendAttachedHandle program_resource_handles[] = {{ATTACHED_HANDLE_FLAG_MOVE, video_size_in}, {ATTACHED_HANDLE_FLAG_MOVE, video_data_in}, {ATTACHED_HANDLE_FLAG_MOVE, keyboard_data_out}, {ATTACHED_HANDLE_FLAG_MOVE, mouse_data_out}};
@@ -257,6 +263,39 @@ static WindowContainer *get_pointed_at_window(ScreenPos *window_origin) {
     }
 }
 
+// Get the lowest ancestor for a given container that has a sibling in a given direction
+// If there is no such ancestor, returns NULL.
+static Container *get_ancestor_with_sibling_in_direction(Container *container, Direction direction) {
+    // If the container is the root, there is nothing further in any direction
+    if (root_container->focused_window->header.parent == NULL)
+        return NULL;
+    // Get the lowest ancestor of the window whose parent is split along the direction's axis
+    // This is either the window or its parent, depending on which direction the parent is split.
+    Container *ancestor =
+        container->parent->header.type == (direction_is_horizontal(direction) ? CONTAINER_SPLIT_HORIZONTAL : CONTAINER_SPLIT_VERTICAL)
+        ? container : &container->parent->header;
+    while (1) {
+        // If there is a sibling in the given direction, return the ancestor
+        Container *forward_sibling = direction_is_forward(direction) ? ancestor->next_sibling : ancestor->prev_sibling;
+        if (forward_sibling != NULL)
+            return ancestor;
+        // Otherwise, we're already at the edge of the ancestor.
+        // Get the container two levels up, since it will be split along the same direction, and repeat.
+        // If there are no more levels, we're at the edge of the window, so we can't move any further.
+        if (ancestor->parent == NULL || ancestor->parent->header.parent == NULL)
+            return NULL;
+        ancestor = &ancestor->parent->header.parent->header;
+    }
+}
+
+// Same as get_ancestor_with_sibling_in_direction(), but returns the sibling
+static Container *get_sibling_of_ancestor_in_direction(Container *container, Direction direction) {
+    Container *ancestor = get_ancestor_with_sibling_in_direction(container, direction);
+    if (ancestor == NULL)
+        return NULL;
+    return direction_is_forward(direction) ? ancestor->next_sibling : ancestor->prev_sibling;
+}
+
 // Set the given window as the focused window
 static void set_focused_window(WindowContainer *window) {
     // Set the window as the focused window for all its ancestors
@@ -265,29 +304,35 @@ static void set_focused_window(WindowContainer *window) {
 }
 
 // Switch the focused window to the next one in a given direction
-static void move_focused_window(Direction direction) {
-    // If the focused window is at the root, there is nowehere to move to
-    if (root_container->focused_window->header.parent == NULL)
+static void switch_focused_window(Direction direction) {
+    Container *forward_sibling = get_sibling_of_ancestor_in_direction(&root_container->focused_window->header, direction);
+    if (forward_sibling != NULL)
+        set_focused_window(forward_sibling->focused_window);
+}
+
+// Change the offset of the container by the given amount
+// This effectively moves either the left or upper edge of the screen, depending on the parent's split direction.
+// Performs checks to make sure there is room to move the edge.
+static void container_move_offset(Container *container, double diff) {
+    bool valid = diff < 0.0
+        ? container->offset_in_parent + diff > container->prev_sibling->offset_in_parent
+        : (container->next_sibling != NULL
+            ? container->offset_in_parent + diff < container->next_sibling->offset_in_parent
+            : container->offset_in_parent + diff < 1.0);
+    if (valid)
+        container->offset_in_parent += diff;
+}
+
+// Shift the given edge of the focused window by the given amount
+// Positive `diff` values represent expanding the window, negative ones represent shrinking.
+static void resize_focused_window(Direction side, double diff) {
+    Container *container = get_ancestor_with_sibling_in_direction(&root_container->focused_window->header, side);
+    if (container == NULL)
         return;
-    // Get the lowest ancestor of the window whose parent is split along the direction's axis
-    // This is either the window or its parent, depending on which direction the parent is split.
-    Container *container =
-        root_container->focused_window->header.parent->header.type == (direction_is_horizontal(direction) ? CONTAINER_SPLIT_HORIZONTAL : CONTAINER_SPLIT_VERTICAL)
-        ? &root_container->focused_window->header : &root_container->focused_window->header.parent->header;
-    while (1) {
-        // If these is a sibling in the given direction, set its focused window and the main focused window
-        Container *forward_sibling = direction_is_forward(direction) ? container->next_sibling : container->prev_sibling;
-        if (forward_sibling != NULL) {
-            set_focused_window(forward_sibling->focused_window);
-            return;
-        }
-        // Otherwise, we're already at the edge of the container.
-        // Get the container two levels up, since it will be split along the same direction, and repeat.
-        // If there are no more levels, we're at the edge of the window, so we can't move any further.
-        if (container->parent == NULL || container->parent->header.parent == NULL)
-            return;
-        container = &container->parent->header.parent->header;
-    }
+    if (direction_is_forward(side))
+        container_move_offset(container->next_sibling, diff);
+    else
+        container_move_offset(container, -diff);
 }
 
 // Draw a solid rectangle
@@ -318,12 +363,18 @@ static void draw_container(const Container *container, u32 origin_x, u32 origin_
         origin_y += BORDER_THICKNESS;
         width -= 2 * BORDER_THICKNESS;
         height -= 2 * BORDER_THICKNESS;
-        for (u32 y = 0; y < height; y++)
+        u32 copy_height = window->video_buffer_size.height < height ? window->video_buffer_size.height : height;
+        for (u32 y = 0; y < copy_height; y++) {
+            u32 copy_width = window->video_buffer_size.width < width ? window->video_buffer_size.width : width;
             memcpy(
                 screen_buffer + 3 * (screen_size.width * (origin_y + y) + origin_x),
-                window->video_buffer + 3 * width * y,
-                3 * width
+                window->video_buffer + 3 * window->video_buffer_size.width * y,
+                3 * copy_width
             );
+            memset(screen_buffer + 3 * (screen_size.width * (origin_y + y) + origin_x + copy_width), 0, 3 * (width - copy_width));
+        }
+        for (u32 y = copy_height; y < height; y++)
+            memset(screen_buffer + 3 * (screen_size.width * (origin_y + y) + origin_x), 0, 3 * width);
         break;
     }
     case CONTAINER_SPLIT_HORIZONTAL:
@@ -358,6 +409,10 @@ static void draw_screen(void) {
 typedef enum ModKeys : u32 {
     MOD_KEY_LEFT_META = UINT32_C(1) << 0,
     MOD_KEY_RIGHT_META = UINT32_C(1) << 1,
+    MOD_KEY_LEFT_SHIFT = UINT32_C(1) << 2,
+    MOD_KEY_RIGHT_SHIFT = UINT32_C(1) << 3,
+    MOD_KEY_LEFT_CTRL = UINT32_C(1) << 4,
+    MOD_KEY_RIGHT_CTRL = UINT32_C(1) << 5,
 } ModKeys;
 
 void main(void) {
@@ -436,7 +491,7 @@ void main(void) {
     screen_buffer = malloc(3 * screen_size.width * screen_size.height);
     if (screen_buffer == NULL)
         return;
-    ModKeys mod_key_held = 0;
+    ModKeys mod_keys_held = 0;
     draw_screen();
     while (1) {
         handle_t msg;
@@ -452,43 +507,76 @@ void main(void) {
             if (err)
                 continue;
             handle_free(msg);
+            // Update mod key states
+            ModKeys mod_key;
+            switch (key_event.keycode) {
+            case KEY_LEFT_META:
+                mod_key = MOD_KEY_LEFT_META;
+                break;
+            case KEY_RIGHT_META:
+                mod_key = MOD_KEY_RIGHT_META;
+                break;
+            case KEY_LEFT_SHIFT:
+                mod_key = MOD_KEY_LEFT_SHIFT;
+                break;
+            case KEY_RIGHT_SHIFT:
+                mod_key = MOD_KEY_RIGHT_SHIFT;
+                break;
+            case KEY_LEFT_CTRL:
+                mod_key = MOD_KEY_LEFT_CTRL;
+                break;
+            case KEY_RIGHT_CTRL:
+                mod_key = MOD_KEY_RIGHT_CTRL;
+                break;
+            default:
+                mod_key = 0;
+                break;
+            }
+            if (key_event.pressed)
+                mod_keys_held |= mod_key;
+            else
+                mod_keys_held &= ~mod_key;
             // Handle the event
-            if (key_event.keycode == KEY_LEFT_META && key_event.pressed) {
-                mod_key_held |= MOD_KEY_LEFT_META;
-            } else if (key_event.keycode == KEY_LEFT_META && !key_event.pressed) {
-                mod_key_held &= ~MOD_KEY_LEFT_META;
-            } else if (key_event.keycode == KEY_RIGHT_META && key_event.pressed) {
-                mod_key_held |= MOD_KEY_RIGHT_META;
-            } else if (key_event.keycode == KEY_RIGHT_META && !key_event.pressed) {
-                mod_key_held &= ~MOD_KEY_RIGHT_META;
-            } else if (key_event.pressed && (mod_key_held & (MOD_KEY_LEFT_META | MOD_KEY_RIGHT_META))) {
-                switch (key_event.keycode) {
-                case KEY_LEFT:
-                case KEY_H:
-                    move_focused_window(DIRECTION_LEFT);
-                    draw_screen();
-                    break;
-                case KEY_DOWN:
-                case KEY_J:
-                    move_focused_window(DIRECTION_DOWN);
-                    draw_screen();
-                    break;
-                case KEY_UP:
-                case KEY_K:
-                    move_focused_window(DIRECTION_UP);
-                    draw_screen();
-                    break;
-                case KEY_RIGHT:
-                case KEY_L:
-                    move_focused_window(DIRECTION_RIGHT);
-                    draw_screen();
-                    break;
-                default:
-                    break;
+            bool meta_held = mod_keys_held & (MOD_KEY_LEFT_META | MOD_KEY_RIGHT_META);
+            bool shift_held = mod_keys_held & (MOD_KEY_LEFT_SHIFT | MOD_KEY_RIGHT_SHIFT);
+            bool ctrl_held = mod_keys_held & (MOD_KEY_LEFT_CTRL | MOD_KEY_RIGHT_CTRL);
+            if (meta_held) {
+                if (key_event.pressed) {
+                    bool direction_selected = true;
+                    Direction direction;
+                    switch (key_event.keycode) {
+                    case KEY_LEFT:
+                    case KEY_H:
+                        direction = DIRECTION_LEFT;
+                        break;
+                    case KEY_DOWN:
+                    case KEY_J:
+                        direction = DIRECTION_DOWN;
+                        break;
+                    case KEY_UP:
+                    case KEY_K:
+                        direction = DIRECTION_UP;
+                        break;
+                    case KEY_RIGHT:
+                    case KEY_L:
+                        direction = DIRECTION_RIGHT;
+                        break;
+                    default:
+                        break;
+                    }
+                    if (direction_selected) {
+                        if (ctrl_held) {
+                            if (shift_held)
+                                resize_focused_window(direction, - (double)RESIZE_PIXELS / screen_size.width);
+                            else
+                                resize_focused_window(direction, (double)RESIZE_PIXELS / screen_size.width);
+                        } else {
+                            switch_focused_window(direction);
+                        }
+                        draw_screen();
+                    }
                 }
-            } else if (mod_key_held & (MOD_KEY_LEFT_META | MOD_KEY_RIGHT_META)) {
-                // Ignore key release if it happened while holding mod key
-            } else {
+            } else if (key_event.keycode != KEY_LEFT_META && key_event.keycode != KEY_RIGHT_META) {
                 // Send the key event to the focused window
                 handle_t keyboard_data_in = root_container->focused_window->keyboard_data_in;
                 channel_send(keyboard_data_in, &(SendMessage){1, &(SendMessageData){sizeof(KeyEvent), &key_event}, 0, NULL}, FLAG_NONBLOCK);
@@ -541,7 +629,26 @@ void main(void) {
             ScreenSize window_size;
             WindowContainer *window = (WindowContainer *)tag.data[1];
             get_window_size(window, &window_size);
-            err = message_read_bounded(msg, &(ReceiveMessage){3 * window_size.width * window_size.height, window->video_buffer, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
+            // Get the dimensions of the received buffer
+            ScreenSize video_buffer_size;
+            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(ScreenSize), &video_buffer_size, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), FLAG_ALLOW_PARTIAL_READ);
+            if (err)
+                continue;
+            // Extend the window buffer if necessary
+            size_t window_data_size = 3 * video_buffer_size.width * video_buffer_size.height;
+            if (window->video_buffer_capacity < window_data_size) {
+                size_t new_video_buffer_capacity = window->video_buffer_capacity;
+                while (new_video_buffer_capacity < window_data_size)
+                    new_video_buffer_capacity *= 2;
+                u8 *new_video_buffer = realloc(window->video_buffer, new_video_buffer_capacity);
+                if (new_video_buffer == NULL)
+                    continue;
+                window->video_buffer = new_video_buffer;
+                window->video_buffer_capacity = new_video_buffer_capacity;
+            }
+            window->video_buffer_size = video_buffer_size;
+            // Read the video data
+            err = message_read_bounded(msg, &(ReceiveMessage){window_data_size, window->video_buffer, 0, NULL}, &(MessageLength){sizeof(ScreenSize), 0}, NULL, &error_replies(ERR_INVALID_ARG), 0);
             if (err)
                 continue;
             handle_free(msg);

@@ -47,7 +47,7 @@ static void draw_screen(u8 *screen, int color_i, i32 mouse_x, i32 mouse_y) {
             }
         }
     }
-    channel_send(video_data_channel, &(SendMessage){1, &(SendMessageData){screen_bytes, screen}, 0, NULL}, 0);
+    channel_send(video_data_channel, &(SendMessage){2, (SendMessageData[]){{sizeof(ScreenSize), &screen_size}, {screen_bytes, screen}}, 0, NULL}, 0);
 }
 
 void main(void) {
