@@ -461,10 +461,14 @@ err_t channel_set_mqueue(Channel *channel, MessageQueue *mqueue, MessageTag tag)
 
 // Prepare for sending a message on a channel
 // This is the common part of channel_send() and channel_call().
-static void channel_prepare_for_send(Channel *channel, Message *message, MessageQueue **queue) {
+static err_t channel_prepare_for_send(Channel *channel, Message *message, MessageQueue **queue, bool nonblock) {
     spinlock_acquire(&channel->lock);
     // Block if the channel has no assigned queue
     if (channel->queue == NULL) {
+        if (nonblock) {
+            spinlock_release(&channel->lock);
+            return ERR_KERNEL_CHANNEL_NOT_BOUND;
+        }
         process_queue_add(&channel->blocked_senders, cpu_local->current_process);
         process_block(&channel->lock);
         spinlock_acquire(&channel->lock);
@@ -474,19 +478,26 @@ static void channel_prepare_for_send(Channel *channel, Message *message, Message
     // Get channel queue
     *queue = channel->queue;
     spinlock_release(&channel->lock);
+    return 0;
 }
 
 // Send a message on a channel
 err_t channel_send(Channel *channel, Message *message, bool nonblock) {
+    err_t err;
     MessageQueue *queue;
-    channel_prepare_for_send(channel, message, &queue);
+    err = channel_prepare_for_send(channel, message, &queue, nonblock);
+    if (err)
+        return err;
     return mqueue_send(queue, message, nonblock);
 }
 
 // Send a message on a channel and wait for a reply
 err_t channel_call(Channel *channel, Message *message, Message **reply) {
+    err_t err;
     MessageQueue *queue;
-    channel_prepare_for_send(channel, message, &queue);
+    err = channel_prepare_for_send(channel, message, &queue, false);
+    if (err)
+        return err;
     return mqueue_call(queue, message, reply);
 }
 
