@@ -352,20 +352,23 @@ static void send_resize_messages(Container *container) {
     }
 }
 
-// Shift the given edge of the focused window by the given amount
+// Shift the given edge of the focused window by the given number of pixels
 // Positive `diff` values represent expanding the window, negative ones represent shrinking.
-static void resize_focused_window(Direction side, double diff) {
+static void resize_focused_window(Direction side, i32 diff) {
     Container *container = get_ancestor_with_sibling_in_direction(&root_container->focused_window->header, side);
     if (container == NULL)
         return;
+    ScreenSize parent_size;
+    get_container_size((Container *)container->parent, &parent_size);
+    u32 parent_length = direction_is_horizontal(side) ? parent_size.width : parent_size.height;
     if (direction_is_forward(side)) {
-        bool borders_changed = container_move_offset(container->next_sibling, diff);
+        bool borders_changed = container_move_offset(container->next_sibling, (double)diff / parent_length);
         if (borders_changed) {
             send_resize_messages(container);
             send_resize_messages(container->next_sibling);
         }
     } else {
-        bool borders_changed = container_move_offset(container, -diff);
+        bool borders_changed = container_move_offset(container, - (double)diff / parent_length);
         if (borders_changed) {
             send_resize_messages(container);
             send_resize_messages(container->prev_sibling);
@@ -605,9 +608,9 @@ void main(void) {
                     if (direction_selected) {
                         if (ctrl_held) {
                             if (shift_held)
-                                resize_focused_window(direction, - (double)RESIZE_PIXELS / screen_size.width);
+                                resize_focused_window(direction, - RESIZE_PIXELS);
                             else
-                                resize_focused_window(direction, (double)RESIZE_PIXELS / screen_size.width);
+                                resize_focused_window(direction, RESIZE_PIXELS);
                         } else {
                             switch_focused_window(direction);
                         }
