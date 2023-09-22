@@ -69,6 +69,7 @@ typedef struct WindowContainer {
     size_t video_buffer_capacity;
     u8 *video_buffer;
     // Input channels
+    handle_t video_resize_in;
     handle_t keyboard_data_in;
     handle_t mouse_data_in;
 } WindowContainer;
@@ -115,6 +116,7 @@ static WindowContainer *create_window(void) {
     // Allocate channels for the new process
     handle_t video_size_in, video_size_out;
     handle_t video_data_in, video_data_out;
+    handle_t video_resize_in, video_resize_out;
     handle_t keyboard_data_in, keyboard_data_out;
     handle_t mouse_data_in, mouse_data_out;
     err = channel_create(&video_size_in, &video_size_out);
@@ -123,6 +125,9 @@ static WindowContainer *create_window(void) {
     err = channel_create(&video_data_in, &video_data_out);
     if (err)
         goto fail_video_data_channel_create;
+    err = channel_create(&video_resize_in, &video_resize_out);
+    if (err)
+        goto fail_video_resize_channel_create;
     err = channel_create(&keyboard_data_in, &keyboard_data_out);
     if (err)
         goto fail_keyboard_channel_create;
@@ -134,6 +139,7 @@ static WindowContainer *create_window(void) {
     if (window == NULL)
         goto fail_window_alloc;
     window->header.type = CONTAINER_WINDOW;
+    window->video_resize_in = video_resize_in;
     window->keyboard_data_in = keyboard_data_in;
     window->mouse_data_in = mouse_data_in;
     window->video_buffer_size = (ScreenSize){0, 0};
@@ -142,8 +148,8 @@ static WindowContainer *create_window(void) {
     if (window->video_buffer == NULL)
         goto fail_video_buffer_alloc;
     // Spawn process
-    ResourceName program_resource_names[] = {resource_name("video/size"), resource_name("video/data"), resource_name("keyboard/data"), resource_name("mouse/data")};
-    SendAttachedHandle program_resource_handles[] = {{ATTACHED_HANDLE_FLAG_MOVE, video_size_in}, {ATTACHED_HANDLE_FLAG_MOVE, video_data_in}, {ATTACHED_HANDLE_FLAG_MOVE, keyboard_data_out}, {ATTACHED_HANDLE_FLAG_MOVE, mouse_data_out}};
+    ResourceName program_resource_names[] = {resource_name("video/size"), resource_name("video/data"), resource_name("video/resize"), resource_name("keyboard/data"), resource_name("mouse/data")};
+    SendAttachedHandle program_resource_handles[] = {{ATTACHED_HANDLE_FLAG_MOVE, video_size_in}, {ATTACHED_HANDLE_FLAG_MOVE, video_data_in}, {ATTACHED_HANDLE_FLAG_MOVE, video_resize_out}, {ATTACHED_HANDLE_FLAG_MOVE, keyboard_data_out}, {ATTACHED_HANDLE_FLAG_MOVE, mouse_data_out}};
     err = channel_send(process_spawn_channel, &(SendMessage){
         2, (SendMessageData[]){
             {sizeof(program_resource_names), program_resource_names},
@@ -167,6 +173,9 @@ fail_mouse_channel_create:
     handle_free(keyboard_data_in);
     handle_free(keyboard_data_out);
 fail_keyboard_channel_create:
+    handle_free(video_resize_in);
+    handle_free(video_resize_out);
+fail_video_resize_channel_create:
     handle_free(video_data_in);
     handle_free(video_data_out);
 fail_video_data_channel_create:
@@ -313,7 +322,8 @@ static void switch_focused_window(Direction direction) {
 // Change the offset of the container by the given amount
 // This effectively moves either the left or upper edge of the screen, depending on the parent's split direction.
 // Performs checks to make sure there is room to move the edge.
-static void container_move_offset(Container *container, double diff) {
+// Returns true if window borders were changed, false otherwise.
+static bool container_move_offset(Container *container, double diff) {
     bool valid = diff < 0.0
         ? container->offset_in_parent + diff > container->prev_sibling->offset_in_parent
         : (container->next_sibling != NULL
@@ -321,6 +331,25 @@ static void container_move_offset(Container *container, double diff) {
             : container->offset_in_parent + diff < 1.0);
     if (valid)
         container->offset_in_parent += diff;
+    return valid && diff != 0.0;
+}
+
+// Send a resize message to every window in the container
+static void send_resize_messages(Container *container) {
+    switch (container->type) {
+    case CONTAINER_WINDOW: {
+        WindowContainer *window = (WindowContainer *)container;
+        ScreenSize window_size;
+        get_window_size(window, &window_size);
+        channel_send(window->video_resize_in, &(SendMessage){1, &(SendMessageData){sizeof(ScreenSize), &window_size}, 0, NULL}, FLAG_NONBLOCK);
+        break;
+    }
+    case CONTAINER_SPLIT_HORIZONTAL:
+    case CONTAINER_SPLIT_VERTICAL:
+        for (Container *child = ((SplitContainer *)container)->first_child; child != NULL; child = child->next_sibling)
+            send_resize_messages(child);
+        break;
+    }
 }
 
 // Shift the given edge of the focused window by the given amount
@@ -329,10 +358,19 @@ static void resize_focused_window(Direction side, double diff) {
     Container *container = get_ancestor_with_sibling_in_direction(&root_container->focused_window->header, side);
     if (container == NULL)
         return;
-    if (direction_is_forward(side))
-        container_move_offset(container->next_sibling, diff);
-    else
-        container_move_offset(container, -diff);
+    if (direction_is_forward(side)) {
+        bool borders_changed = container_move_offset(container->next_sibling, diff);
+        if (borders_changed) {
+            send_resize_messages(container);
+            send_resize_messages(container->next_sibling);
+        }
+    } else {
+        bool borders_changed = container_move_offset(container, -diff);
+        if (borders_changed) {
+            send_resize_messages(container);
+            send_resize_messages(container->prev_sibling);
+        }
+    }
 }
 
 // Draw a solid rectangle
@@ -641,8 +679,10 @@ void main(void) {
                 while (new_video_buffer_capacity < window_data_size)
                     new_video_buffer_capacity *= 2;
                 u8 *new_video_buffer = realloc(window->video_buffer, new_video_buffer_capacity);
-                if (new_video_buffer == NULL)
+                if (new_video_buffer == NULL) {
+                    handle_free(msg);
                     continue;
+                }
                 window->video_buffer = new_video_buffer;
                 window->video_buffer_capacity = new_video_buffer_capacity;
             }

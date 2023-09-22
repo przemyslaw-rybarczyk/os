@@ -47,7 +47,7 @@ static void draw_screen(u8 *screen, int color_i, i32 mouse_x, i32 mouse_y) {
             }
         }
     }
-    channel_send(video_data_channel, &(SendMessage){2, (SendMessageData[]){{sizeof(ScreenSize), &screen_size}, {screen_bytes, screen}}, 0, NULL}, 0);
+    channel_send(video_data_channel, &(SendMessage){2, (SendMessageData[]){{sizeof(ScreenSize), &screen_size}, {screen_bytes, screen}}, 0, NULL}, FLAG_NONBLOCK);
 }
 
 void main(void) {
@@ -72,7 +72,12 @@ void main(void) {
     err = mqueue_add_channel_resource(event_mqueue, &resource_name("mouse/data"), (MessageTag){2, 0});
     if (err)
         return;
-    size_t screen_bytes = screen_size.height * screen_size.width * 3;
+    err = mqueue_add_channel_resource(event_mqueue, &resource_name("video/resize"), (MessageTag){3, 0});
+    if (err)
+        return;
+    size_t screen_bytes = 16384;
+    while (screen_bytes < screen_size.height * screen_size.width * 3)
+        screen_bytes *= 2;
     u8 *screen = malloc(screen_bytes);
     if (screen == NULL)
         return;
@@ -106,6 +111,26 @@ void main(void) {
             handle_free(msg);
             mouse_x = mouse_update.abs_x;
             mouse_y = mouse_update.abs_y;
+            draw_screen(screen, color, mouse_x, mouse_y);
+            break;
+        }
+        case 3: {
+            ScreenSize new_screen_size;
+            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(ScreenSize), &new_screen_size, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
+            if (err)
+                continue;
+            handle_free(msg);
+            if (new_screen_size.height * new_screen_size.width * 3 > screen_bytes) {
+                size_t new_screen_bytes = screen_bytes;
+                while (new_screen_size.height * new_screen_size.width * 3 > new_screen_bytes)
+                    new_screen_bytes *= 2;
+                u8 *new_screen = realloc(screen, new_screen_bytes);
+                if (new_screen == NULL)
+                    continue;
+                screen = new_screen;
+                screen_bytes = new_screen_bytes;
+            }
+            screen_size = new_screen_size;
             draw_screen(screen, color, mouse_x, mouse_y);
             break;
         }
