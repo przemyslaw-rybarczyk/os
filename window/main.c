@@ -308,7 +308,7 @@ static Container *get_sibling_of_ancestor_in_direction(Container *container, Dir
 // Set the given window as the focused window
 static void set_focused_window(WindowContainer *window) {
     // Set the window as the focused window for all its ancestors
-    for (Container *ancestor = &window->header.parent->header; ancestor != NULL; ancestor = &ancestor->parent->header)
+    for (Container *ancestor = &window->header; ancestor != NULL; ancestor = &ancestor->parent->header)
         ancestor->focused_window = window;
 }
 
@@ -374,6 +374,101 @@ static void resize_focused_window(Direction side, i32 diff) {
             send_resize_messages(container->prev_sibling);
         }
     }
+}
+
+// Add a new window neighboring the focused window in the given direction
+static void add_new_window_next_to_focused(Direction side) {
+    WindowContainer *focused_window = root_container->focused_window;
+    bool direction_aligned_with_parent = focused_window->header.parent->header.type == (direction_is_horizontal(side) ? CONTAINER_SPLIT_HORIZONTAL : CONTAINER_SPLIT_VERTICAL);
+    // Create a new split container that will be used only in the case where the direction is not aligned with the parent
+    SplitContainer *split = NULL;
+    if (!direction_aligned_with_parent) {
+        split = malloc(sizeof(SplitContainer));
+        if (split == NULL)
+            return;
+    }
+    // Create a new window
+    WindowContainer *window = create_window();
+    if (window == NULL) {
+        free(split);
+        return;
+    }
+    if (direction_aligned_with_parent) {
+        // If the direction is aligned with that of the parent, add the window as a sibling to the focused window
+        // Its witdth will be set to 1 / (number of siblings).
+        size_t num_siblings = 0;
+        for (Container *child = focused_window->header.parent->first_child; child != NULL; child = child->next_sibling)
+            num_siblings++;
+        // Shrink all siblings to make room for new window
+        for (Container *child = focused_window->header.parent->first_child; child != NULL; child = child->next_sibling)
+            child->offset_in_parent *= (double)num_siblings / (num_siblings + 1);
+        // Insert into tree structure, either after or before the focused window depending on the direction
+        window->header.parent = focused_window->header.parent;
+        if (direction_is_forward(side)) {
+            window->header.prev_sibling = (Container *)focused_window;
+            window->header.next_sibling = focused_window->header.next_sibling;
+            if (focused_window->header.next_sibling != NULL)
+                focused_window->header.next_sibling->prev_sibling = (Container *)window;
+            focused_window->header.next_sibling = (Container *)window;
+        } else {
+            window->header.prev_sibling = focused_window->header.prev_sibling;
+            window->header.next_sibling = (Container *)focused_window;
+            if (focused_window->header.prev_sibling != NULL) {
+                focused_window->header.prev_sibling->next_sibling = (Container *)window;
+            }
+            focused_window->header.prev_sibling = (Container *)window;
+            if (window->header.parent->first_child == (Container *)focused_window)
+                window->header.parent->first_child = (Container *)window;
+        }
+        // Set the new window's offset the offset of the window coming after it
+        window->header.offset_in_parent = window->header.next_sibling != NULL ? window->header.next_sibling->offset_in_parent : (double)num_siblings / (num_siblings + 1);
+        // Shift all windows after the new window to the right to make room for it
+        for (Container *child = window->header.next_sibling; child != NULL; child = child->next_sibling)
+            child->offset_in_parent += 1.0 / (num_siblings + 1);
+        // Send messages informing of the resize
+        for (Container *child = focused_window->header.parent->first_child; child != NULL; child = child->next_sibling)
+            if (child != (Container *)window)
+                send_resize_messages(child);
+    } else {
+        // If the window is inserted perpendicular to the direction of the parent, create a new split container
+        // containing the old focused window and the new window and place it in place of the focused window.
+        // Each will occupy half ot the split container.
+        split->header.type = direction_is_horizontal(side) ? CONTAINER_SPLIT_HORIZONTAL : CONTAINER_SPLIT_VERTICAL;
+        split->header.parent = focused_window->header.parent;
+        split->header.prev_sibling = focused_window->header.prev_sibling;
+        split->header.next_sibling = focused_window->header.next_sibling;
+        if (split->header.prev_sibling != NULL)
+            split->header.prev_sibling->next_sibling = (Container *)split;
+        if (split->header.next_sibling != NULL)
+            split->header.next_sibling->prev_sibling = (Container *)split;
+        split->header.offset_in_parent = focused_window->header.offset_in_parent;
+        if (focused_window->header.parent->first_child == (Container *)focused_window)
+            focused_window->header.parent->first_child = (Container *)split;
+        focused_window->header.parent = split;
+        window->header.parent = split;
+        if (direction_is_forward(side)) {
+            split->first_child = (Container *)focused_window;
+            focused_window->header.prev_sibling = NULL;
+            focused_window->header.next_sibling = (Container *)window;
+            focused_window->header.offset_in_parent = 0.0;
+            window->header.prev_sibling = (Container *)focused_window;
+            window->header.next_sibling = NULL;
+            window->header.offset_in_parent = 0.5;
+        } else {
+            split->first_child = (Container *)window;
+            window->header.prev_sibling = NULL;
+            window->header.next_sibling = (Container *)focused_window;
+            window->header.offset_in_parent = 0.0;
+            focused_window->header.prev_sibling = (Container *)window;
+            focused_window->header.next_sibling = NULL;
+            focused_window->header.offset_in_parent = 0.5;
+        }
+        // Inform the focused window that it was resized
+        send_resize_messages((Container *)focused_window);
+    }
+    // Set the new window as focused
+    // This will also update all `focused_window` links to have correct values.
+    set_focused_window(window);
 }
 
 // Draw a solid rectangle
@@ -446,6 +541,11 @@ static void draw_screen(void) {
     // Send the screen buffer
     channel_send(video_data_channel, &(SendMessage){1, &(SendMessageData){3 * screen_size.width * screen_size.height, screen_buffer}, 0, NULL}, 0);
 }
+
+typedef enum State : u32 {
+    STATE_NORMAL,
+    STATE_WINDOW_CREATE,
+} State;
 
 typedef enum ModKeys : u32 {
     MOD_KEY_LEFT_META = UINT32_C(1) << 0,
@@ -532,6 +632,7 @@ void main(void) {
     screen_buffer = malloc(3 * screen_size.width * screen_size.height);
     if (screen_buffer == NULL)
         return;
+    State state = STATE_NORMAL;
     ModKeys mod_keys_held = 0;
     draw_screen();
     while (1) {
@@ -577,34 +678,40 @@ void main(void) {
                 mod_keys_held |= mod_key;
             else
                 mod_keys_held &= ~mod_key;
+            // Check for directional keys
+            bool direction_selected = false;
+            Direction direction;
+            switch (key_event.keycode) {
+            case KEY_LEFT:
+            case KEY_H:
+                direction_selected = true;
+                direction = DIRECTION_LEFT;
+                break;
+            case KEY_DOWN:
+            case KEY_J:
+                direction_selected = true;
+                direction = DIRECTION_DOWN;
+                break;
+            case KEY_UP:
+            case KEY_K:
+                direction_selected = true;
+                direction = DIRECTION_UP;
+                break;
+            case KEY_RIGHT:
+            case KEY_L:
+                direction_selected = true;
+                direction = DIRECTION_RIGHT;
+                break;
+            default:
+                break;
+            }
             // Handle the event
             bool meta_held = mod_keys_held & (MOD_KEY_LEFT_META | MOD_KEY_RIGHT_META);
             bool shift_held = mod_keys_held & (MOD_KEY_LEFT_SHIFT | MOD_KEY_RIGHT_SHIFT);
             bool ctrl_held = mod_keys_held & (MOD_KEY_LEFT_CTRL | MOD_KEY_RIGHT_CTRL);
-            if (meta_held) {
-                if (key_event.pressed) {
-                    bool direction_selected = true;
-                    Direction direction;
-                    switch (key_event.keycode) {
-                    case KEY_LEFT:
-                    case KEY_H:
-                        direction = DIRECTION_LEFT;
-                        break;
-                    case KEY_DOWN:
-                    case KEY_J:
-                        direction = DIRECTION_DOWN;
-                        break;
-                    case KEY_UP:
-                    case KEY_K:
-                        direction = DIRECTION_UP;
-                        break;
-                    case KEY_RIGHT:
-                    case KEY_L:
-                        direction = DIRECTION_RIGHT;
-                        break;
-                    default:
-                        break;
-                    }
+            switch (state) {
+            case STATE_NORMAL:
+                if (meta_held && key_event.pressed) {
                     if (direction_selected) {
                         if (ctrl_held) {
                             if (shift_held)
@@ -614,13 +721,23 @@ void main(void) {
                         } else {
                             switch_focused_window(direction);
                         }
-                        draw_screen();
+                    } else if (key_event.keycode == KEY_ENTER) {
+                        state = STATE_WINDOW_CREATE;
                     }
+                    draw_screen();
+                } else if (!meta_held && key_event.keycode != KEY_LEFT_META && key_event.keycode != KEY_RIGHT_META) {
+                    // Send the key event to the focused window
+                    handle_t keyboard_data_in = root_container->focused_window->keyboard_data_in;
+                    channel_send(keyboard_data_in, &(SendMessage){1, &(SendMessageData){sizeof(KeyEvent), &key_event}, 0, NULL}, FLAG_NONBLOCK);
                 }
-            } else if (key_event.keycode != KEY_LEFT_META && key_event.keycode != KEY_RIGHT_META) {
-                // Send the key event to the focused window
-                handle_t keyboard_data_in = root_container->focused_window->keyboard_data_in;
-                channel_send(keyboard_data_in, &(SendMessage){1, &(SendMessageData){sizeof(KeyEvent), &key_event}, 0, NULL}, FLAG_NONBLOCK);
+                break;
+            case STATE_WINDOW_CREATE:
+                if (key_event.pressed) {
+                    if (direction_selected)
+                        add_new_window_next_to_focused(direction);
+                    state = STATE_NORMAL;
+                }
+                break;
             }
             break;
         }
