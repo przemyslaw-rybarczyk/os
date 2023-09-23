@@ -232,7 +232,10 @@ static void get_window_size(const WindowContainer *window, ScreenSize *window_si
 
 // Get the window that the cursor is currently in
 // Sets window_origin to the origin of the window if it's not null.
+// Returns NULL if not pointing at a window.
 static WindowContainer *get_pointed_at_window(ScreenPos *window_origin) {
+    if (root_container == NULL)
+        return NULL;
     const Container *container = root_container;
     // The position and properties of the current container
     u32 origin_x = 0;
@@ -314,6 +317,8 @@ static void set_focused_window(WindowContainer *window) {
 
 // Switch the focused window to the next one in a given direction
 static void switch_focused_window(Direction direction) {
+    if (root_container == NULL)
+        return;
     Container *forward_sibling = get_sibling_of_ancestor_in_direction(&root_container->focused_window->header, direction);
     if (forward_sibling != NULL)
         set_focused_window(forward_sibling->focused_window);
@@ -355,6 +360,8 @@ static void send_resize_messages(Container *container) {
 // Shift the given edge of the focused window by the given number of pixels
 // Positive `diff` values represent expanding the window, negative ones represent shrinking.
 static void resize_focused_window(Direction side, i32 diff) {
+    if (root_container == NULL)
+        return;
     Container *container = get_ancestor_with_sibling_in_direction(&root_container->focused_window->header, side);
     if (container == NULL)
         return;
@@ -378,11 +385,30 @@ static void resize_focused_window(Direction side, i32 diff) {
 
 // Add a new window neighboring the focused window in the given direction
 static void add_new_window_next_to_focused(Direction side) {
+    if (root_container == NULL) {
+        WindowContainer *window = create_window();
+        if (window == NULL)
+            return;
+        window->header.parent = NULL;
+        window->header.prev_sibling = NULL;
+        window->header.next_sibling = NULL;
+        window->header.focused_window = window;
+        window->header.offset_in_parent = 0.0;
+        root_container = (Container *)window;
+        return;
+    }
     WindowContainer *focused_window = root_container->focused_window;
-    bool direction_aligned_with_parent = focused_window->header.parent->header.type == (direction_is_horizontal(side) ? CONTAINER_SPLIT_HORIZONTAL : CONTAINER_SPLIT_VERTICAL);
-    // Create a new split container that will be used only in the case where the direction is not aligned with the parent
+    // Determine whether a new split container should be created containing the focused window and the new window,
+    // or if the new window should be placed as a sibling of the focused window.
+    // This depends on whether the direction along which the new window is created the same or opposite
+    // to the direction along which the focused window's parent container is split.
+    // If there is no parent container, then there is only window at the root and a new container has to be created.
+    bool create_new_split = focused_window->header.parent != NULL
+        ? focused_window->header.parent->header.type == (direction_is_horizontal(side) ? CONTAINER_SPLIT_VERTICAL : CONTAINER_SPLIT_HORIZONTAL)
+        : true;
+    // If necessary, create a new split container
     SplitContainer *split = NULL;
-    if (!direction_aligned_with_parent) {
+    if (create_new_split) {
         split = malloc(sizeof(SplitContainer));
         if (split == NULL)
             return;
@@ -393,8 +419,47 @@ static void add_new_window_next_to_focused(Direction side) {
         free(split);
         return;
     }
-    if (direction_aligned_with_parent) {
-        // If the direction is aligned with that of the parent, add the window as a sibling to the focused window
+    if (create_new_split) {
+        // Create a new split container containing the old focused window and the new window and place it in place of the focused window
+        // Each will occupy half ot the split container.
+        split->header.type = direction_is_horizontal(side) ? CONTAINER_SPLIT_HORIZONTAL : CONTAINER_SPLIT_VERTICAL;
+        split->header.parent = focused_window->header.parent;
+        split->header.prev_sibling = focused_window->header.prev_sibling;
+        split->header.next_sibling = focused_window->header.next_sibling;
+        if (split->header.prev_sibling != NULL)
+            split->header.prev_sibling->next_sibling = (Container *)split;
+        if (split->header.next_sibling != NULL)
+            split->header.next_sibling->prev_sibling = (Container *)split;
+        split->header.offset_in_parent = focused_window->header.offset_in_parent;
+        if (focused_window->header.parent != NULL) {
+            if (focused_window->header.parent->first_child == (Container *)focused_window)
+                focused_window->header.parent->first_child = (Container *)split;
+        } else {
+            root_container = (Container *)split;
+        }
+        focused_window->header.parent = split;
+        window->header.parent = split;
+        if (direction_is_forward(side)) {
+            split->first_child = (Container *)focused_window;
+            focused_window->header.prev_sibling = NULL;
+            focused_window->header.next_sibling = (Container *)window;
+            focused_window->header.offset_in_parent = 0.0;
+            window->header.prev_sibling = (Container *)focused_window;
+            window->header.next_sibling = NULL;
+            window->header.offset_in_parent = 0.5;
+        } else {
+            split->first_child = (Container *)window;
+            window->header.prev_sibling = NULL;
+            window->header.next_sibling = (Container *)focused_window;
+            window->header.offset_in_parent = 0.0;
+            focused_window->header.prev_sibling = (Container *)window;
+            focused_window->header.next_sibling = NULL;
+            focused_window->header.offset_in_parent = 0.5;
+        }
+        // Inform the focused window that it was resized
+        send_resize_messages((Container *)focused_window);
+    } else {
+        // Add the window as a sibling to the focused window
         // Its witdth will be set to 1 / (number of siblings).
         size_t num_siblings = 0;
         for (Container *child = focused_window->header.parent->first_child; child != NULL; child = child->next_sibling)
@@ -429,42 +494,6 @@ static void add_new_window_next_to_focused(Direction side) {
         for (Container *child = focused_window->header.parent->first_child; child != NULL; child = child->next_sibling)
             if (child != (Container *)window)
                 send_resize_messages(child);
-    } else {
-        // If the window is inserted perpendicular to the direction of the parent, create a new split container
-        // containing the old focused window and the new window and place it in place of the focused window.
-        // Each will occupy half ot the split container.
-        split->header.type = direction_is_horizontal(side) ? CONTAINER_SPLIT_HORIZONTAL : CONTAINER_SPLIT_VERTICAL;
-        split->header.parent = focused_window->header.parent;
-        split->header.prev_sibling = focused_window->header.prev_sibling;
-        split->header.next_sibling = focused_window->header.next_sibling;
-        if (split->header.prev_sibling != NULL)
-            split->header.prev_sibling->next_sibling = (Container *)split;
-        if (split->header.next_sibling != NULL)
-            split->header.next_sibling->prev_sibling = (Container *)split;
-        split->header.offset_in_parent = focused_window->header.offset_in_parent;
-        if (focused_window->header.parent->first_child == (Container *)focused_window)
-            focused_window->header.parent->first_child = (Container *)split;
-        focused_window->header.parent = split;
-        window->header.parent = split;
-        if (direction_is_forward(side)) {
-            split->first_child = (Container *)focused_window;
-            focused_window->header.prev_sibling = NULL;
-            focused_window->header.next_sibling = (Container *)window;
-            focused_window->header.offset_in_parent = 0.0;
-            window->header.prev_sibling = (Container *)focused_window;
-            window->header.next_sibling = NULL;
-            window->header.offset_in_parent = 0.5;
-        } else {
-            split->first_child = (Container *)window;
-            window->header.prev_sibling = NULL;
-            window->header.next_sibling = (Container *)focused_window;
-            window->header.offset_in_parent = 0.0;
-            focused_window->header.prev_sibling = (Container *)window;
-            focused_window->header.next_sibling = NULL;
-            focused_window->header.offset_in_parent = 0.5;
-        }
-        // Inform the focused window that it was resized
-        send_resize_messages((Container *)focused_window);
     }
     // Set the new window as focused
     // This will also update all `focused_window` links to have correct values.
@@ -526,14 +555,18 @@ static void draw_container(const Container *container, u32 origin_x, u32 origin_
 
 // Draw the screen
 static void draw_screen(void) {
-    // Draw the root container to the screen buffer
-    draw_container(root_container, 0, 0, screen_size.width, screen_size.height);
-    // Draw the cursor
-    for (size_t x = 0; x < CURSOR_SIZE; x++) {
-        for (size_t y = 0; y < CURSOR_SIZE; y++) {
-            if (cursor.x + x < screen_size.width && cursor.y + y < screen_size.height && x + y < CURSOR_SIZE) {
-                for (size_t i = 0; i < 3; i++) {
-                    screen_buffer[3 * (screen_size.width * (cursor.y + y) + cursor.x + x) + i] = 0;
+    if (root_container == NULL) {
+        memset(screen_buffer, 0x30, 3 * screen_size.width * screen_size.height);
+    } else {
+        // Draw the root container to the screen buffer
+        draw_container(root_container, 0, 0, screen_size.width, screen_size.height);
+        // Draw the cursor
+        for (size_t x = 0; x < CURSOR_SIZE; x++) {
+            for (size_t y = 0; y < CURSOR_SIZE; y++) {
+                if (cursor.x + x < screen_size.width && cursor.y + y < screen_size.height && x + y < CURSOR_SIZE) {
+                    for (size_t i = 0; i < 3; i++) {
+                        screen_buffer[3 * (screen_size.width * (cursor.y + y) + cursor.x + x) + i] = 0;
+                    }
                 }
             }
         }
@@ -584,51 +617,6 @@ void main(void) {
         return;
     cursor.x = screen_size.width / 2;
     cursor.y = screen_size.height / 2;
-    SplitContainer *split_1 = malloc(sizeof(SplitContainer));
-    if (split_1 == NULL)
-        return;
-    split_1->header.type = CONTAINER_SPLIT_HORIZONTAL;
-    SplitContainer *split_2 = malloc(sizeof(SplitContainer));
-    if (split_2 == NULL)
-        return;
-    split_2->header.type = CONTAINER_SPLIT_VERTICAL;
-    WindowContainer *window_1 = create_window();
-    if (window_1 == NULL)
-        return;
-    WindowContainer *window_2 = create_window();
-    if (window_2 == NULL)
-        return;
-    WindowContainer *window_3 = create_window();
-    if (window_3 == NULL)
-        return;
-    split_1->header.parent = NULL;
-    split_1->header.prev_sibling = NULL;
-    split_1->header.next_sibling = NULL;
-    split_1->header.focused_window = window_1;
-    split_1->header.offset_in_parent = 0.0;
-    split_1->first_child = (Container *)window_1;
-    window_1->header.parent = split_1;
-    window_1->header.prev_sibling = NULL;
-    window_1->header.next_sibling = (Container *)split_2;
-    window_1->header.focused_window = window_1;
-    window_1->header.offset_in_parent = 0.0;
-    split_2->header.parent = split_1;
-    split_2->header.prev_sibling = (Container *)window_1;
-    split_2->header.next_sibling = NULL;
-    split_2->header.focused_window = window_2;
-    split_2->header.offset_in_parent = 0.3;
-    split_2->first_child = (Container *)window_2;
-    window_2->header.parent = split_2;
-    window_2->header.prev_sibling = NULL;
-    window_2->header.next_sibling = (Container *)window_3;
-    window_2->header.focused_window = window_2;
-    window_2->header.offset_in_parent = 0.0;
-    window_3->header.parent = split_2;
-    window_3->header.prev_sibling = (Container *)window_2;
-    window_3->header.next_sibling = NULL;
-    window_3->header.focused_window = window_3;
-    window_3->header.offset_in_parent = 0.4;
-    root_container = (Container *)split_1;
     screen_buffer = malloc(3 * screen_size.width * screen_size.height);
     if (screen_buffer == NULL)
         return;
@@ -722,10 +710,13 @@ void main(void) {
                             switch_focused_window(direction);
                         }
                     } else if (key_event.keycode == KEY_ENTER) {
-                        state = STATE_WINDOW_CREATE;
+                        if (root_container != NULL)
+                            state = STATE_WINDOW_CREATE;
+                        else
+                            add_new_window_next_to_focused(DIRECTION_UP);
                     }
                     draw_screen();
-                } else if (!meta_held && key_event.keycode != KEY_LEFT_META && key_event.keycode != KEY_RIGHT_META) {
+                } else if (!meta_held && key_event.keycode != KEY_LEFT_META && key_event.keycode != KEY_RIGHT_META && root_container != NULL) {
                     // Send the key event to the focused window
                     handle_t keyboard_data_in = root_container->focused_window->keyboard_data_in;
                     channel_send(keyboard_data_in, &(SendMessage){1, &(SendMessageData){sizeof(KeyEvent), &key_event}, 0, NULL}, FLAG_NONBLOCK);
@@ -764,14 +755,16 @@ void main(void) {
             // Get the window pointed at after updating the cursor
             ScreenPos window_origin;
             WindowContainer *pointed_at_window = get_pointed_at_window(&window_origin);
-            // If the cursor moved to another window, focus on it
-            if (pointed_at_window != old_pointed_at_window)
-                set_focused_window(pointed_at_window);
-            // Send the mouse update to the window pointed at
-            handle_t mouse_data_in = pointed_at_window->mouse_data_in;
-            mouse_update.abs_x = cursor.x - window_origin.x;
-            mouse_update.abs_y = cursor.y - window_origin.y;
-            channel_send(mouse_data_in, &(SendMessage){1, &(SendMessageData){sizeof(MouseUpdate), &mouse_update}, 0, NULL}, FLAG_NONBLOCK);
+            if (pointed_at_window != NULL) {
+                // If the cursor moved to another window, focus on it
+                if (pointed_at_window != old_pointed_at_window)
+                    set_focused_window(pointed_at_window);
+                // Send the mouse update to the window pointed at
+                handle_t mouse_data_in = pointed_at_window->mouse_data_in;
+                mouse_update.abs_x = cursor.x - window_origin.x;
+                mouse_update.abs_y = cursor.y - window_origin.y;
+                channel_send(mouse_data_in, &(SendMessage){1, &(SendMessageData){sizeof(MouseUpdate), &mouse_update}, 0, NULL}, FLAG_NONBLOCK);
+            }
             break;
         }
         case EVENT_VIDEO_SIZE: {
