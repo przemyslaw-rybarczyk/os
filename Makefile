@@ -10,12 +10,13 @@ USER_CFLAGS = -target x86_64-pc-none-elf -ffreestanding -masm=intel -fno-PIC -no
 USER_LDFLAGS = -target x86_64-pc-none-elf -ffreestanding -static -nostdlib -O2
 
 # All subprojects other than the kernel are either programs or libraries
-PROGRAMS = program1 program2 window
+PROGRAMS = program1 program2 terminal window
 LIBS = libc
 
 # The dependencies for each subproject
 program1_DEPS = libc
 program2_DEPS = libc
+terminal_DEPS = libc
 window_DEPS = libc
 libc_DEPS =
 
@@ -71,7 +72,7 @@ $(BUILD)/image.bin: $(kernel_OBJECTS) kernel/linker.ld
 # Pad the file so its size is a multiple of 512 (sector size)
 	./pad_to_multiple.sh $@ 512
 
-$(BUILD)/window/included_programs.s.o: window/included_programs.s $(BUILD)/program1/program1.bin $(BUILD)/program2/program2.bin
+$(BUILD)/window/included_programs.s.o: window/included_programs.s $(BUILD)/program1/program1.bin $(BUILD)/program2/program2.bin $(BUILD)/terminal/terminal.bin
 	$(asm_recipe)
 
 $(BUILD)/kernel/included_programs.s.o: kernel/included_programs.s $(BUILD)/window/window.bin

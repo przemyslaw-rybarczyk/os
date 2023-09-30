@@ -8,7 +8,8 @@ global included_file_program2_end
 ; This file includes loadable programs as read-only data
 
 included_file_program1:
-incbin "build/program1/program1.bin"
+;incbin "build/program1/program1.bin"
+incbin "build/terminal/terminal.bin"
 included_file_program1_end:
 
 included_file_program2:
