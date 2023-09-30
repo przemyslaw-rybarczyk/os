@@ -3,6 +3,7 @@ global _start
 extern main
 extern _string_init
 extern _alloc_init
+extern _stdio_init
 
 section .text
 
@@ -30,6 +31,7 @@ _start:
   call _alloc_init
   test rax, rax
   jnz .fail
+  call _stdio_init
 .start:
   ; Call main()
   call main

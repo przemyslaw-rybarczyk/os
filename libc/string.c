@@ -21,3 +21,10 @@ int memcmp(const void *p1, const void *p2, size_t n) {
     }
     return 0;
 }
+
+size_t strlen(const char *s) {
+    size_t i = 0;
+    while (s[i] != '\0')
+        i++;
+    return i;
+}

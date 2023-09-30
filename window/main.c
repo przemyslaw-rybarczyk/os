@@ -119,6 +119,7 @@ static WindowContainer *create_window(void) {
     handle_t video_resize_in, video_resize_out;
     handle_t keyboard_data_in, keyboard_data_out;
     handle_t mouse_data_in, mouse_data_out;
+    handle_t text_stdout_in, text_stdout_out;
     err = channel_create(&video_size_in, &video_size_out);
     if (err)
         goto fail_video_size_channel_create;
@@ -134,6 +135,9 @@ static WindowContainer *create_window(void) {
     err = channel_create(&mouse_data_in, &mouse_data_out);
     if (err)
         goto fail_mouse_channel_create;
+    err = channel_create(&text_stdout_in, &text_stdout_out);
+    if (err)
+        goto fail_stdout_channel_create;
     // Allocate window
     WindowContainer *window = malloc(sizeof(WindowContainer));
     if (window == NULL)
@@ -147,14 +151,25 @@ static WindowContainer *create_window(void) {
     window->video_buffer = malloc(window->video_buffer_capacity);
     if (window->video_buffer == NULL)
         goto fail_video_buffer_alloc;
-    // Spawn process
-    ResourceName program_resource_names[] = {resource_name("video/size"), resource_name("video/data"), resource_name("video/resize"), resource_name("keyboard/data"), resource_name("mouse/data")};
-    SendAttachedHandle program_resource_handles[] = {{ATTACHED_HANDLE_FLAG_MOVE, video_size_in}, {ATTACHED_HANDLE_FLAG_MOVE, video_data_in}, {ATTACHED_HANDLE_FLAG_MOVE, video_resize_out}, {ATTACHED_HANDLE_FLAG_MOVE, keyboard_data_out}, {ATTACHED_HANDLE_FLAG_MOVE, mouse_data_out}};
+    // Spawn terminal process
+    ResourceName program1_resource_names[] = {resource_name("video/size"), resource_name("video/data"), resource_name("video/resize"), resource_name("keyboard/data"), resource_name("mouse/data"), resource_name("text/stdout_r")};
+    SendAttachedHandle program1_resource_handles[] = {{ATTACHED_HANDLE_FLAG_MOVE, video_size_in}, {ATTACHED_HANDLE_FLAG_MOVE, video_data_in}, {ATTACHED_HANDLE_FLAG_MOVE, video_resize_out}, {ATTACHED_HANDLE_FLAG_MOVE, keyboard_data_out}, {ATTACHED_HANDLE_FLAG_MOVE, mouse_data_out}, {ATTACHED_HANDLE_FLAG_MOVE, text_stdout_out}};
     err = channel_send(process_spawn_channel, &(SendMessage){
         2, (SendMessageData[]){
-            {sizeof(program_resource_names), program_resource_names},
+            {sizeof(program1_resource_names), program1_resource_names},
             {included_file_program1_end - included_file_program1, included_file_program1}},
-        1, &(SendMessageHandles){sizeof(program_resource_handles) / sizeof(program_resource_handles[0]), program_resource_handles}
+        1, &(SendMessageHandles){sizeof(program1_resource_handles) / sizeof(program1_resource_handles[0]), program1_resource_handles}
+    }, 0);
+    if (err)
+        goto fail_process_spawn;
+    // Spawn process running in terminal
+    ResourceName program2_resource_names[] = {resource_name("text/stdout")};
+    SendAttachedHandle program2_resource_handles[] = {{ATTACHED_HANDLE_FLAG_MOVE, text_stdout_in}};
+    err = channel_send(process_spawn_channel, &(SendMessage){
+        2, (SendMessageData[]){
+            {sizeof(program2_resource_names), program2_resource_names},
+            {included_file_program2_end - included_file_program2, included_file_program2}},
+        1, &(SendMessageHandles){sizeof(program2_resource_handles) / sizeof(program2_resource_handles[0]), program2_resource_handles}
     }, 0);
     if (err)
         goto fail_process_spawn;
@@ -167,6 +182,9 @@ fail_process_spawn:
 fail_video_buffer_alloc:
     free(window);
 fail_window_alloc:
+    handle_free(text_stdout_in);
+    handle_free(text_stdout_out);
+fail_stdout_channel_create:
     handle_free(mouse_data_in);
     handle_free(mouse_data_out);
 fail_mouse_channel_create:

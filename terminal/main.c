@@ -15,6 +15,7 @@
 typedef enum EventSource : uintptr_t {
     EVENT_KEYBOARD,
     EVENT_RESIZE,
+    EVENT_STDOUT,
 } EventSource;
 
 // Screen buffer
@@ -197,6 +198,9 @@ void main(void) {
     err = mqueue_add_channel_resource(event_mqueue, &resource_name("video/resize"), (MessageTag){EVENT_RESIZE, 0});
     if (err)
         return;
+    err = mqueue_add_channel_resource(event_mqueue, &resource_name("text/stdout_r"), (MessageTag){EVENT_STDOUT, 0});
+    if (err)
+        return;
     text_buffer_capacity = TEXT_BUFFER_DEFAULT_SIZE;
     while (text_buffer_capacity < (screen_size.width / FONT_WIDTH + 1) * (screen_size.height / FONT_HEIGHT))
         text_buffer_capacity *= 2;
@@ -289,6 +293,22 @@ void main(void) {
             // Update screen size and adjust text
             screen_size = new_screen_size;
             reshape_text();
+            draw_screen();
+            break;
+        }
+        case EVENT_STDOUT: {
+            MessageLength message_length;
+            message_get_length(msg, &message_length);
+            if (message_length.handles != 0) {
+                message_reply_error(msg, ERR_INVALID_ARG);
+                continue;
+            }
+            for (size_t i = 0; i < message_length.data; i++) {
+                u8 c;
+                message_read(msg, &(ReceiveMessage){1, &c, 0, NULL}, &(MessageLength){i, 0});
+                print_char(c);
+            }
+            message_reply(msg, NULL);
             draw_screen();
             break;
         }

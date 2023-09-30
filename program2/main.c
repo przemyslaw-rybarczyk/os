@@ -1,6 +1,5 @@
-#include <zr/types.h>
-
-#include <zr/syscalls.h>
+#include <stdio.h>
 
 void main(void) {
+    printf("Hello, world!\n");
 }

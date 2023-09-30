@@ -7,18 +7,39 @@
 
 #include <zr/syscalls.h>
 
-#define CHANNEL_STDOUT 1
+bool has_stdout = false;
+handle_t stdout_channel;
+
+void _stdio_init(void) {
+    err_t err;
+    err = resource_get(&resource_name("text/stdout"), RESOURCE_TYPE_CHANNEL_SEND, &stdout_channel);
+    if (!err)
+        has_stdout = true;
+}
 
 int putchar(int c) {
+    err_t err;
+    if (!has_stdout)
+        goto fail;
     unsigned char c_ = (unsigned char)c;
-    channel_call(CHANNEL_STDOUT, &(SendMessage){1, &(SendMessageData){1, &c_}, 0, NULL}, NULL);
+    err = channel_call(stdout_channel, &(SendMessage){1, &(SendMessageData){1, &c_}, 0, NULL}, NULL);
+    if (err)
+        goto fail;
     return c;
+fail:
+    return EOF;
 }
 
 int puts(const char *s) {
-    for (const char *p = s; *p != '\0'; p++)
-        putchar(*p);
+    err_t err;
+    if (!has_stdout)
+        goto fail;
+    err = channel_call(stdout_channel, &(SendMessage){1, &(SendMessageData){strlen(s), s}, 0, NULL}, NULL);
+    if (err)
+        goto fail;
     return 0;
+fail:
+    return EOF;
 }
 
 // Since the printf() family of functions can print to either a file or a buffer,
