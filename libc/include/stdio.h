@@ -8,8 +8,10 @@
 typedef struct _FILE FILE;
 
 extern FILE *stdout;
+extern FILE *stderr;
 
 #define stdout stdout
+#define stderr stderr
 
 int putchar(int c);
 int fputc(int c, FILE *f);

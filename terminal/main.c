@@ -16,6 +16,7 @@ typedef enum EventSource : uintptr_t {
     EVENT_KEYBOARD,
     EVENT_RESIZE,
     EVENT_STDOUT,
+    EVENT_STDERR,
 } EventSource;
 
 // Screen buffer
@@ -23,10 +24,21 @@ static u8 *screen;
 static size_t screen_capacity;
 static ScreenSize screen_size;
 
+typedef enum TextColor : u8 {
+    TEXT_COLOR_STDOUT,
+    TEXT_COLOR_STDERR,
+    TEXT_COLOR_STDIN,
+} TextColor;
+
+typedef struct TextCharacter {
+    u8 ch;
+    TextColor color;
+} TextCharacter;
+
 // Circular buffer containing displayed text
 // Must be large enough to store enough text to fill the entire screen.
 // The capacity must be a power of two.
-static u8 *text_buffer;
+static TextCharacter *text_buffer;
 static size_t text_buffer_capacity;
 static size_t text_buffer_offset = 0;
 static size_t text_buffer_size = 0;
@@ -37,10 +49,12 @@ static u32 cursor_y = 0;
 
 static handle_t video_data_channel;
 
-static u8 background_color[3] = {0x22, 0x22, 0x22};
-static u8 foreground_color[3] = {0xDD, 0xDD, 0xDD};
+static const u8 background_color[3] = {0x22, 0x22, 0x22};
+static const u8 stdout_color[3] = {0xDD, 0xDD, 0xDD};
+static const u8 stderr_color[3] = {0xDD, 0x55, 0x55};
+static const u8 stdin_color[3] = {0x88, 0xCC, 0xDD};
 
-static u8 keycode_chars_lower[] = {
+static const u8 keycode_chars_lower[] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     '`', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', 0,
     0, 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\\',
@@ -49,7 +63,7 @@ static u8 keycode_chars_lower[] = {
     0, 0, 0, ' ',
 };
 
-static u8 keycode_chars_upper[] = {
+static const u8 keycode_chars_upper[] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     '~', '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', 0,
     0, 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '|',
@@ -71,15 +85,15 @@ static void remove_first_line(void) {
     for (size_t i = 0; i < screen_size.width / FONT_WIDTH; i++) {
         text_buffer_offset++;
         text_buffer_size--;
-        if (text_buffer[(text_buffer_offset - 1) & (text_buffer_capacity - 1)] == '\n')
+        if (text_buffer[(text_buffer_offset - 1) & (text_buffer_capacity - 1)].ch == '\n')
             break;
     }
 }
 
 // Add a character to the text buffer
-static void print_char(u8 c) {
+static void print_char(u8 c, TextColor color) {
     // Place character in buffer
-    text_buffer[(text_buffer_offset + text_buffer_size) & (text_buffer_capacity - 1)] = c;
+    text_buffer[(text_buffer_offset + text_buffer_size) & (text_buffer_capacity - 1)] = (TextCharacter){c, color};
     text_buffer_size++;
     cursor_x++;
     // Move to next line on newline character or wraparound
@@ -100,7 +114,7 @@ static void reshape_text(void) {
     cursor_y = 0;
     // Recalculate cursor position
     for (size_t i = 0; i < text_buffer_size; i++) {
-        u8 c = text_buffer[(text_buffer_offset + i) & (text_buffer_capacity - 1)];
+        u8 c = text_buffer[(text_buffer_offset + i) & (text_buffer_capacity - 1)].ch;
         cursor_x++;
         if (c == '\n' || cursor_x >= screen_size.width / FONT_WIDTH) {
             cursor_x = 0;
@@ -131,7 +145,8 @@ static void draw_screen(void) {
     u32 y = 0;
     for (size_t i = 0; i < text_buffer_size; i++) {
         // Get character
-        u8 c = text_buffer[(text_buffer_offset + i) & (text_buffer_capacity - 1)];
+        TextCharacter text_ch = text_buffer[(text_buffer_offset + i) & (text_buffer_capacity - 1)];
+        u8 c = text_ch.ch;
         // Handle newline character
         if (c == '\n') {
             x = 0;
@@ -144,9 +159,21 @@ static void draw_screen(void) {
                 for (u32 cx = 0; cx < FONT_WIDTH; cx++) {
                     if ((font_chars[c - FONT_CHAR_LOWEST][cy] << cx) & 0x80) {
                         u8 *pixel = &screen[((FONT_HEIGHT * y + cy) * screen_size.width + (FONT_WIDTH * x + cx)) * 3];
-                        pixel[0] = foreground_color[0];
-                        pixel[1] = foreground_color[1];
-                        pixel[2] = foreground_color[2];
+                        const u8 *color;
+                        switch (text_ch.color) {
+                        case TEXT_COLOR_STDOUT:
+                            color = stdout_color;
+                            break;
+                        case TEXT_COLOR_STDERR:
+                            color = stderr_color;
+                            break;
+                        case TEXT_COLOR_STDIN:
+                            color = stdin_color;
+                            break;
+                        }
+                        pixel[0] = color[0];
+                        pixel[1] = color[1];
+                        pixel[2] = color[2];
                     }
                 }
             }
@@ -162,9 +189,9 @@ static void draw_screen(void) {
     for (u32 cy = 0; cy < FONT_HEIGHT; cy++) {
         for (u32 cx = 0; cx < FONT_WIDTH; cx++) {
             u8 *pixel = &screen[((FONT_HEIGHT * y + cy) * screen_size.width + (FONT_WIDTH * x + cx)) * 3];
-            pixel[0] = foreground_color[0];
-            pixel[1] = foreground_color[1];
-            pixel[2] = foreground_color[2];
+            pixel[0] = stdin_color[0];
+            pixel[1] = stdin_color[1];
+            pixel[2] = stdin_color[2];
         }
     }
     // Send screen buffer
@@ -201,10 +228,13 @@ void main(void) {
     err = mqueue_add_channel_resource(event_mqueue, &resource_name("text/stdout_r"), (MessageTag){EVENT_STDOUT, 0});
     if (err)
         return;
+    err = mqueue_add_channel_resource(event_mqueue, &resource_name("text/stderr_r"), (MessageTag){EVENT_STDERR, 0});
+    if (err)
+        return;
     text_buffer_capacity = TEXT_BUFFER_DEFAULT_SIZE;
     while (text_buffer_capacity < (screen_size.width / FONT_WIDTH + 1) * (screen_size.height / FONT_HEIGHT))
         text_buffer_capacity *= 2;
-    text_buffer = malloc(text_buffer_capacity);
+    text_buffer = malloc(text_buffer_capacity * sizeof(TextCharacter));
     if (text_buffer == NULL)
         return;
     screen_capacity = SCREEN_BUFFER_DEFAULT_SIZE;
@@ -221,7 +251,8 @@ void main(void) {
         err = mqueue_receive(event_mqueue, &tag, &msg, 0);
         if (err)
             continue;
-        switch ((EventSource)tag.data[0]) {
+        EventSource event_source = (EventSource)tag.data[0];
+        switch (event_source) {
         case EVENT_KEYBOARD: {
             KeyEvent key_event;
             err = message_read_bounded(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
@@ -249,7 +280,7 @@ void main(void) {
             if (key_event.pressed) {
                 u8 c = keycode_char(key_event.keycode, (mod_keys_held & (MOD_KEY_LEFT_SHIFT | MOD_KEY_RIGHT_SHIFT)));
                 if (c != 0)
-                    print_char(c);
+                    print_char(c, TEXT_COLOR_STDIN);
             }
             draw_screen();
             break;
@@ -265,16 +296,16 @@ void main(void) {
                 size_t new_text_buffer_capacity = text_buffer_capacity;
                 while (new_text_buffer_capacity < (screen_size.width / FONT_WIDTH + 1) * (screen_size.height / FONT_HEIGHT))
                     new_text_buffer_capacity *= 2;
-                u8 *new_text_buffer = realloc(text_buffer, new_text_buffer_capacity);
+                TextCharacter *new_text_buffer = realloc(text_buffer, new_text_buffer_capacity * sizeof(TextCharacter));
                 if (new_text_buffer == NULL)
                     continue;
                 text_buffer = new_text_buffer;
                 // Move final part of circular buffer if necessary
                 if (text_buffer_offset + text_buffer_size > text_buffer_capacity) {
                     memmove(
-                        text_buffer + text_buffer_offset + (new_text_buffer_capacity - text_buffer_capacity),
-                        text_buffer + text_buffer_offset,
-                        text_buffer_capacity - text_buffer_offset);
+                        text_buffer + (text_buffer_offset + new_text_buffer_capacity - text_buffer_capacity) * sizeof(TextCharacter),
+                        text_buffer + text_buffer_offset * sizeof(TextCharacter),
+                        text_buffer_capacity - text_buffer_offset * sizeof(TextCharacter));
                     text_buffer_offset += new_text_buffer_capacity - text_buffer_capacity;
                 }
                 text_buffer_capacity = new_text_buffer_capacity;
@@ -296,7 +327,8 @@ void main(void) {
             draw_screen();
             break;
         }
-        case EVENT_STDOUT: {
+        case EVENT_STDOUT:
+        case EVENT_STDERR: {
             MessageLength message_length;
             message_get_length(msg, &message_length);
             if (message_length.handles != 0) {
@@ -306,7 +338,7 @@ void main(void) {
             for (size_t i = 0; i < message_length.data; i++) {
                 u8 c;
                 message_read(msg, &(ReceiveMessage){1, &c, 0, NULL}, &(MessageLength){i, 0});
-                print_char(c);
+                print_char(c, event_source == EVENT_STDERR ? TEXT_COLOR_STDERR : TEXT_COLOR_STDOUT);
             }
             message_reply(msg, NULL);
             draw_screen();

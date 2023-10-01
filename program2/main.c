@@ -1,5 +1,6 @@
 #include <stdio.h>
 
 void main(void) {
-    puts("Hello, world!");
+    fputs("stdout test\n", stdout);
+    fputs("stderr test\n", stderr);
 }

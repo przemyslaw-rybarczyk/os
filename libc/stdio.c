@@ -22,14 +22,19 @@ struct _FILE {
 };
 
 static FILE stdout_file = (FILE){.type = FILE_INVALID};
+static FILE stderr_file = (FILE){.type = FILE_INVALID};
 
 FILE *stdout = &stdout_file;
+FILE *stderr = &stderr_file;
 
 void _stdio_init(void) {
     err_t err;
     err = resource_get(&resource_name("text/stdout"), RESOURCE_TYPE_CHANNEL_SEND, &stdout->channel);
     if (!err)
         stdout->type = FILE_CHANNEL;
+    err = resource_get(&resource_name("text/stderr"), RESOURCE_TYPE_CHANNEL_SEND, &stderr->channel);
+    if (!err)
+        stderr->type = FILE_CHANNEL;
 }
 
 int fputc(int c, FILE *f) {
