@@ -7,78 +7,91 @@
 
 #include <zr/syscalls.h>
 
-bool has_stdout = false;
-handle_t stdout_channel;
+typedef enum FileType {
+    FILE_INVALID,
+    FILE_BUFFER,
+    FILE_CHANNEL,
+} FileType;
+
+struct _FILE {
+    FileType type;
+    char *restrict buffer;
+    size_t buffer_size;
+    size_t buffer_offset;
+    handle_t channel;
+};
+
+static FILE stdout_file = (FILE){.type = FILE_INVALID};
+
+FILE *stdout = &stdout_file;
 
 void _stdio_init(void) {
     err_t err;
-    err = resource_get(&resource_name("text/stdout"), RESOURCE_TYPE_CHANNEL_SEND, &stdout_channel);
+    err = resource_get(&resource_name("text/stdout"), RESOURCE_TYPE_CHANNEL_SEND, &stdout->channel);
     if (!err)
-        has_stdout = true;
+        stdout->type = FILE_CHANNEL;
 }
 
-int putchar(int c) {
+int fputc(int c, FILE *f) {
     err_t err;
-    if (!has_stdout)
+    switch (f->type) {
+    case FILE_INVALID:
         goto fail;
-    unsigned char c_ = (unsigned char)c;
-    err = channel_call(stdout_channel, &(SendMessage){1, &(SendMessageData){1, &c_}, 0, NULL}, NULL);
-    if (err)
-        goto fail;
+    case FILE_BUFFER:
+        // Write a byte to the buffer if it's within bounds
+        if (f->buffer_offset < f->buffer_size) {
+            f->buffer[f->buffer_offset] = c;
+            f->buffer_offset++;
+        }
+        break;
+    case FILE_CHANNEL: {
+        unsigned char c_ = (unsigned char)c;
+        err = channel_call(f->channel, &(SendMessage){1, &(SendMessageData){1, &c_}, 0, NULL}, NULL);
+        if (err)
+            goto fail;
+        break;
+    }
+    }
     return c;
 fail:
     return EOF;
 }
 
-int puts(const char *s) {
-    err_t err;
-    if (!has_stdout)
-        goto fail;
-    err = channel_call(stdout_channel, &(SendMessage){1, &(SendMessageData){strlen(s), s}, 0, NULL}, NULL);
-    if (err)
-        goto fail;
-    return 0;
-fail:
-    return EOF;
+int putchar(int c) {
+    return fputc(c, stdout);
 }
 
-// Since the printf() family of functions can print to either a file or a buffer,
-// we use a common format that can represent either one.
-// `offset` is a pointer to the number of bytes that would be written ignoring buffer size and I/O errors.
-// It is used for both file and buffer targets, since its final value is return from the function.
-// Since there is currently only one possible target file (stdout), a target with `to_file` set always represents stdout.
-// `buffer` and `size` are used only for buffer targets.
-struct printf_target {
-    bool to_file;
-    size_t *offset;
-    char *restrict buffer;
-    size_t size;
-};
-
-// Print a single character to a printf target
-static void printf_char(struct printf_target target, char c) {
-    if (target.to_file) {
-        // Print to stdout
-        putchar(c);
-    } else {
-        // Write a byte to a buffer if it's within bounds
-        if (*(target.offset) < target.size) {
-            target.buffer[*(target.offset)] = c;
-        }
+int fputs(const char *restrict s, FILE *restrict f) {
+    for (size_t i = 0; s[i] != '\0'; i++) {
+        int ferr = fputc(s[i], f);
+        if (ferr == EOF)
+            return EOF;
     }
-    (*(target.offset))++;
+    return 0;
+}
+
+int puts(const char *s) {
+    int ferr = fputs(s, stdout);
+    if (ferr == EOF)
+        return EOF;
+    return fputc('\n', stdout);
+}
+
+static void printf_char(FILE *file, size_t *offset, char c) {
+    (*offset)++;
+    fputc(c, file);
 }
 
 // Print a null-terminated string
-static void printf_string(struct printf_target target, const char *s) {
+static void printf_string(FILE *file, size_t *offset, const char *s) {
     for (const char *p = s; *p != '\0'; p++)
-        printf_char(target, *p);
+        printf_char(file, offset, *p);
 }
 
 // Print an unsinged decimal number
-static void printf_dec(struct printf_target target, uintmax_t n) {
+static void printf_dec(FILE *file, size_t *offset, uintmax_t n) {
     if (n == 0) {
-        printf_char(target, '0');
+        printf_char(file, offset, '0');
         return;
     }
     // Since the digits will be generated in the reverse order from the one we need, we put them in a buffer before printing them.
@@ -90,27 +103,27 @@ static void printf_dec(struct printf_target target, uintmax_t n) {
         digits[i++] = (n % 10) + '0';
     // Print the digits in reverse order
     for (int j = 0; j < i; j++)
-        printf_char(target, digits[i - j - 1]);
+        printf_char(file, offset, digits[i - j - 1]);
 }
 
 // Print a singed decimal number
-static void printf_dec_signed(struct printf_target target, intmax_t n) {
+static void printf_dec_signed(FILE *file, size_t *offset, intmax_t n) {
     uintmax_t nu; // Absolute value of n
     // If the number is negative, print a minus sign and invert it
     if (n < 0) {
-        printf_char(target, '-');
+        printf_char(file, offset, '-');
         nu = -n;
     } else {
         nu = n;
     }
     // Print the number without the sign
-    printf_dec(target, nu);
+    printf_dec(file, offset, nu);
 }
 
 // Print an unsinged octal number
-static void printf_oct(struct printf_target target, uintmax_t n) {
+static void printf_oct(FILE *file, size_t *offset, uintmax_t n) {
     if (n == 0) {
-        printf_char(target, '0');
+        printf_char(file, offset, '0');
         return;
     }
     // Index of octal digit
@@ -121,15 +134,15 @@ static void printf_oct(struct printf_target target, uintmax_t n) {
     // Print digits
     for (; i >= 0; i--) {
         int digit = (n >> (3 * i)) & 0x7;
-        printf_char(target, digit + '0');
+        printf_char(file, offset, digit + '0');
     }
 }
 
 // Print an unsinged hexadecimal number
 // `uppercase` determines whether digits above 9 are printed as "ABCDEF" or "abcdef".
-static void printf_hex(struct printf_target target, uintmax_t n, bool uppercase) {
+static void printf_hex(FILE *file, size_t *offset, uintmax_t n, bool uppercase) {
     if (n == 0) {
-        printf_char(target, '0');
+        printf_char(file, offset, '0');
         return;
     }
     // Index of hexadecimal digit
@@ -140,7 +153,7 @@ static void printf_hex(struct printf_target target, uintmax_t n, bool uppercase)
     // Print digits
     for (; i >= 0; i--) {
         int digit = (n >> (4 * i)) & 0xF;
-        printf_char(target, digit < 10 ? digit + '0' : digit - 10 + (uppercase ? 'A' : 'a'));
+        printf_char(file, offset, digit < 10 ? digit + '0' : digit - 10 + (uppercase ? 'A' : 'a'));
     }
 }
 
@@ -165,7 +178,7 @@ union long_double_cast {
 // Print a floating-point number
 // `uppercase` determines whether nan and inf are printed in lowercase or uppercase.
 // The conversion algorithm used is very basic and does not properly round the result, but only truncates it.
-static void printf_float(struct printf_target target, long double f, bool uppercase) {
+static void printf_float(FILE *file, size_t *offset, long double f, bool uppercase) {
     // Extract mantissa and exponent fields
     union long_double_cast f_cast;
     f_cast.ld = f;
@@ -173,14 +186,14 @@ static void printf_float(struct printf_target target, long double f, bool upperc
     u16 exponent_field = f_cast.sign_exponent & 0x7FFF;
     // If the sign bit is set, print a minus sign
     if (f_cast.sign_exponent & 0x8000)
-        printf_char(target, '-');
+        printf_char(file, offset, '-');
     // Handle NaN and infinity
     if (exponent_field == 0x7FFF) {
         // When checking the mantissa, ignore the highest bit, since it should be 1
         if ((mantissa & 0x7FFFFFFFFFFFFFFF) == 0)
-            printf_string(target, uppercase ? "INF" : "inf");
+            printf_string(file, offset, uppercase ? "INF" : "inf");
         else
-            printf_string(target, uppercase ? "NAN" : "nan");
+            printf_string(file, offset, uppercase ? "NAN" : "nan");
         return;
     }
     // Subtract the bias from the exponent
@@ -243,7 +256,7 @@ static void printf_float(struct printf_target target, long double f, bool upperc
     // Print the integral part
     if (dec_digit_groups_num == 0) {
         // If the integral part is zero, print a zero
-        printf_char(target, '0');
+        printf_char(file, offset, '0');
     } else {
         // Print the first digit group while skipping initial zeroes
         size_t n = dec_digit_groups[dec_digit_groups_num - 1];
@@ -251,7 +264,7 @@ static void printf_float(struct printf_target target, long double f, bool upperc
         for (; n > 0; n /= 10)
             dec_digits[i++] = (n % 10) + '0';
         for (int j = 0; j < i; j++)
-            printf_char(target, dec_digits[i - j - 1]);
+            printf_char(file, offset, dec_digits[i - j - 1]);
         // Print the remaining digit groups
         for (int i = dec_digit_groups_num - 2; i >= 0; i--) {
             u64 n = dec_digit_groups[i];
@@ -260,11 +273,11 @@ static void printf_float(struct printf_target target, long double f, bool upperc
                 n /= 10;
             }
             for (int j = 0; j < 19; j++)
-                printf_char(target, dec_digits[18 - j]);
+                printf_char(file, offset, dec_digits[18 - j]);
         }
     }
     // Print the decimal point
-    printf_char(target, '.');
+    printf_char(file, offset, '.');
     // Convert the fractional part to a big-endian big integer
     // This involves shifting the mantissa left by the negated exponent
     fp_digits_num = (- exponent + 62) / 64 + 1;
@@ -301,12 +314,12 @@ static void printf_float(struct printf_target target, long double f, bool upperc
         n /= 10;
     }
     for (int j = 0; j < 6; j++)
-        printf_char(target, dec_digits[18 - j]);
+        printf_char(file, offset, dec_digits[18 - j]);
 }
 
 // Print to a printf target
 // This function implements the main logic of all printf() family functions.
-static void printf_common(struct printf_target target, const char *restrict fmt, va_list args) {
+static void printf_common(FILE *file, size_t *offset, const char *restrict fmt, va_list args) {
     size_t i = 0;
     while (1) {
         // Check for end of format string
@@ -314,7 +327,7 @@ static void printf_common(struct printf_target target, const char *restrict fmt,
             return;
         // If the next character is a normal character, print it
         if (fmt[i] != '%') {
-            printf_char(target, fmt[i]);
+            printf_char(file, offset, fmt[i]);
             i++;
             continue;
         }
@@ -322,52 +335,52 @@ static void printf_common(struct printf_target target, const char *restrict fmt,
         // Previous character was '%', so the next character is a conversion specifier
         switch (fmt[i++]) {
         case '%':
-            printf_char(target, '%');
+            printf_char(file, offset, '%');
             break;
         case 'c': {
             int c = va_arg(args, int);
-            printf_char(target, (unsigned char)c);
+            printf_char(file, offset, (unsigned char)c);
             break;
         }
         case 's': {
             const char *s = va_arg(args, const char *);
-            printf_string(target, s);
+            printf_string(file, offset, s);
             break;
         }
         case 'd':
         case 'i': {
             int n = va_arg(args, int);
-            printf_dec_signed(target, n);
+            printf_dec_signed(file, offset, n);
             break;
         }
         case 'o': {
             unsigned int n = va_arg(args, unsigned int);
-            printf_oct(target, n);
+            printf_oct(file, offset, n);
             break;
         }
         case 'x': {
             unsigned int n = va_arg(args, unsigned int);
-            printf_hex(target, n, false);
+            printf_hex(file, offset, n, false);
             break;
         }
         case 'X': {
             unsigned int n = va_arg(args, unsigned int);
-            printf_hex(target, n, true);
+            printf_hex(file, offset, n, true);
             break;
         }
         case 'u': {
             unsigned int n = va_arg(args, unsigned int);
-            printf_dec(target, n);
+            printf_dec(file, offset, n);
             break;
         }
         case 'f': {
             double f = va_arg(args, double);
-            printf_float(target, f, false);
+            printf_float(file, offset, f, false);
             break;
         }
         case 'F': {
             double f = va_arg(args, double);
-            printf_float(target, f, true);
+            printf_float(file, offset, f, true);
             break;
         }
         // Incorrect specifiers have undefined behavior, so we choose to ignore them
@@ -383,6 +396,14 @@ int printf(const char *restrict format, ...) {
     va_list args;
     va_start(args, format);
     int ret = vprintf(format, args);
+    va_end(args);
+    return ret;
+}
+
+int fprintf(FILE *restrict f, const char *restrict format, ...) {
+    va_list args;
+    va_start(args, format);
+    int ret = vfprintf(f, format, args);
     va_end(args);
     return ret;
 }
@@ -404,8 +425,12 @@ int snprintf(char *restrict buffer, size_t size, const char *restrict format, ..
 }
 
 int vprintf(const char *restrict format, va_list args) {
+    return vfprintf(stdout, format, args);
+}
+
+int vfprintf(FILE *restrict f, const char *restrict format, va_list args) {
     size_t offset = 0;
-    printf_common((struct printf_target){.to_file = true, .offset = &offset}, format, args);
+    printf_common(f, &offset, format, args);
     return offset;
 }
 
@@ -416,13 +441,22 @@ int vsprintf(char *restrict buffer, const char *restrict format, va_list args) {
 
 int vsnprintf(char *restrict buffer, size_t size, const char *restrict format, va_list args) {
     size_t offset = 0;
-    // One is subtracted from the size to make room for the null terminator
-    printf_common((struct printf_target){.to_file = false, .offset = &offset, .buffer = buffer, .size = size - 1}, format, args);
+    // Create file struct for writing to the buffer
+    // One is subtracted from the size to make room for the null terminator.
+    FILE file = {
+        .type = FILE_BUFFER,
+        .buffer = buffer,
+        .buffer_size = size > 0 ? size - 1 : 0,
+        .buffer_offset = 0,
+    };
+    printf_common(&file, &offset, format, args);
     // Place the null terminator
     // Offset contains the number of characters printed.
-    if (offset < size)
-        buffer[offset] = '\0';
-    else
-        buffer[size - 1] = '\0';
+    if (size > 0) {
+        if (offset < size)
+            buffer[offset] = '\0';
+        else
+            buffer[size - 1] = '\0';
+    }
     return offset;
 }
