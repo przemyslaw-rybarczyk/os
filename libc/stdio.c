@@ -13,8 +13,15 @@ typedef enum FileType {
     FILE_CHANNEL,
 } FileType;
 
+typedef enum FileMode {
+    FILE_R,
+    FILE_W,
+    FILE_RW,
+} FileMode;
+
 struct _FILE {
     FileType type;
+    FileMode mode;
     char *restrict buffer;
     size_t buffer_size;
     size_t buffer_offset;
@@ -22,11 +29,13 @@ struct _FILE {
     bool error;
 };
 
-static FILE stdout_file = (FILE){.type = FILE_INVALID, .error = false};
-static FILE stderr_file = (FILE){.type = FILE_INVALID, .error = false};
+static FILE stdout_file = (FILE){.type = FILE_INVALID, .mode = FILE_W, .error = false};
+static FILE stderr_file = (FILE){.type = FILE_INVALID, .mode = FILE_W, .error = false};
+static FILE stdin_file = (FILE){.type = FILE_INVALID, .mode = FILE_R, .error = false};
 
 FILE *stdout = &stdout_file;
 FILE *stderr = &stderr_file;
+FILE *stdin = &stdin_file;
 
 void _stdio_init(void) {
     err_t err;
@@ -36,10 +45,15 @@ void _stdio_init(void) {
     err = resource_get(&resource_name("text/stderr"), RESOURCE_TYPE_CHANNEL_SEND, &stderr->channel);
     if (!err)
         stderr->type = FILE_CHANNEL;
+    err = resource_get(&resource_name("text/stdin"), RESOURCE_TYPE_CHANNEL_SEND, &stdin->channel);
+    if (!err)
+        stdin->type = FILE_CHANNEL;
 }
 
 int fputc(int c, FILE *f) {
     err_t err;
+    if (f->mode != FILE_W && f->mode != FILE_RW)
+        goto fail;
     switch (f->type) {
     case FILE_INVALID:
         goto fail;
@@ -64,8 +78,40 @@ fail:
     return EOF;
 }
 
+int fgetc(FILE *f) {
+    err_t err;
+    if (f->mode != FILE_R && f->mode != FILE_RW)
+        goto fail;
+    switch (f->type) {
+    case FILE_INVALID:
+        goto fail;
+    case FILE_BUFFER:
+        goto fail;
+    case FILE_CHANNEL: {
+        size_t requested_size = 1;
+        unsigned char c;
+        err = channel_call_bounded(
+            f->channel,
+            &(SendMessage){1, &(SendMessageData){sizeof(size_t), &requested_size}, 0, NULL},
+            &(ReceiveMessage){1, &c, 0, NULL},
+            NULL
+        );
+        if (err)
+            goto fail;
+        return (int)c;
+    }
+    }
+fail:
+    f->error = true;
+    return EOF;
+}
+
 int putchar(int c) {
     return fputc(c, stdout);
+}
+
+int getchar(void) {
+    return fgetc(stdin);
 }
 
 int fputs(const char *restrict s, FILE *restrict f) {
@@ -82,6 +128,26 @@ int puts(const char *s) {
     if (ferr == EOF)
         return EOF;
     return fputc('\n', stdout);
+}
+
+char *fgets(char *restrict s, int n, FILE *restrict f) {
+    int i = 0;
+    for (; i < n - 1; i++) {
+        int c = fgetc(f);
+        if (c == EOF) {
+            if (f->error || i == 0)
+                return NULL;
+            else
+                break;
+        }
+        s[i] = (char)c;
+        if (c == '\n') {
+            i++;
+            break;
+        }
+    }
+    s[i] = '\0';
+    return s;
 }
 
 static void printf_char(FILE *file, size_t *offset, char c) {

@@ -11,12 +11,14 @@
 
 #define TEXT_BUFFER_DEFAULT_SIZE 1024
 #define SCREEN_BUFFER_DEFAULT_SIZE 16384
+#define INPUT_BUFFER_DEFAULT_SIZE 128
 
 typedef enum EventSource : uintptr_t {
     EVENT_KEYBOARD,
     EVENT_RESIZE,
     EVENT_STDOUT,
     EVENT_STDERR,
+    EVENT_STDIN,
 } EventSource;
 
 // Screen buffer
@@ -43,11 +45,23 @@ static size_t text_buffer_capacity;
 static size_t text_buffer_offset = 0;
 static size_t text_buffer_size = 0;
 
+// Circular buffer containing entered text
+// The capacity must be a power of two.
+static u8 *input_buffer;
+static size_t input_buffer_capacity;
+static size_t input_buffer_offset = 0;
+static size_t input_buffer_size = 0;
+
 // Current cursor position
 static u32 cursor_x = 0;
 static u32 cursor_y = 0;
 
 static handle_t video_data_channel;
+
+// Tells whether the program in currently awaiting input
+bool waiting_for_stdin = false;
+// The message message the new input should be sent as reply to when received
+handle_t current_stdin_msg;
 
 static const u8 background_color[3] = {0x22, 0x22, 0x22};
 static const u8 stdout_color[3] = {0xDD, 0xDD, 0xDD};
@@ -71,6 +85,29 @@ static const u8 keycode_chars_upper[] = {
     0, 'Z', 'X', 'C', 'V', 'B', 'N', 'M', '<', '>', '?', 0,
     0, 0, 0, ' ',
 };
+
+// Add a character to the end of the input buffer
+static err_t add_to_input_buffer(u8 c) {
+    // If stdin is already waiting for a character to be entered, send it
+    if (waiting_for_stdin) {
+        message_reply(current_stdin_msg, &(SendMessage){1, &(SendMessageData){1, &c}, 0, NULL});
+        waiting_for_stdin = false;
+        return 0;
+    }
+    // If the input buffer is too small, try to extend it
+    if (input_buffer_size >= input_buffer_capacity) {
+        size_t new_input_buffer_capacity = 2 * input_buffer_capacity;
+        u8 *new_input_buffer = realloc(input_buffer, new_input_buffer_capacity);
+        if (new_input_buffer == NULL)
+            return ERR_NO_MEMORY;
+        input_buffer_capacity = new_input_buffer_capacity;
+        input_buffer = new_input_buffer;
+    }
+    // Add to the input buffer
+    input_buffer[(input_buffer_offset + input_buffer_size) & (text_buffer_capacity - 1)] = c;
+    input_buffer_size++;
+    return 0;
+}
 
 // Convert keycode to character
 static u8 keycode_char(Keycode keycode, bool shift) {
@@ -189,9 +226,10 @@ static void draw_screen(void) {
     for (u32 cy = 0; cy < FONT_HEIGHT; cy++) {
         for (u32 cx = 0; cx < FONT_WIDTH; cx++) {
             u8 *pixel = &screen[((FONT_HEIGHT * y + cy) * screen_size.width + (FONT_WIDTH * x + cx)) * 3];
-            pixel[0] = stdin_color[0];
-            pixel[1] = stdin_color[1];
-            pixel[2] = stdin_color[2];
+            const u8 *color = waiting_for_stdin ? stdin_color : stdout_color;
+            pixel[0] = color[0];
+            pixel[1] = color[1];
+            pixel[2] = color[2];
         }
     }
     // Send screen buffer
@@ -231,6 +269,9 @@ void main(void) {
     err = mqueue_add_channel_resource(event_mqueue, &resource_name("text/stderr_r"), (MessageTag){EVENT_STDERR, 0});
     if (err)
         return;
+    err = mqueue_add_channel_resource(event_mqueue, &resource_name("text/stdin_r"), (MessageTag){EVENT_STDIN, 0});
+    if (err)
+        return;
     text_buffer_capacity = TEXT_BUFFER_DEFAULT_SIZE;
     while (text_buffer_capacity < (screen_size.width / FONT_WIDTH + 1) * (screen_size.height / FONT_HEIGHT))
         text_buffer_capacity *= 2;
@@ -241,6 +282,10 @@ void main(void) {
     while (screen_capacity < screen_size.height * screen_size.width * 3)
         screen_capacity *= 2;
     screen = malloc(screen_capacity);
+    if (screen == NULL)
+        return;
+    input_buffer_capacity = INPUT_BUFFER_DEFAULT_SIZE;
+    input_buffer = malloc(input_buffer_capacity);
     if (screen == NULL)
         return;
     draw_screen();
@@ -277,12 +322,16 @@ void main(void) {
             else
                 mod_keys_held &= ~mod_key;
             // Print appropriate character
-            if (key_event.pressed) {
+            if (key_event.pressed && waiting_for_stdin) {
                 u8 c = keycode_char(key_event.keycode, (mod_keys_held & (MOD_KEY_LEFT_SHIFT | MOD_KEY_RIGHT_SHIFT)));
-                if (c != 0)
-                    print_char(c, TEXT_COLOR_STDIN);
+                if (c != 0) {
+                    err = add_to_input_buffer(c);
+                    if (!err) {
+                        print_char(c, TEXT_COLOR_STDIN);
+                        draw_screen();
+                    }
+                }
             }
-            draw_screen();
             break;
         }
         case EVENT_RESIZE: {
@@ -328,7 +377,9 @@ void main(void) {
             break;
         }
         case EVENT_STDOUT:
-        case EVENT_STDERR: {
+        case EVENT_STDERR:
+            if (waiting_for_stdin)
+                message_reply_error(msg, ERR_INVALID_OPERATION);
             MessageLength message_length;
             message_get_length(msg, &message_length);
             if (message_length.handles != 0) {
@@ -343,7 +394,24 @@ void main(void) {
             message_reply(msg, NULL);
             draw_screen();
             break;
-        }
+        case EVENT_STDIN:
+            if (waiting_for_stdin)
+                message_reply_error(msg, ERR_INVALID_OPERATION);
+            size_t stdin_bytes_requested;
+            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(size_t), &stdin_bytes_requested, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
+            if (err)
+                continue;
+            if (input_buffer_size > 0) {
+                u8 c = input_buffer[input_buffer_offset & (text_buffer_capacity - 1)];
+                input_buffer_offset++;
+                input_buffer_size--;
+                message_reply(msg, &(SendMessage){1, &(SendMessageData){1, &c}, 0, NULL});
+            } else {
+                waiting_for_stdin = true;
+                current_stdin_msg = msg;
+            }
+            draw_screen();
+            break;
         }
     }
 }

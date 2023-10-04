@@ -121,6 +121,7 @@ static WindowContainer *create_window(void) {
     handle_t mouse_data_in, mouse_data_out;
     handle_t text_stdout_in, text_stdout_out;
     handle_t text_stderr_in, text_stderr_out;
+    handle_t text_stdin_in, text_stdin_out;
     err = channel_create(&video_size_in, &video_size_out);
     if (err)
         goto fail_video_size_channel_create;
@@ -142,6 +143,9 @@ static WindowContainer *create_window(void) {
     err = channel_create(&text_stderr_in, &text_stderr_out);
     if (err)
         goto fail_stderr_channel_create;
+    err = channel_create(&text_stdin_in, &text_stdin_out);
+    if (err)
+        goto fail_stdin_channel_create;
     // Allocate window
     WindowContainer *window = malloc(sizeof(WindowContainer));
     if (window == NULL)
@@ -164,6 +168,7 @@ static WindowContainer *create_window(void) {
         resource_name("mouse/data"),
         resource_name("text/stdout_r"),
         resource_name("text/stderr_r"),
+        resource_name("text/stdin_r"),
     };
     SendAttachedHandle program1_resource_handles[] = {
         {ATTACHED_HANDLE_FLAG_MOVE, video_size_in},
@@ -173,6 +178,7 @@ static WindowContainer *create_window(void) {
         {ATTACHED_HANDLE_FLAG_MOVE, mouse_data_out},
         {ATTACHED_HANDLE_FLAG_MOVE, text_stdout_out},
         {ATTACHED_HANDLE_FLAG_MOVE, text_stderr_out},
+        {ATTACHED_HANDLE_FLAG_MOVE, text_stdin_out},
     };
     err = channel_send(process_spawn_channel, &(SendMessage){
         2, (SendMessageData[]){
@@ -185,11 +191,13 @@ static WindowContainer *create_window(void) {
     // Spawn process running in terminal
     ResourceName program2_resource_names[] = {
         resource_name("text/stdout"),
-        resource_name("text/stderr")
+        resource_name("text/stderr"),
+        resource_name("text/stdin"),
     };
     SendAttachedHandle program2_resource_handles[] = {
         {ATTACHED_HANDLE_FLAG_MOVE, text_stdout_in},
-        {ATTACHED_HANDLE_FLAG_MOVE, text_stderr_in}
+        {ATTACHED_HANDLE_FLAG_MOVE, text_stderr_in},
+        {ATTACHED_HANDLE_FLAG_MOVE, text_stdin_in},
     };
     err = channel_send(process_spawn_channel, &(SendMessage){
         2, (SendMessageData[]){
@@ -208,6 +216,9 @@ fail_process_spawn:
 fail_video_buffer_alloc:
     free(window);
 fail_window_alloc:
+    handle_free(text_stdin_in);
+    handle_free(text_stdin_out);
+fail_stdin_channel_create:
     handle_free(text_stderr_in);
     handle_free(text_stderr_out);
 fail_stderr_channel_create:
