@@ -169,11 +169,13 @@ process_block:
   mov rcx, [rax + Process.fxsave_area]
   o64 fxsave [rcx]
   mov [rax + Process.rsp], rsp
-  ; Switch to the idle stack
+  ; Switch to the idle stack and page map
   mov rsp, gs:[PerCPU.idle_stack]
+  mov rdx, idle_page_map
+  mov cr3, rdx
+  ; Release the spinlock
   test rdi, rdi
   jz .no_spinlock
-  ; Release the spinlock
   call spinlock_release
 .no_spinlock:
   ; Get the next process to run and jump to the appropriate part of process_switch
