@@ -19,10 +19,11 @@ struct _FILE {
     size_t buffer_size;
     size_t buffer_offset;
     handle_t channel;
+    bool error;
 };
 
-static FILE stdout_file = (FILE){.type = FILE_INVALID};
-static FILE stderr_file = (FILE){.type = FILE_INVALID};
+static FILE stdout_file = (FILE){.type = FILE_INVALID, .error = false};
+static FILE stderr_file = (FILE){.type = FILE_INVALID, .error = false};
 
 FILE *stdout = &stdout_file;
 FILE *stderr = &stderr_file;
@@ -59,6 +60,7 @@ int fputc(int c, FILE *f) {
     }
     return c;
 fail:
+    f->error = true;
     return EOF;
 }
 
@@ -436,6 +438,8 @@ int vprintf(const char *restrict format, va_list args) {
 int vfprintf(FILE *restrict f, const char *restrict format, va_list args) {
     size_t offset = 0;
     printf_common(f, &offset, format, args);
+    if (f->error)
+        return -1;
     return offset;
 }
 
@@ -464,4 +468,12 @@ int vsnprintf(char *restrict buffer, size_t size, const char *restrict format, v
             buffer[size - 1] = '\0';
     }
     return offset;
+}
+
+int ferror(FILE *f) {
+    return (int)f->error;
+}
+
+void clearerr(FILE *f) {
+    f->error = false;
 }
