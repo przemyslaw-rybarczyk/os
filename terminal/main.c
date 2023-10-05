@@ -221,28 +221,32 @@ static void draw_screen(void) {
             y++;
             continue;
         }
-        // If the character is valid, draw it
-        if (FONT_CHAR_LOWEST <= c && c <= FONT_CHAR_HIGHEST) {
-            for (u32 cy = 0; cy < FONT_HEIGHT; cy++) {
-                for (u32 cx = 0; cx < FONT_WIDTH; cx++) {
-                    if ((font_chars[c - FONT_CHAR_LOWEST][cy] << cx) & 0x80) {
-                        u8 *pixel = &screen[((FONT_HEIGHT * y + cy) * screen_size.width + (FONT_WIDTH * x + cx)) * 3];
-                        const u8 *color;
-                        switch (text_ch.color) {
-                        case TEXT_COLOR_STDOUT:
-                            color = stdout_color;
-                            break;
-                        case TEXT_COLOR_STDERR:
-                            color = stderr_color;
-                            break;
-                        case TEXT_COLOR_STDIN:
-                            color = stdin_color;
-                            break;
-                        }
-                        pixel[0] = color[0];
-                        pixel[1] = color[1];
-                        pixel[2] = color[2];
+        // Get the font glyph for the character
+        const u8 *font_char;
+        if (FONT_CHAR_LOWEST <= c && c <= FONT_CHAR_HIGHEST)
+            font_char = font_chars[c - FONT_CHAR_LOWEST];
+        else
+            font_char = font_char_unknown;
+        // Draw the character
+        for (u32 cy = 0; cy < FONT_HEIGHT; cy++) {
+            for (u32 cx = 0; cx < FONT_WIDTH; cx++) {
+                if ((font_char[cy] << cx) & 0x80) {
+                    u8 *pixel = &screen[((FONT_HEIGHT * y + cy) * screen_size.width + (FONT_WIDTH * x + cx)) * 3];
+                    const u8 *color;
+                    switch (text_ch.color) {
+                    case TEXT_COLOR_STDOUT:
+                        color = stdout_color;
+                        break;
+                    case TEXT_COLOR_STDERR:
+                        color = stderr_color;
+                        break;
+                    case TEXT_COLOR_STDIN:
+                        color = stdin_color;
+                        break;
                     }
+                    pixel[0] = color[0];
+                    pixel[1] = color[1];
+                    pixel[2] = color[2];
                 }
             }
         }

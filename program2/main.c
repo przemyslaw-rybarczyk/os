@@ -2,7 +2,7 @@
 
 void main(void) {
     while (1) {
-        char c = getchar();
+        int c = getchar();
         if (c == EOF)
             break;
         putchar(c);
