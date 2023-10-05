@@ -642,3 +642,40 @@ fail:
     f->error = true;
     return EOF;
 }
+
+void setbuf(FILE *restrict f, char *restrict buf) {
+    if (buf == NULL)
+        setvbuf(f, NULL, _IONBF, 0);
+    else
+        setvbuf(f, buf, _IOFBF, BUFSIZ);
+}
+
+int setvbuf(FILE *restrict f, char *restrict buf, int mode, size_t size) {
+    if (mode == _IONBF) {
+        f->buffer_mode = _IONBF;
+        return 0;
+    }
+    if (mode != _IOLBF && mode != _IOFBF)
+        return 1;
+    if (buf == NULL) {
+        if (f->buffer_mode == _IONBF) {
+            f->buffer = malloc(size);
+            if (f->buffer == NULL)
+                return 1;
+        } else {
+            char *new_buffer = realloc(f->buffer, size);
+            if (new_buffer == NULL)
+                return 1;
+            f->buffer = new_buffer;
+        }
+    } else {
+        if (f->buffer_mode != _IONBF)
+            free(f->buffer);
+        f->buffer = buf;
+    }
+    f->buffer_mode = mode;
+    f->buffer_offset = 0;
+    f->buffer_size = 0;
+    f->buffer_capacity = size;
+    return 0;
+}

@@ -34,6 +34,8 @@ int feof(FILE *f);
 int ferror(FILE *f);
 void clearerr(FILE *f);
 int fflush(FILE *f);
+void setbuf(FILE *restrict f, char *restrict buf);
+int setvbuf(FILE *restrict f, char *restrict buf, int mode, size_t size);
 
 #define putc(c, f) (fputc((c), (f)))
 #define getc(f) (fgetc(f))
