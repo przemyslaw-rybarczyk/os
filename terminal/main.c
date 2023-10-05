@@ -47,10 +47,13 @@ static size_t text_buffer_size = 0;
 
 // Circular buffer containing entered text
 // The capacity must be a power of two.
+// The pending size variable holds the size of the part of the buffer that is waiting to be sent to stdin.
+// The remaining part can still be edited.
 static u8 *input_buffer;
 static size_t input_buffer_capacity;
 static size_t input_buffer_offset = 0;
 static size_t input_buffer_size = 0;
+static size_t input_buffer_pending_size = 0;
 
 // Current cursor position
 static u32 cursor_x = 0;
@@ -70,7 +73,7 @@ static const u8 stdin_color[3] = {0x88, 0xCC, 0xDD};
 
 static const u8 keycode_chars_lower[] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    '`', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', 0,
+    '`', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
     0, 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\\',
     0, 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '\n',
     0, 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0,
@@ -79,21 +82,24 @@ static const u8 keycode_chars_lower[] = {
 
 static const u8 keycode_chars_upper[] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    '~', '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', 0,
+    '~', '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '\b',
     0, 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '|',
     0, 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '"', '\n',
     0, 'Z', 'X', 'C', 'V', 'B', 'N', 'M', '<', '>', '?', 0,
     0, 0, 0, ' ',
 };
 
+// Send the first character from the input buffer as reply to the stdin request
+static void send_from_input_buffer(handle_t msg) {
+    u8 c = input_buffer[input_buffer_offset & (text_buffer_capacity - 1)];
+    message_reply(msg, &(SendMessage){1, &(SendMessageData){1, &c}, 0, NULL});
+    input_buffer_offset++;
+    input_buffer_size--;
+    input_buffer_pending_size--;
+}
+
 // Add a character to the end of the input buffer
 static err_t add_to_input_buffer(u8 c) {
-    // If stdin is already waiting for a character to be entered, send it
-    if (waiting_for_stdin) {
-        message_reply(current_stdin_msg, &(SendMessage){1, &(SendMessageData){1, &c}, 0, NULL});
-        waiting_for_stdin = false;
-        return 0;
-    }
     // If the input buffer is too small, try to extend it
     if (input_buffer_size >= input_buffer_capacity) {
         size_t new_input_buffer_capacity = 2 * input_buffer_capacity;
@@ -106,7 +112,24 @@ static err_t add_to_input_buffer(u8 c) {
     // Add to the input buffer
     input_buffer[(input_buffer_offset + input_buffer_size) & (text_buffer_capacity - 1)] = c;
     input_buffer_size++;
+    // If a newline character is entered, mark all characters in the buffer as pending
+    if (c == '\n') {
+        input_buffer_pending_size = input_buffer_size;
+        if (waiting_for_stdin) {
+            send_from_input_buffer(current_stdin_msg);
+            waiting_for_stdin = false;
+        }
+    }
     return 0;
+}
+
+// Remove the last non-pending character in the input buffer if there is one
+// Implements backspace.
+static void remove_last_input_char(void) {
+    if (input_buffer_pending_size < input_buffer_size) {
+        input_buffer_size--;
+        text_buffer_size--;
+    }
 }
 
 // Convert keycode to character
@@ -324,7 +347,10 @@ void main(void) {
             // Print appropriate character
             if (key_event.pressed && waiting_for_stdin) {
                 u8 c = keycode_char(key_event.keycode, (mod_keys_held & (MOD_KEY_LEFT_SHIFT | MOD_KEY_RIGHT_SHIFT)));
-                if (c != 0) {
+                if (c == '\b') {
+                    remove_last_input_char();
+                    draw_screen();
+                } else if (c != 0) {
                     err = add_to_input_buffer(c);
                     if (!err) {
                         print_char(c, TEXT_COLOR_STDIN);
@@ -401,11 +427,8 @@ void main(void) {
             err = message_read_bounded(msg, &(ReceiveMessage){sizeof(size_t), &stdin_bytes_requested, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
             if (err)
                 continue;
-            if (input_buffer_size > 0) {
-                u8 c = input_buffer[input_buffer_offset & (text_buffer_capacity - 1)];
-                input_buffer_offset++;
-                input_buffer_size--;
-                message_reply(msg, &(SendMessage){1, &(SendMessageData){1, &c}, 0, NULL});
+            if (input_buffer_pending_size > 0) {
+                send_from_input_buffer(msg);
             } else {
                 waiting_for_stdin = true;
                 current_stdin_msg = msg;
