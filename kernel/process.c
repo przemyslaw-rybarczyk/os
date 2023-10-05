@@ -35,7 +35,6 @@ typedef struct FXSAVEArea {
     u64 reserved[12];
 } __attribute__((packed)) FXSAVEArea;
 
-extern void jump_to_current_process(void);
 extern u8 process_start[];
 
 static spinlock_t scheduler_lock;
