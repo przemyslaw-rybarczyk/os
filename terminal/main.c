@@ -9,6 +9,8 @@
 
 #include "font.h"
 
+#define OUTPUT_READ_BUFFER_SIZE 1024
+
 #define TEXT_BUFFER_DEFAULT_SIZE 1024
 #define SCREEN_BUFFER_DEFAULT_SIZE 16384
 #define INPUT_BUFFER_DEFAULT_SIZE 128
@@ -54,6 +56,9 @@ static size_t input_buffer_capacity;
 static size_t input_buffer_offset = 0;
 static size_t input_buffer_size = 0;
 static size_t input_buffer_pending_size = 0;
+
+// Used for reading stdout and stderr
+u8 output_read_buffer[OUTPUT_READ_BUFFER_SIZE];
 
 // Current cursor position
 static u32 cursor_x = 0;
@@ -424,10 +429,11 @@ void main(void) {
                 message_reply_error(msg, ERR_INVALID_ARG);
                 continue;
             }
-            for (size_t i = 0; i < message_length.data; i++) {
-                u8 c;
-                message_read(msg, &(ReceiveMessage){1, &c, 0, NULL}, &(MessageLength){i, 0});
-                print_char(c, event_source == EVENT_STDERR ? TEXT_COLOR_STDERR : TEXT_COLOR_STDOUT);
+            for (size_t i = 0; i <= message_length.data / OUTPUT_READ_BUFFER_SIZE; i++) {
+                size_t read_size = i < message_length.data / OUTPUT_READ_BUFFER_SIZE ? OUTPUT_READ_BUFFER_SIZE : message_length.data % OUTPUT_READ_BUFFER_SIZE;
+                message_read(msg, &(ReceiveMessage){read_size, output_read_buffer, 0, NULL}, &(MessageLength){OUTPUT_READ_BUFFER_SIZE * i, 0});
+                for (size_t j = 0; j < read_size; j++)
+                    print_char(output_read_buffer[j], event_source == EVENT_STDERR ? TEXT_COLOR_STDERR : TEXT_COLOR_STDOUT);
             }
             message_reply(msg, NULL);
             draw_screen();
