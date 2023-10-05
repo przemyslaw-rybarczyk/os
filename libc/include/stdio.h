@@ -19,6 +19,7 @@ int putchar(int c);
 int getchar(void);
 int fputc(int c, FILE *f);
 int fgetc(FILE *f);
+int ungetc(int c, FILE *f);
 int puts(const char *s);
 int fputs(const char *restrict s, FILE *restrict f);
 char *fgets(char *restrict s, int n, FILE *restrict f);

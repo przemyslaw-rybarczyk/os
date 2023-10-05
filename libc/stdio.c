@@ -41,11 +41,13 @@ struct _FILE {
     handle_t channel;
     bool eof;
     bool error;
+    bool ungetc_buffer_full;
+    unsigned char ungetc_buffer;
 };
 
-static FILE stdout_file = (FILE){.type = FILE_INVALID, .mode = FILE_W, .eof = false, .error = false};
-static FILE stderr_file = (FILE){.type = FILE_INVALID, .mode = FILE_W, .eof = false, .error = false};
-static FILE stdin_file = (FILE){.type = FILE_INVALID, .mode = FILE_R, .eof = false, .error = false};
+static FILE stdout_file = (FILE){.type = FILE_INVALID, .mode = FILE_W};
+static FILE stderr_file = (FILE){.type = FILE_INVALID, .mode = FILE_W};
+static FILE stdin_file = (FILE){.type = FILE_INVALID, .mode = FILE_R};
 
 FILE *stdout = &stdout_file;
 FILE *stderr = &stderr_file;
@@ -129,6 +131,10 @@ int fgetc(FILE *f) {
     err_t err;
     if (f->mode != FILE_R && f->mode != FILE_RW)
         goto fail;
+    if (f->ungetc_buffer_full) {
+        f->ungetc_buffer_full = false;
+        return f->ungetc_buffer;
+    }
     switch (f->type) {
     case FILE_INVALID:
         goto fail;
@@ -147,7 +153,7 @@ int fgetc(FILE *f) {
             );
             if (err)
                 goto fail;
-            return (int)c;
+            return c;
         }
         case _IOLBF:
         case _IOFBF:
@@ -174,6 +180,14 @@ int fgetc(FILE *f) {
 fail:
     f->error = true;
     return EOF;
+}
+
+int ungetc(int c, FILE *f) {
+    if (c == EOF || f->ungetc_buffer_full)
+        return EOF;
+    f->ungetc_buffer = (unsigned char)c;
+    f->ungetc_buffer_full = true;
+    return c;
 }
 
 int putchar(int c) {
