@@ -3,6 +3,7 @@
 
 #include <float.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <zr/syscalls.h>
@@ -19,10 +20,22 @@ typedef enum FileMode {
     FILE_RW,
 } FileMode;
 
+#undef _IONBF
+#undef _IOLBF
+#undef _IOFBF
+
+typedef enum BufferMode {
+    _IONBF,
+    _IOLBF,
+    _IOFBF,
+} BufferMode;
+
 struct _FILE {
     FileType type;
     FileMode mode;
+    BufferMode buffer_mode;
     char *restrict buffer;
+    size_t buffer_capacity;
     size_t buffer_size;
     size_t buffer_offset;
     handle_t channel;
@@ -38,17 +51,37 @@ FILE *stdout = &stdout_file;
 FILE *stderr = &stderr_file;
 FILE *stdin = &stdin_file;
 
+static void create_buffer(FILE *f, BufferMode mode) {
+    f->buffer_mode = mode;
+    if (mode == _IONBF)
+        return;
+    f->buffer = malloc(BUFSIZ);
+    if (f->buffer == NULL) {
+        f->buffer_mode = _IONBF;
+        return;
+    }
+    f->buffer_capacity = BUFSIZ;
+    f->buffer_size = 0;
+    f->buffer_offset = 0;
+}
+
 void _stdio_init(void) {
     err_t err;
     err = resource_get(&resource_name("text/stdout"), RESOURCE_TYPE_CHANNEL_SEND, &stdout->channel);
-    if (!err)
+    if (!err) {
         stdout->type = FILE_CHANNEL;
+        create_buffer(stdout, _IOLBF);
+    }
     err = resource_get(&resource_name("text/stderr"), RESOURCE_TYPE_CHANNEL_SEND, &stderr->channel);
-    if (!err)
+    if (!err) {
         stderr->type = FILE_CHANNEL;
+        create_buffer(stdin, _IONBF);
+    }
     err = resource_get(&resource_name("text/stdin"), RESOURCE_TYPE_CHANNEL_SEND, &stdin->channel);
-    if (!err)
+    if (!err) {
         stdin->type = FILE_CHANNEL;
+        create_buffer(stdin, _IOLBF);
+    }
 }
 
 int fputc(int c, FILE *f) {
@@ -61,17 +94,30 @@ int fputc(int c, FILE *f) {
     case FILE_BUFFER:
         // Write a byte to the buffer if it's within bounds
         if (f->buffer_offset < f->buffer_size) {
-            f->buffer[f->buffer_offset] = c;
+            f->buffer[f->buffer_offset] = (char)c;
             f->buffer_offset++;
         }
         break;
-    case FILE_CHANNEL: {
-        unsigned char c_ = (unsigned char)c;
-        err = channel_call(f->channel, &(SendMessage){1, &(SendMessageData){1, &c_}, 0, NULL}, NULL);
-        if (err)
-            goto fail;
+    case FILE_CHANNEL:
+        switch (f->buffer_mode) {
+        case _IONBF: {
+            unsigned char c_ = (unsigned char)c;
+            err = channel_call(f->channel, &(SendMessage){1, &(SendMessageData){1, &c_}, 0, NULL}, NULL);
+            if (err)
+                goto fail;
+            break;
+        }
+        case _IOLBF:
+        case _IOFBF:
+            f->buffer[f->buffer_offset] = (char)c;
+            f->buffer_offset++;
+            if (f->buffer_size < f->buffer_offset)
+                f->buffer_size = f->buffer_offset;
+            if (f->buffer_size >= f->buffer_capacity || (f->buffer_mode == _IOLBF && c == '\n'))
+                fflush(f);
+            break;
+        }
         break;
-    }
     }
     return c;
 fail:
@@ -88,19 +134,42 @@ int fgetc(FILE *f) {
         goto fail;
     case FILE_BUFFER:
         goto fail;
-    case FILE_CHANNEL: {
-        size_t requested_size = 1;
-        unsigned char c;
-        err = channel_call_bounded(
-            f->channel,
-            &(SendMessage){1, &(SendMessageData){sizeof(size_t), &requested_size}, 0, NULL},
-            &(ReceiveMessage){1, &c, 0, NULL},
-            NULL
-        );
-        if (err)
-            goto fail;
-        return (int)c;
-    }
+    case FILE_CHANNEL:
+        switch (f->buffer_mode) {
+        case _IONBF: {
+            size_t requested_size = 1;
+            unsigned char c;
+            err = channel_call_bounded(
+                f->channel,
+                &(SendMessage){1, &(SendMessageData){sizeof(size_t), &requested_size}, 0, NULL},
+                &(ReceiveMessage){1, &c, 0, NULL},
+                NULL
+            );
+            if (err)
+                goto fail;
+            return (int)c;
+        }
+        case _IOLBF:
+        case _IOFBF:
+            if (f->buffer_offset >= f->buffer_size) {
+                f->buffer_offset = 0;
+                ReceiveMessage reply = {f->buffer_capacity, f->buffer, 0, NULL};
+                err = channel_call_bounded(
+                    f->channel,
+                    &(SendMessage){1, &(SendMessageData){sizeof(size_t), &f->buffer_capacity}, 0, NULL},
+                    &reply,
+                    &(MessageLength){1, 0}
+                );
+                if (err) {
+                    f->buffer_size = 0;
+                    goto fail;
+                }
+                f->buffer_size = reply.data_length;
+            }
+            unsigned char c = f->buffer[f->buffer_offset];
+            f->buffer_offset++;
+            return c;
+        }
     }
 fail:
     f->error = true;
@@ -548,4 +617,28 @@ int ferror(FILE *f) {
 void clearerr(FILE *f) {
     f->eof = false;
     f->error = false;
+}
+
+int fflush(FILE *f) {
+    err_t err;
+    if (f->mode != FILE_W && f->mode != FILE_RW)
+        return 0;
+    if (f->buffer_mode == _IONBF)
+        return 0;
+    switch (f->type) {
+    case FILE_INVALID:
+    case FILE_BUFFER:
+        break;
+    case FILE_CHANNEL:
+        err = channel_call(f->channel, &(SendMessage){1, &(SendMessageData){f->buffer_size, f->buffer}, 0, NULL}, NULL);
+        f->buffer_size = 0;
+        f->buffer_offset = 0;
+        if (err)
+            goto fail;
+        break;
+    }
+    return 0;
+fail:
+    f->error = true;
+    return EOF;
 }

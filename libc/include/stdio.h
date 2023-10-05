@@ -33,6 +33,13 @@ int vsnprintf(char *restrict buffer, size_t size, const char *restrict format, v
 int feof(FILE *f);
 int ferror(FILE *f);
 void clearerr(FILE *f);
+int fflush(FILE *f);
 
 #define putc(c, f) (fputc((c), (f)))
 #define getc(f) (fgetc(f))
+
+#define _IONBF 0
+#define _IOLBF 1
+#define _IOFBF 2
+
+#define BUFSIZ 4096

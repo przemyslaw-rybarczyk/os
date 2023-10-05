@@ -65,6 +65,8 @@ static handle_t video_data_channel;
 bool waiting_for_stdin = false;
 // The message message the new input should be sent as reply to when received
 handle_t current_stdin_msg;
+// The number of bytes requested - this is the maximum number that can be sent
+size_t stdin_bytes_requested;
 
 static const u8 background_color[3] = {0x22, 0x22, 0x22};
 static const u8 stdout_color[3] = {0xDD, 0xDD, 0xDD};
@@ -89,13 +91,19 @@ static const u8 keycode_chars_upper[] = {
     0, 0, 0, ' ',
 };
 
-// Send the first character from the input buffer as reply to the stdin request
-static void send_from_input_buffer(handle_t msg) {
-    u8 c = input_buffer[input_buffer_offset & (text_buffer_capacity - 1)];
-    message_reply(msg, &(SendMessage){1, &(SendMessageData){1, &c}, 0, NULL});
-    input_buffer_offset++;
-    input_buffer_size--;
-    input_buffer_pending_size--;
+// Send up to n bytes from the start of the input buffer as reply to the stdin request
+static void send_from_input_buffer(handle_t msg, size_t bytes_requested) {
+    size_t bytes_to_send = bytes_requested <= input_buffer_pending_size ? bytes_requested : input_buffer_pending_size;
+    if (bytes_to_send <= input_buffer_capacity - input_buffer_offset)
+        message_reply(msg, &(SendMessage){1, &(SendMessageData){bytes_to_send, input_buffer + input_buffer_offset}, 0, NULL});
+    else
+        message_reply(msg, &(SendMessage){2, (SendMessageData[]){
+            {input_buffer_capacity - input_buffer_offset, input_buffer + input_buffer_offset},
+            {bytes_to_send - (input_buffer_capacity - input_buffer_offset), input_buffer}
+        }, 0, NULL});
+    input_buffer_offset += bytes_to_send;
+    input_buffer_size -= bytes_to_send;
+    input_buffer_pending_size -= bytes_to_send;
 }
 
 // Add a character to the end of the input buffer
@@ -116,7 +124,7 @@ static err_t add_to_input_buffer(u8 c) {
     if (c == '\n') {
         input_buffer_pending_size = input_buffer_size;
         if (waiting_for_stdin) {
-            send_from_input_buffer(current_stdin_msg);
+            send_from_input_buffer(current_stdin_msg, stdin_bytes_requested);
             waiting_for_stdin = false;
         }
     }
@@ -256,7 +264,7 @@ static void draw_screen(void) {
         }
     }
     // Send screen buffer
-    channel_send(video_data_channel, &(SendMessage){2, (SendMessageData[]){{sizeof(ScreenSize), &screen_size}, {screen_bytes, screen}}, 0, NULL}, FLAG_NONBLOCK);
+    channel_send(video_data_channel, &(SendMessage){2, (SendMessageData[]){{sizeof(ScreenSize), &screen_size}, {screen_bytes, screen}}, 0, NULL}, 0);
 }
 
 typedef enum ModKeys : u32 {
@@ -423,12 +431,13 @@ void main(void) {
         case EVENT_STDIN:
             if (waiting_for_stdin)
                 message_reply_error(msg, ERR_INVALID_OPERATION);
-            size_t stdin_bytes_requested;
             err = message_read_bounded(msg, &(ReceiveMessage){sizeof(size_t), &stdin_bytes_requested, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
             if (err)
                 continue;
-            if (input_buffer_pending_size > 0) {
-                send_from_input_buffer(msg);
+            if (stdin_bytes_requested == 0) {
+                message_reply(msg, NULL);
+            } else if (input_buffer_pending_size > 0) {
+                send_from_input_buffer(msg, stdin_bytes_requested);
             } else {
                 waiting_for_stdin = true;
                 current_stdin_msg = msg;
