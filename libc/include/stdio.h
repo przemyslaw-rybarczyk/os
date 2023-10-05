@@ -30,6 +30,7 @@ int vprintf(const char *restrict format, va_list args);
 int vfprintf(FILE *restrict f, const char *restrict format, va_list args);
 int vsprintf(char *restrict buffer, const char *restrict format, va_list args);
 int vsnprintf(char *restrict buffer, size_t size, const char *restrict format, va_list args);
+int feof(FILE *f);
 int ferror(FILE *f);
 void clearerr(FILE *f);
 

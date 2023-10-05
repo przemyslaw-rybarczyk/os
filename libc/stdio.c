@@ -26,12 +26,13 @@ struct _FILE {
     size_t buffer_size;
     size_t buffer_offset;
     handle_t channel;
+    bool eof;
     bool error;
 };
 
-static FILE stdout_file = (FILE){.type = FILE_INVALID, .mode = FILE_W, .error = false};
-static FILE stderr_file = (FILE){.type = FILE_INVALID, .mode = FILE_W, .error = false};
-static FILE stdin_file = (FILE){.type = FILE_INVALID, .mode = FILE_R, .error = false};
+static FILE stdout_file = (FILE){.type = FILE_INVALID, .mode = FILE_W, .eof = false, .error = false};
+static FILE stderr_file = (FILE){.type = FILE_INVALID, .mode = FILE_W, .eof = false, .error = false};
+static FILE stdin_file = (FILE){.type = FILE_INVALID, .mode = FILE_R, .eof = false, .error = false};
 
 FILE *stdout = &stdout_file;
 FILE *stderr = &stderr_file;
@@ -536,10 +537,15 @@ int vsnprintf(char *restrict buffer, size_t size, const char *restrict format, v
     return offset;
 }
 
+int feof(FILE *f) {
+    return (int)f->eof;
+}
+
 int ferror(FILE *f) {
     return (int)f->error;
 }
 
 void clearerr(FILE *f) {
+    f->eof = false;
     f->error = false;
 }
