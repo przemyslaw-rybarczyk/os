@@ -851,6 +851,7 @@ void main(void) {
                 mouse_update.abs_y = cursor.y - window_origin.y;
                 channel_send(mouse_data_in, &(SendMessage){1, &(SendMessageData){sizeof(MouseUpdate), &mouse_update}, 0, NULL}, FLAG_NONBLOCK);
             }
+            draw_screen();
             break;
         }
         case EVENT_VIDEO_SIZE: {
