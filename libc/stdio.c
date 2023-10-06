@@ -145,7 +145,7 @@ int fgetc(FILE *f) {
         case _IONBF: {
             size_t requested_size = 1;
             unsigned char c;
-            err = channel_call_bounded(
+            err = channel_call_read(
                 f->channel,
                 &(SendMessage){1, &(SendMessageData){sizeof(size_t), &requested_size}, 0, NULL},
                 &(ReceiveMessage){1, &c, 0, NULL},
@@ -160,7 +160,7 @@ int fgetc(FILE *f) {
             if (f->buffer_offset >= f->buffer_size) {
                 f->buffer_offset = 0;
                 ReceiveMessage reply = {f->buffer_capacity, f->buffer, 0, NULL};
-                err = channel_call_bounded(
+                err = channel_call_read(
                     f->channel,
                     &(SendMessage){1, &(SendMessageData){sizeof(size_t), &f->buffer_capacity}, 0, NULL},
                     &reply,

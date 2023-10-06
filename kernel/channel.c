@@ -551,16 +551,27 @@ err_t syscall_message_get_length(handle_t i, MessageLength *length) {
     return 0;
 }
 
-// Reads the message data starting at a given offset into the provided userspace buffer
-err_t syscall_message_read(handle_t i, ReceiveMessage *user_message, const MessageLength *offset) {
+// Read the contents of a message into a buffer starting at a given offset
+// If the message size is outside of the given bounds, it instead replies with a given error code
+// and returns either ERR_KERNEL_MESSAGE_TOO_SHORT or ERR_KERNEL_MESSAGE_TOO_LONG.
+// If the error code is 0, does not reply.
+// The flags FLAG_ALLOW_PARTIAL_DATA_READ and FLAG_ALLOW_PARTIAL_HANDLES_READ disable this behavior
+// when the data or handles upper bounds are exceeded.
+err_t syscall_message_read(handle_t i, ReceiveMessage *user_message, const MessageLength *offset, const MessageLength *min_length, err_t reply_error, u64 flags) {
     err_t err;
     Handle handle;
+    // Verify flags are valid
+    if (flags & ~(FLAG_ALLOW_PARTIAL_DATA_READ | FLAG_ALLOW_PARTIAL_HANDLES_READ))
+        return ERR_KERNEL_INVALID_ARG;
     // Get the message from handle
     err = handle_get(&cpu_local->current_process->handles, i, &handle);
     if (err)
         return err;
     if (handle.type != HANDLE_TYPE_MESSAGE)
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
+    // Check provided error code is not reserved
+    if (reply_error >= ERR_KERNEL_MIN)
+        return ERR_KERNEL_INVALID_ARG;
     // Verify buffers are valid
     err = verify_user_receive_message(user_message);
     if (err)
@@ -570,8 +581,34 @@ err_t syscall_message_read(handle_t i, ReceiveMessage *user_message, const Messa
         if (err)
             return err;
     }
-    // Copy the data
-    return message_read_user(handle.message, user_message, offset, false);
+    if (min_length != NULL) {
+        err = verify_user_buffer(min_length, sizeof(MessageLength), false);
+        if (err)
+            return err;
+    }
+    // Perform bounds check
+    size_t data_length = handle.message != NULL ? handle.message->data_size : 0;
+    size_t handles_length = handle.message != NULL ? handle.message->handles_size : 0;
+    MessageLength zero_offset = {0, 0};
+    if (offset == NULL)
+        offset = &zero_offset;
+    err_t range_err = 0;
+    if (data_length < (min_length ? min_length->data : user_message->data_length) + offset->data)
+        range_err = ERR_KERNEL_MESSAGE_DATA_TOO_SHORT;
+    else if (data_length > user_message->data_length + offset->data && !(flags & FLAG_ALLOW_PARTIAL_DATA_READ))
+        range_err = ERR_KERNEL_MESSAGE_DATA_TOO_LONG;
+    else if (handles_length < (min_length ? min_length->handles : user_message->handles_length) + offset->handles)
+        range_err = ERR_KERNEL_MESSAGE_HANDLES_TOO_SHORT;
+    else if (handles_length > user_message->handles_length + offset->handles && !(flags & FLAG_ALLOW_PARTIAL_HANDLES_READ))
+        range_err = ERR_KERNEL_MESSAGE_HANDLES_TOO_LONG;
+    if (range_err != 0) {
+        if (reply_error != 0)
+            message_reply_error(handle.message, reply_error);
+        handle_clear(&cpu_local->current_process->handles, i, true);
+        return range_err;
+    }
+    // Copy the message data
+    return message_read_user(handle.message, user_message, offset, true);
 }
 
 // Send a message on a channel
@@ -721,87 +758,9 @@ err_t syscall_message_reply_error(handle_t message_i, err_t error) {
     return 0;
 }
 
-// Read the contents of a message with bounds checking
-// Functions like message_read(), but if the message size is outside of the given bounds it instead replies with a given error code
-// and returns either ERR_KERNEL_MESSAGE_TOO_SHORT or ERR_KERNEL_MESSAGE_TOO_LONG.
-// If `errors` is NULL, does not reply.
-err_t syscall_message_read_bounded(handle_t i, ReceiveMessage *user_message, const MessageLength *offset, const MessageLength *min_length, const ErrorReplies *errors, u64 flags) {
-    err_t err;
-    Handle handle;
-    // Verify flags are valid
-    if (flags & ~FLAG_ALLOW_PARTIAL_READ)
-        return ERR_KERNEL_INVALID_ARG;
-    // Get the message from handle
-    err = handle_get(&cpu_local->current_process->handles, i, &handle);
-    if (err)
-        return err;
-    if (handle.type != HANDLE_TYPE_MESSAGE)
-        return ERR_KERNEL_WRONG_HANDLE_TYPE;
-    // Verify buffers are valid
-    err = verify_user_receive_message(user_message);
-    if (err)
-        return err;
-    if (offset != NULL) {
-        err = verify_user_buffer(offset, sizeof(MessageLength), false);
-        if (err)
-            return err;
-    }
-    if (min_length != NULL) {
-        err = verify_user_buffer(min_length, sizeof(MessageLength), false);
-        if (err)
-            return err;
-    }
-    if (errors != NULL) {
-        err = verify_user_buffer(errors, sizeof(ErrorReplies), false);
-        if (err)
-            return err;
-    }
-    // Check provided error codes are not reserved or zero
-    if (
-        errors != NULL && (
-            errors->data_low >= ERR_KERNEL_MIN || errors->data_high >= ERR_KERNEL_MIN ||
-            errors->handles_low >= ERR_KERNEL_MIN || errors->handles_high >= ERR_KERNEL_MIN
-        )
-    ) {
-        return ERR_KERNEL_INVALID_ARG;
-    }
-    // Perform bounds check
-    size_t data_length = handle.message != NULL ? handle.message->data_size : 0;
-    size_t handles_length = handle.message != NULL ? handle.message->handles_size : 0;
-    MessageLength zero_offset = {0, 0};
-    if (offset == NULL)
-        offset = &zero_offset;
-    if (data_length < (min_length ? min_length->data : user_message->data_length) + offset->data) {
-        if (errors != NULL && errors->data_low != 0)
-            message_reply_error(handle.message, errors->data_low);
-        handle_clear(&cpu_local->current_process->handles, i, true);
-        return ERR_KERNEL_MESSAGE_DATA_TOO_SHORT;
-    }
-    if (data_length > user_message->data_length + offset->data && !(flags & FLAG_ALLOW_PARTIAL_READ)) {
-        if (errors != NULL && errors->data_high != 0)
-            message_reply_error(handle.message, errors->data_high);
-        handle_clear(&cpu_local->current_process->handles, i, true);
-        return ERR_KERNEL_MESSAGE_DATA_TOO_LONG;
-    }
-    if (handles_length < (min_length ? min_length->handles : user_message->handles_length) + offset->handles) {
-        if (errors != NULL && errors->handles_low != 0)
-            message_reply_error(handle.message, errors->handles_low);
-        handle_clear(&cpu_local->current_process->handles, i, true);
-        return ERR_KERNEL_MESSAGE_HANDLES_TOO_SHORT;
-    }
-    if (handles_length > user_message->handles_length + offset->handles && !(flags & FLAG_ALLOW_PARTIAL_READ)) {
-        if (errors != NULL && errors->handles_high != 0)
-            message_reply_error(handle.message, errors->handles_high);
-        handle_clear(&cpu_local->current_process->handles, i, true);
-        return ERR_KERNEL_MESSAGE_HANDLES_TOO_LONG;
-    }
-    // Copy the message data
-    return message_read_user(handle.message, user_message, offset, true);
-}
-
 // Send a message on a channel, wait for a reply and check its size against the given bounds
-// Functions similar to channel_call() followed by reply_read_bounded() and handle_free()
-err_t syscall_channel_call_bounded(handle_t channel_i, const SendMessage *user_message, ReceiveMessage *user_reply, const MessageLength *min_length) {
+// Functions similar to channel_call() followed by reply_read() and handle_free()
+err_t syscall_channel_call_read(handle_t channel_i, const SendMessage *user_message, ReceiveMessage *user_reply, const MessageLength *min_length) {
     err_t err;
     Handle channel_handle;
     // Verify buffers are valid

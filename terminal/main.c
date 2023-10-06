@@ -290,7 +290,7 @@ void main(void) {
     err = resource_get(&resource_name("video/data"), RESOURCE_TYPE_CHANNEL_SEND, &video_data_channel);
     if (err)
         return;
-    err = channel_call_bounded(video_size_channel, NULL, &(ReceiveMessage){sizeof(ScreenSize), &screen_size, 0, NULL}, NULL);
+    err = channel_call_read(video_size_channel, NULL, &(ReceiveMessage){sizeof(ScreenSize), &screen_size, 0, NULL}, NULL);
     if (err)
         return;
     handle_t event_mqueue;
@@ -340,7 +340,7 @@ void main(void) {
         switch (event_source) {
         case EVENT_KEYBOARD: {
             KeyEvent key_event;
-            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, ERR_INVALID_ARG, 0);
             if (err)
                 continue;
             handle_free(msg);
@@ -379,7 +379,7 @@ void main(void) {
         }
         case EVENT_RESIZE: {
             ScreenSize new_screen_size;
-            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(ScreenSize), &new_screen_size, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(ScreenSize), &new_screen_size, 0, NULL}, NULL, NULL, ERR_INVALID_ARG, 0);
             if (err)
                 continue;
             handle_free(msg);
@@ -431,7 +431,7 @@ void main(void) {
             }
             for (size_t i = 0; i <= message_length.data / OUTPUT_READ_BUFFER_SIZE; i++) {
                 size_t read_size = i < message_length.data / OUTPUT_READ_BUFFER_SIZE ? OUTPUT_READ_BUFFER_SIZE : message_length.data % OUTPUT_READ_BUFFER_SIZE;
-                message_read(msg, &(ReceiveMessage){read_size, output_read_buffer, 0, NULL}, &(MessageLength){OUTPUT_READ_BUFFER_SIZE * i, 0});
+                message_read(msg, &(ReceiveMessage){read_size, output_read_buffer, 0, NULL}, &(MessageLength){OUTPUT_READ_BUFFER_SIZE * i, 0}, &(MessageLength){0, 0}, 0, FLAG_ALLOW_PARTIAL_DATA_READ);
                 for (size_t j = 0; j < read_size; j++)
                     print_char(output_read_buffer[j], event_source == EVENT_STDERR ? TEXT_COLOR_STDERR : TEXT_COLOR_STDOUT);
             }
@@ -441,7 +441,7 @@ void main(void) {
         case EVENT_STDIN:
             if (waiting_for_stdin)
                 message_reply_error(msg, ERR_INVALID_OPERATION);
-            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(size_t), &stdin_bytes_requested, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(size_t), &stdin_bytes_requested, 0, NULL}, NULL, NULL, ERR_INVALID_ARG, 0);
             if (err)
                 continue;
             if (stdin_bytes_requested == 0) {

@@ -59,7 +59,7 @@ void main(void) {
     err = resource_get(&resource_name("video/data"), RESOURCE_TYPE_CHANNEL_SEND, &video_data_channel);
     if (err)
         return;
-    err = channel_call_bounded(video_size_channel, NULL, &(ReceiveMessage){sizeof(ScreenSize), &screen_size, 0, NULL}, NULL);
+    err = channel_call_read(video_size_channel, NULL, &(ReceiveMessage){sizeof(ScreenSize), &screen_size, 0, NULL}, NULL);
     if (err)
         return;
     handle_t event_mqueue;
@@ -94,7 +94,7 @@ void main(void) {
         switch (tag.data[0]) {
         case 1: {
             KeyEvent key_event;
-            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, ERR_INVALID_ARG, 0);
             if (err)
                 continue;
             handle_free(msg);
@@ -105,7 +105,7 @@ void main(void) {
         }
         case 2: {
             MouseUpdate mouse_update;
-            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(MouseUpdate), &mouse_update, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(MouseUpdate), &mouse_update, 0, NULL}, NULL, NULL, ERR_INVALID_ARG, 0);
             if (err)
                 continue;
             handle_free(msg);
@@ -116,7 +116,7 @@ void main(void) {
         }
         case 3: {
             ScreenSize new_screen_size;
-            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(ScreenSize), &new_screen_size, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(ScreenSize), &new_screen_size, 0, NULL}, NULL, NULL, ERR_INVALID_ARG, 0);
             if (err)
                 continue;
             handle_free(msg);

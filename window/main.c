@@ -670,7 +670,7 @@ void main(void) {
         return;
     mqueue_add_channel(event_queue, keyboard_data_channel, (MessageTag){EVENT_KEYBOARD_DATA, 0});
     mqueue_add_channel(event_queue, mouse_data_channel, (MessageTag){EVENT_MOUSE_DATA, 0});
-    err = channel_call_bounded(video_size_channel, NULL, &(ReceiveMessage){sizeof(ScreenSize), &screen_size, 0, NULL}, NULL);
+    err = channel_call_read(video_size_channel, NULL, &(ReceiveMessage){sizeof(ScreenSize), &screen_size, 0, NULL}, NULL);
     if (err)
         return;
     cursor.x = screen_size.width / 2;
@@ -691,7 +691,7 @@ void main(void) {
         case EVENT_KEYBOARD_DATA: {
             // Read key event
             KeyEvent key_event;
-            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, ERR_INVALID_ARG, 0);
             if (err)
                 continue;
             handle_free(msg);
@@ -793,7 +793,7 @@ void main(void) {
         case EVENT_MOUSE_DATA: {
             // Read mouse update
             MouseUpdate mouse_update;
-            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(MouseUpdate), &mouse_update, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(MouseUpdate), &mouse_update, 0, NULL}, NULL, NULL, ERR_INVALID_ARG, 0);
             if (err)
                 continue;
             handle_free(msg);
@@ -828,7 +828,7 @@ void main(void) {
         case EVENT_VIDEO_SIZE: {
             ScreenSize window_size;
             get_window_size((WindowContainer *)tag.data[1], &window_size);
-            err = message_read_bounded(msg, &(ReceiveMessage){0, NULL, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), 0);
+            err = message_read(msg, &(ReceiveMessage){0, NULL, 0, NULL}, NULL, NULL, ERR_INVALID_ARG, 0);
             if (err)
                 continue;
             message_reply(msg, &(SendMessage){1, &(SendMessageData){sizeof(ScreenSize), &window_size}, 0, NULL});
@@ -840,7 +840,7 @@ void main(void) {
             get_window_size(window, &window_size);
             // Get the dimensions of the received buffer
             ScreenSize video_buffer_size;
-            err = message_read_bounded(msg, &(ReceiveMessage){sizeof(ScreenSize), &video_buffer_size, 0, NULL}, NULL, NULL, &error_replies(ERR_INVALID_ARG), FLAG_ALLOW_PARTIAL_READ);
+            err = message_read(msg, &(ReceiveMessage){sizeof(ScreenSize), &video_buffer_size, 0, NULL}, NULL, NULL, ERR_INVALID_ARG, FLAG_ALLOW_PARTIAL_DATA_READ);
             if (err)
                 continue;
             // Extend the window buffer if necessary
@@ -859,7 +859,7 @@ void main(void) {
             }
             window->video_buffer_size = video_buffer_size;
             // Read the video data
-            err = message_read_bounded(msg, &(ReceiveMessage){window_data_size, window->video_buffer, 0, NULL}, &(MessageLength){sizeof(ScreenSize), 0}, NULL, &error_replies(ERR_INVALID_ARG), 0);
+            err = message_read(msg, &(ReceiveMessage){window_data_size, window->video_buffer, 0, NULL}, &(MessageLength){sizeof(ScreenSize), 0}, NULL, ERR_INVALID_ARG, 0);
             if (err)
                 continue;
             handle_free(msg);
