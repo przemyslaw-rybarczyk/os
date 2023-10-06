@@ -130,6 +130,18 @@ static err_t message_alloc_user(const SendMessage *user_message, Message **messa
         free(data);
         return ERR_KERNEL_NO_MEMORY;
     }
+    // Allocate the message
+    Message *message = malloc(sizeof(Message));
+    if (message == NULL) {
+        free(handles);
+        free(data);
+        return ERR_KERNEL_NO_MEMORY;
+    }
+    memset(message, 0, sizeof(Message));
+    message->data_size = data_length;
+    message->data = data;
+    message->handles_size = handles_length;
+    message->handles = handles;
     // Copy the handles
     size_t handles_offset = 0;
     for (size_t buffer_i = 0; buffer_i < user_message->handles_buffers_num; buffer_i++) {
@@ -162,18 +174,25 @@ static err_t message_alloc_user(const SendMessage *user_message, Message **messa
                 err = ERR_KERNEL_WRONG_HANDLE_TYPE;
                 goto fail;
             }
-            // Remove the original handle if move flag is set
-            if (buffer->handles[handle_i].flags & ATTACHED_HANDLE_FLAG_MOVE)
-                handle_clear(&cpu_local->current_process->handles, buffer->handles[handle_i].handle_i, false);
             continue;
 fail:
             for (size_t j = 0; j < handles_offset + handle_i; j++)
                 attached_handle_free(handles[j]);
+            free(message);
             free(handles);
             free(data);
             return err;
         }
         handles_offset += buffer->length;
+    }
+    // Remove the handles for which move flag is set
+    for (size_t buffer_i = 0; buffer_i < user_message->handles_buffers_num; buffer_i++) {
+        const SendMessageHandles *buffer = &user_message->handles_buffers[buffer_i];
+        for (size_t handle_i = 0; handle_i < buffer->length; handle_i++) {
+            if (buffer->handles[handle_i].flags & ATTACHED_HANDLE_FLAG_MOVE) {
+                handle_clear(&cpu_local->current_process->handles, buffer->handles[handle_i].handle_i, false);
+            }
+        }
     }
     // Copy the data
     size_t data_offset = 0;
@@ -181,18 +200,6 @@ fail:
         memcpy(data + data_offset, user_message->data_buffers[i].data, user_message->data_buffers[i].length);
         data_offset += user_message->data_buffers[i].length;
     }
-    // Allocate the message
-    Message *message = malloc(sizeof(Message));
-    if (message == NULL) {
-        free(handles);
-        free(data);
-        return ERR_KERNEL_NO_MEMORY;
-    }
-    memset(message, 0, sizeof(Message));
-    message->data_size = data_length;
-    message->data = data;
-    message->handles_size = handles_length;
-    message->handles = handles;
     *message_ptr = message;
     return 0;
 }
