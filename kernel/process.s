@@ -22,6 +22,7 @@ extern page_free
 extern free
 extern stack_free
 extern idle_page_map
+extern message_reply
 extern message_free
 
 struc Process
@@ -280,6 +281,9 @@ process_start:
   mov rdi, [rsp + 8]
   test rdi, rdi
   jz .no_message
+  mov rsi, 0
+  call message_reply
+  mov rdi, [rsp + 8]
   call message_free
 .no_message:
   ; Get process entry point

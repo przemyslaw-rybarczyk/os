@@ -346,6 +346,7 @@ _Noreturn void process_spawn_kernel_thread_main(void) {
         err = process_create(&process, (ResourceList){message->handles_size, resources});
         if (err) {
             message_reply_error(message, user_error_code(err));
+            message_free(message);
             resource_list_free(&(ResourceList){message->handles_size, resources});
             continue;
         }

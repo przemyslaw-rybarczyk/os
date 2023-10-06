@@ -180,12 +180,12 @@ static WindowContainer *create_window(void) {
         {ATTACHED_HANDLE_FLAG_MOVE, text_stderr_out},
         {ATTACHED_HANDLE_FLAG_MOVE, text_stdin_out},
     };
-    err = channel_send(process_spawn_channel, &(SendMessage){
+    err = channel_call(process_spawn_channel, &(SendMessage){
         2, (SendMessageData[]){
             {sizeof(program1_resource_names), program1_resource_names},
             {included_file_program1_end - included_file_program1, included_file_program1}},
         1, &(SendMessageHandles){sizeof(program1_resource_handles) / sizeof(program1_resource_handles[0]), program1_resource_handles}
-    }, 0);
+    }, NULL);
     if (err)
         goto fail_process_spawn;
     // Spawn process running in terminal
@@ -199,12 +199,12 @@ static WindowContainer *create_window(void) {
         {ATTACHED_HANDLE_FLAG_MOVE, text_stderr_in},
         {ATTACHED_HANDLE_FLAG_MOVE, text_stdin_in},
     };
-    err = channel_send(process_spawn_channel, &(SendMessage){
+    err = channel_call(process_spawn_channel, &(SendMessage){
         2, (SendMessageData[]){
             {sizeof(program2_resource_names), program2_resource_names},
             {included_file_program2_end - included_file_program2, included_file_program2}},
         1, &(SendMessageHandles){sizeof(program2_resource_handles) / sizeof(program2_resource_handles[0]), program2_resource_handles}
-    }, 0);
+    }, NULL);
     if (err)
         goto fail_process_spawn;
     // Attach channels to event queue
