@@ -16,6 +16,7 @@ typedef enum HandleType {
 typedef struct Handle {
     HandleType type;
     union {
+        size_t next_free_handle;
         Message *message;
         Channel *channel;
         MessageQueue *mqueue;
@@ -26,6 +27,8 @@ typedef struct HandleList {
     size_t length;
     Handle *handles;
     size_t free_handles;
+    // The free handles form a linked list - this is the index of its start
+    size_t first_free_handle;
 } HandleList;
 
 err_t handle_list_init(HandleList *list);

@@ -7,6 +7,9 @@
 
 #define HANDLE_LIST_DEFAULT_LENGTH 8
 
+// Special value for first_free_handle and next_free_handle - indicates no free handles are available
+#define NO_NEXT_HANDLE SIZE_MAX
+
 static void handle_free(Handle handle) {
     switch (handle.type) {
     case HANDLE_TYPE_EMPTY:
@@ -35,7 +38,10 @@ err_t handle_list_init(HandleList *list) {
     list->handles = malloc(list->length * sizeof(Handle));
     if (list->handles == NULL)
         return ERR_KERNEL_NO_MEMORY;
-    memset(list->handles, 0, list->length * sizeof(Handle));
+    for (size_t i = 0; i < list->length - 1; i++)
+        list->handles[i] = (Handle){HANDLE_TYPE_EMPTY, .next_free_handle = i + 1};
+    list->handles[list->length - 1] = (Handle){HANDLE_TYPE_EMPTY, .next_free_handle = NO_NEXT_HANDLE};
+    list->first_free_handle = 0;
     return 0;
 }
 
@@ -53,7 +59,8 @@ void handle_clear(HandleList *list, handle_t i, bool free) {
         return;
     if (free)
         handle_free(list->handles[i]);
-    list->handles[i].type = HANDLE_TYPE_EMPTY;
+    list->handles[i] = (Handle){HANDLE_TYPE_EMPTY, .next_free_handle = list->first_free_handle};
+    list->first_free_handle = i;
     list->free_handles += 1;
 }
 
@@ -62,7 +69,10 @@ static err_t handle_list_extend(HandleList *list, size_t new_length) {
     Handle *new_handles = realloc(list->handles, new_length * sizeof(Handle));
     if (new_handles == NULL)
         return ERR_KERNEL_NO_MEMORY;
-    memset(new_handles + list->length, 0, (new_length - list->length) * sizeof(Handle));
+    for (size_t i = list->length; i < new_length - 1; i++)
+        new_handles[i] = (Handle){HANDLE_TYPE_EMPTY, .next_free_handle = i + 1};
+    new_handles[new_length - 1] = (Handle){HANDLE_TYPE_EMPTY, .next_free_handle = list->first_free_handle};
+    list->first_free_handle = list->length;
     list->free_handles += new_length - list->length;
     list->length = new_length;
     list->handles = new_handles;
@@ -73,18 +83,20 @@ static err_t handle_list_extend(HandleList *list, size_t new_length) {
 err_t handle_add(HandleList *list, Handle handle, handle_t *i_ptr) {
     err_t err;
     // Search for the first empty slot
-    for (handle_t i = 0; i < list->length; i++) {
-        if (list->handles[i].type == HANDLE_TYPE_EMPTY) {
-            list->handles[i] = handle;
-            *i_ptr = i;
-            return 0;
-        }
+    if (list->first_free_handle != NO_NEXT_HANDLE) {
+        size_t i = list->first_free_handle;
+        list->first_free_handle = list->handles[i].next_free_handle;
+        list->free_handles -= 1;
+        list->handles[i] = handle;
+        *i_ptr = i;
+        return 0;
     }
     // If there are none, extend the list
-    handle_t i = list->length;
     err = handle_list_extend(list, 2 * list->length);
     if (err)
         return err;
+    size_t i = list->first_free_handle;
+    list->first_free_handle = list->handles[i].next_free_handle;
     list->free_handles -= 1;
     list->handles[i] = handle;
     *i_ptr = i;
