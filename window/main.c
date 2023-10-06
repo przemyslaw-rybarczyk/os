@@ -11,6 +11,36 @@
 
 #include "included_programs.h"
 
+#define CURSOR_WIDTH 12
+#define CURSOR_HEIGHT 19
+
+// Each element represents one line of the cursor.
+// Two bits represent one pixel - more significant bits are on the left.
+// 00/01 - transparency
+// 10 - contour
+// 11 - inside
+static u32 cursor_image[CURSOR_HEIGHT] = {
+    0x80000000,
+    0xA0000000,
+    0xB8000000,
+    0xBE000000,
+    0xBF800000,
+    0xBFE00000,
+    0xBFF80000,
+    0xBFFE0000,
+    0xBFFF8000,
+    0xBFFFE000,
+    0xBFFFF800,
+    0xBFFFFE00,
+    0xBFFEAA00,
+    0xBFBE0000,
+    0xBE2F8000,
+    0xB82F8000,
+    0xA00BE000,
+    0x000BE000,
+    0x00028000,
+};
+
 typedef enum EventSource : uintptr_t {
     EVENT_KEYBOARD_DATA,
     EVENT_MOUSE_DATA,
@@ -90,7 +120,6 @@ static const u8 border_color_unfocused[3] = {0xB0, 0x90, 0xFF};
 static const u8 border_color_focused[3] = {0x70, 0x50, 0xFF};
 
 #define BORDER_THICKNESS 3
-#define CURSOR_SIZE 5
 #define RESIZE_PIXELS 5
 
 typedef enum Direction {
@@ -613,18 +642,17 @@ static void draw_container(const Container *container, u32 origin_x, u32 origin_
 
 // Draw the screen
 static void draw_screen(void) {
-    if (root_container == NULL) {
+    // Draw the root container to the screen buffer if the is one, otherwise fill the screen with a gray background
+    if (root_container == NULL)
         memset(screen_buffer, 0x30, 3 * screen_size.width * screen_size.height);
-    } else {
-        // Draw the root container to the screen buffer
+    else
         draw_container(root_container, 0, 0, screen_size.width, screen_size.height);
-        // Draw the cursor
-        for (size_t x = 0; x < CURSOR_SIZE; x++) {
-            for (size_t y = 0; y < CURSOR_SIZE; y++) {
-                if (cursor.x + x < screen_size.width && cursor.y + y < screen_size.height && x + y < CURSOR_SIZE) {
-                    for (size_t i = 0; i < 3; i++) {
-                        screen_buffer[3 * (screen_size.width * (cursor.y + y) + cursor.x + x) + i] = 0;
-                    }
+    // Draw the cursor
+    for (size_t y = 0; y < CURSOR_HEIGHT; y++) {
+        for (size_t x = 0; x < CURSOR_WIDTH; x++) {
+            if (cursor.x + x < screen_size.width && cursor.y + y < screen_size.height && ((cursor_image[y] << (2 * x)) & 0x80000000)) {
+                for (size_t i = 0; i < 3; i++) {
+                    screen_buffer[3 * (screen_size.width * (cursor.y + y) + cursor.x + x) + i] = (cursor_image[y] << (2 * x + 1)) & 0x80000000 ? 0x00 : 0xFF;
                 }
             }
         }
