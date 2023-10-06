@@ -231,7 +231,6 @@ _Noreturn void framebuffer_kernel_thread_main(void) {
         case FB_MQ_TAG_DATA: {
             // Check message size
             if (message->data_size != fb_height * fb_width * 3 || message->handles_size != 0) {
-                message_reply_error(message, ERR_INVALID_ARG);
                 message_free(message);
                 continue;
             }

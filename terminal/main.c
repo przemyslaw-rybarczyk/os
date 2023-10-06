@@ -273,7 +273,7 @@ static void draw_screen(void) {
         }
     }
     // Send screen buffer
-    channel_send(video_data_channel, &(SendMessage){2, (SendMessageData[]){{sizeof(ScreenSize), &screen_size}, {screen_bytes, screen}}, 0, NULL}, 0);
+    channel_send(video_data_channel, &(SendMessage){2, (SendMessageData[]){{sizeof(ScreenSize), &screen_size}, {screen_bytes, screen}}, 0, NULL}, FLAG_NONBLOCK);
 }
 
 typedef enum ModKeys : u32 {
@@ -340,7 +340,7 @@ void main(void) {
         switch (event_source) {
         case EVENT_KEYBOARD: {
             KeyEvent key_event;
-            err = message_read(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, ERR_INVALID_ARG, 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, 0, 0);
             if (err)
                 continue;
             handle_free(msg);
@@ -379,7 +379,7 @@ void main(void) {
         }
         case EVENT_RESIZE: {
             ScreenSize new_screen_size;
-            err = message_read(msg, &(ReceiveMessage){sizeof(ScreenSize), &new_screen_size, 0, NULL}, NULL, NULL, ERR_INVALID_ARG, 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(ScreenSize), &new_screen_size, 0, NULL}, NULL, NULL, 0, 0);
             if (err)
                 continue;
             handle_free(msg);

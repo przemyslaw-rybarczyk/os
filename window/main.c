@@ -691,7 +691,7 @@ void main(void) {
         case EVENT_KEYBOARD_DATA: {
             // Read key event
             KeyEvent key_event;
-            err = message_read(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, ERR_INVALID_ARG, 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, 0, 0);
             if (err)
                 continue;
             handle_free(msg);
@@ -793,7 +793,7 @@ void main(void) {
         case EVENT_MOUSE_DATA: {
             // Read mouse update
             MouseUpdate mouse_update;
-            err = message_read(msg, &(ReceiveMessage){sizeof(MouseUpdate), &mouse_update, 0, NULL}, NULL, NULL, ERR_INVALID_ARG, 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(MouseUpdate), &mouse_update, 0, NULL}, NULL, NULL, 0, 0);
             if (err)
                 continue;
             handle_free(msg);
@@ -840,7 +840,7 @@ void main(void) {
             get_window_size(window, &window_size);
             // Get the dimensions of the received buffer
             ScreenSize video_buffer_size;
-            err = message_read(msg, &(ReceiveMessage){sizeof(ScreenSize), &video_buffer_size, 0, NULL}, NULL, NULL, ERR_INVALID_ARG, FLAG_ALLOW_PARTIAL_DATA_READ);
+            err = message_read(msg, &(ReceiveMessage){sizeof(ScreenSize), &video_buffer_size, 0, NULL}, NULL, NULL, 0, FLAG_ALLOW_PARTIAL_DATA_READ);
             if (err)
                 continue;
             // Extend the window buffer if necessary
@@ -859,7 +859,7 @@ void main(void) {
             }
             window->video_buffer_size = video_buffer_size;
             // Read the video data
-            err = message_read(msg, &(ReceiveMessage){window_data_size, window->video_buffer, 0, NULL}, &(MessageLength){sizeof(ScreenSize), 0}, NULL, ERR_INVALID_ARG, 0);
+            err = message_read(msg, &(ReceiveMessage){window_data_size, window->video_buffer, 0, NULL}, &(MessageLength){sizeof(ScreenSize), 0}, NULL, 0, 0);
             if (err)
                 continue;
             handle_free(msg);
