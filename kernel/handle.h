@@ -30,7 +30,7 @@ typedef struct HandleList {
 
 err_t handle_list_init(HandleList *list);
 void handle_list_free(HandleList *list);
-void handle_clear(HandleList *list, handle_t i);
+void handle_clear(HandleList *list, handle_t i, bool free);
 err_t handle_add(HandleList *list, Handle handle, handle_t *i_ptr);
 err_t handle_get(HandleList *list, handle_t i, Handle *handle);
 err_t handle_set(HandleList *list, handle_t i, Handle handle);

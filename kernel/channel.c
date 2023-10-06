@@ -26,6 +26,7 @@ typedef struct MessageQueue {
 typedef struct Channel {
     spinlock_t lock;
     size_t refcount;
+    bool closed;
     MessageQueue *queue;
     MessageTag tag;
     ProcessQueue blocked_senders;
@@ -146,7 +147,8 @@ static err_t message_alloc_user(const SendMessage *user_message, Message **messa
                 goto fail;
             switch (handle.type) {
             case HANDLE_TYPE_CHANNEL_SEND:
-                channel_add_ref(handle.channel);
+                if (!(buffer->handles[handle_i].flags & ATTACHED_HANDLE_FLAG_MOVE))
+                    channel_add_ref(handle.channel);
                 handles[handles_offset + handle_i] = (AttachedHandle){ATTACHED_HANDLE_TYPE_CHANNEL_SEND, {.channel = handle.channel}};
                 break;
             case HANDLE_TYPE_CHANNEL_RECEIVE:
@@ -154,7 +156,6 @@ static err_t message_alloc_user(const SendMessage *user_message, Message **messa
                     err = ERR_KERNEL_UNCOPIEABLE_HANDLE_TYPE;
                     goto fail;
                 }
-                channel_add_ref(handle.channel);
                 handles[handles_offset + handle_i] = (AttachedHandle){ATTACHED_HANDLE_TYPE_CHANNEL_RECEIVE, {.channel = handle.channel}};
                 break;
             default:
@@ -163,9 +164,9 @@ static err_t message_alloc_user(const SendMessage *user_message, Message **messa
             }
             // Remove the original handle if move flag is set
             if (buffer->handles[handle_i].flags & ATTACHED_HANDLE_FLAG_MOVE)
-                handle_clear(&cpu_local->current_process->handles, buffer->handles[handle_i].handle_i);
+                handle_clear(&cpu_local->current_process->handles, buffer->handles[handle_i].handle_i, false);
             continue;
-    fail:
+fail:
             for (size_t j = 0; j < handles_offset + handle_i; j++)
                 attached_handle_free(handles[j]);
             free(handles);
@@ -443,6 +444,13 @@ void channel_del_ref(Channel *channel) {
     }
 }
 
+// Close a channel
+void channel_close(Channel *channel) {
+    spinlock_acquire(&channel->lock);
+    channel->closed = true;
+    spinlock_release(&channel->lock);
+}
+
 // Set the channel's message queue and tag
 err_t channel_set_mqueue(Channel *channel, MessageQueue *mqueue, MessageTag tag) {
     spinlock_acquire(&channel->lock);
@@ -463,6 +471,11 @@ err_t channel_set_mqueue(Channel *channel, MessageQueue *mqueue, MessageTag tag)
 // This is the common part of channel_send() and channel_call().
 static err_t channel_prepare_for_send(Channel *channel, Message *message, MessageQueue **queue, bool nonblock) {
     spinlock_acquire(&channel->lock);
+    // Fail if the channel has been closed
+    if (channel->closed) {
+        spinlock_release(&channel->lock);
+        return ERR_KERNEL_CHANNEL_CLOSED;
+    }
     // Block if the channel has no assigned queue
     if (channel->queue == NULL) {
         if (nonblock) {
@@ -668,7 +681,7 @@ err_t syscall_message_reply(handle_t message_i, const SendMessage *user_reply) {
     // Send the reply
     message_reply(message_handle.message, reply);
     // Free message and handle
-    handle_clear(&cpu_local->current_process->handles, message_i);
+    handle_clear(&cpu_local->current_process->handles, message_i, true);
     return 0;
 }
 
@@ -687,7 +700,7 @@ err_t syscall_message_reply_error(handle_t message_i, err_t error) {
     // Send the error
     message_reply_error(message_handle.message, error);
     // Free message and handle
-    handle_clear(&cpu_local->current_process->handles, message_i);
+    handle_clear(&cpu_local->current_process->handles, message_i, true);
     return 0;
 }
 
@@ -744,25 +757,25 @@ err_t syscall_message_read_bounded(handle_t i, ReceiveMessage *user_message, con
     if (data_length < (min_length ? min_length->data : user_message->data_length) + offset->data) {
         if (errors != NULL && errors->data_low != 0)
             message_reply_error(handle.message, errors->data_low);
-        handle_clear(&cpu_local->current_process->handles, i);
+        handle_clear(&cpu_local->current_process->handles, i, true);
         return ERR_KERNEL_MESSAGE_DATA_TOO_SHORT;
     }
     if (data_length > user_message->data_length + offset->data && !(flags & FLAG_ALLOW_PARTIAL_READ)) {
         if (errors != NULL && errors->data_high != 0)
             message_reply_error(handle.message, errors->data_high);
-        handle_clear(&cpu_local->current_process->handles, i);
+        handle_clear(&cpu_local->current_process->handles, i, true);
         return ERR_KERNEL_MESSAGE_DATA_TOO_LONG;
     }
     if (handles_length < (min_length ? min_length->handles : user_message->handles_length) + offset->handles) {
         if (errors != NULL && errors->handles_low != 0)
             message_reply_error(handle.message, errors->handles_low);
-        handle_clear(&cpu_local->current_process->handles, i);
+        handle_clear(&cpu_local->current_process->handles, i, true);
         return ERR_KERNEL_MESSAGE_HANDLES_TOO_SHORT;
     }
     if (handles_length > user_message->handles_length + offset->handles && !(flags & FLAG_ALLOW_PARTIAL_READ)) {
         if (errors != NULL && errors->handles_high != 0)
             message_reply_error(handle.message, errors->handles_high);
-        handle_clear(&cpu_local->current_process->handles, i);
+        handle_clear(&cpu_local->current_process->handles, i, true);
         return ERR_KERNEL_MESSAGE_HANDLES_TOO_LONG;
     }
     // Copy the message data
@@ -870,7 +883,8 @@ err_t syscall_mqueue_add_channel(handle_t mqueue_i, handle_t channel_i, MessageT
     if (err)
         return err;
     // Remove the channel handle
-    handle_clear(&cpu_local->current_process->handles, channel_i);
+    channel_del_ref(channel_handle.channel);
+    handle_clear(&cpu_local->current_process->handles, channel_i, false);
     return 0;
 }
 

@@ -42,6 +42,7 @@ err_t mqueue_receive(MessageQueue *queue, Message **message_ptr, bool nonblock);
 Channel *channel_alloc(void);
 void channel_add_ref(Channel *channel);
 void channel_del_ref(Channel *channel);
+void channel_close(Channel *channel);
 err_t channel_set_mqueue(Channel *channel, MessageQueue *mqueue, MessageTag tag);
 err_t channel_send(Channel *channel, Message *message, bool nonblock);
 err_t channel_call(Channel *channel, Message *message, Message **reply);

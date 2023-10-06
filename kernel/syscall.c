@@ -27,7 +27,7 @@ err_t syscall_process_yield(void) {
 }
 
 err_t syscall_handle_free(handle_t i) {
-    handle_clear(&cpu_local->current_process->handles, i);
+    handle_clear(&cpu_local->current_process->handles, i, true);
     return 0;
 }
 

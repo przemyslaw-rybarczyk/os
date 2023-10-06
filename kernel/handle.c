@@ -15,7 +15,10 @@ static void handle_free(Handle handle) {
         message_free(handle.message);
         break;
     case HANDLE_TYPE_CHANNEL_SEND:
+        channel_del_ref(handle.channel);
+        break;
     case HANDLE_TYPE_CHANNEL_RECEIVE:
+        channel_close(handle.channel);
         channel_del_ref(handle.channel);
         break;
     case HANDLE_TYPE_MESSAGE_QUEUE:
@@ -43,10 +46,13 @@ void handle_list_free(HandleList *list) {
     free(list->handles);
 }
 
-void handle_clear(HandleList *list, handle_t i) {
+// Clear a handle in a list
+// If `free` is set, frees the handle as well.
+void handle_clear(HandleList *list, handle_t i, bool free) {
     if (i >= list->length)
         return;
-    handle_free(list->handles[i]);
+    if (free)
+        handle_free(list->handles[i]);
     list->handles[i].type = HANDLE_TYPE_EMPTY;
     list->free_handles += 1;
 }

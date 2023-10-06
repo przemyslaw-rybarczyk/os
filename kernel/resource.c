@@ -14,7 +14,10 @@ static void resource_free(Resource resource) {
     case RESOURCE_TYPE_EMPTY:
         break;
     case RESOURCE_TYPE_CHANNEL_SEND:
+        channel_del_ref(resource.channel);
+        break;
     case RESOURCE_TYPE_CHANNEL_RECEIVE:
+        channel_close(resource.channel);
         channel_del_ref(resource.channel);
         break;
     }
