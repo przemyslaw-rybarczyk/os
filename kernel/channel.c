@@ -142,6 +142,35 @@ static err_t message_alloc_user(const SendMessage *user_message, Message **messa
     message->data = data;
     message->handles_size = handles_length;
     message->handles = handles;
+    // Verify the handles
+    for (size_t buffer_i = 0; buffer_i < user_message->handles_buffers_num; buffer_i++) {
+        const SendMessageHandles *buffer = &user_message->handles_buffers[buffer_i];
+        for (size_t handle_i = 0; handle_i < buffer->length; handle_i++) {
+            Handle handle;
+            err = handle_get(&cpu_local->current_process->handles, buffer->handles[handle_i].handle_i, &handle);
+            if (err)
+                goto fail;
+            switch (handle.type) {
+            case HANDLE_TYPE_CHANNEL_SEND:
+                break;
+            case HANDLE_TYPE_CHANNEL_RECEIVE:
+                if (!(buffer->handles[handle_i].flags & ATTACHED_HANDLE_FLAG_MOVE)) {
+                    err = ERR_KERNEL_UNCOPIEABLE_HANDLE_TYPE;
+                    goto fail;
+                }
+                break;
+            default:
+                err = ERR_KERNEL_WRONG_HANDLE_TYPE;
+                goto fail;
+            }
+            continue;
+fail:
+            free(message);
+            free(handles);
+            free(data);
+            return err;
+        }
+    }
     // Copy the handles
     size_t handles_offset = 0;
     for (size_t buffer_i = 0; buffer_i < user_message->handles_buffers_num; buffer_i++) {
@@ -164,35 +193,16 @@ static err_t message_alloc_user(const SendMessage *user_message, Message **messa
                 handles[handles_offset + handle_i] = (AttachedHandle){ATTACHED_HANDLE_TYPE_CHANNEL_SEND, {.channel = handle.channel}};
                 break;
             case HANDLE_TYPE_CHANNEL_RECEIVE:
-                if (!(buffer->handles[handle_i].flags & ATTACHED_HANDLE_FLAG_MOVE)) {
-                    err = ERR_KERNEL_UNCOPIEABLE_HANDLE_TYPE;
-                    goto fail;
-                }
                 handles[handles_offset + handle_i] = (AttachedHandle){ATTACHED_HANDLE_TYPE_CHANNEL_RECEIVE, {.channel = handle.channel}};
                 break;
             default:
-                err = ERR_KERNEL_WRONG_HANDLE_TYPE;
-                goto fail;
+                break;
             }
-            continue;
-fail:
-            for (size_t j = 0; j < handles_offset + handle_i; j++)
-                attached_handle_free(handles[j]);
-            free(message);
-            free(handles);
-            free(data);
-            return err;
+            // Remove the handle if move flag is set
+            if (buffer->handles[handle_i].flags & ATTACHED_HANDLE_FLAG_MOVE)
+                handle_clear(&cpu_local->current_process->handles, buffer->handles[handle_i].handle_i, false);
         }
         handles_offset += buffer->length;
-    }
-    // Remove the handles for which move flag is set
-    for (size_t buffer_i = 0; buffer_i < user_message->handles_buffers_num; buffer_i++) {
-        const SendMessageHandles *buffer = &user_message->handles_buffers[buffer_i];
-        for (size_t handle_i = 0; handle_i < buffer->length; handle_i++) {
-            if (buffer->handles[handle_i].flags & ATTACHED_HANDLE_FLAG_MOVE) {
-                handle_clear(&cpu_local->current_process->handles, buffer->handles[handle_i].handle_i, false);
-            }
-        }
     }
     // Copy the data
     size_t data_offset = 0;
