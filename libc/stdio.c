@@ -54,6 +54,15 @@ FILE *stdout = &stdout_file;
 FILE *stderr = &stderr_file;
 FILE *stdin = &stdin_file;
 
+// File with an empty buffer
+static FILE dummy_file = {
+    .type = FILE_BUFFER,
+    .mode = FILE_RW,
+    .buffer = NULL,
+    .buffer_size = 0,
+    .buffer_offset = 0,
+};
+
 static void create_buffer(FILE *f, BufferMode mode) {
     f->buffer_mode = mode;
     if (mode == _IONBF)
@@ -245,6 +254,13 @@ char *fgets(char *restrict s, int n, FILE *restrict f) {
 static void printf_char(FILE *file, size_t *offset, char c) {
     (*offset)++;
     fputc(c, file);
+}
+
+// Print enough padding to pad field of length `length` to fill `field_width` characters
+static void printf_padding(FILE *file, size_t *offset, size_t field_width, size_t length) {
+    if (length < field_width)
+        for (size_t i = 0; i < field_width - length; i++)
+            printf_char(file, offset, ' ');
 }
 
 // Print a null-terminated string
@@ -495,54 +511,109 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
             continue;
         }
         i++;
-        // Previous character was '%', so the next character is a conversion specifier
+        // Read field width
+        bool got_field_width = false;
+        size_t field_width = 0;
+        if (fmt[i] == '*') {
+            got_field_width = true;
+            field_width = (size_t)va_arg(args, int);
+            i++;
+        } else {
+            while ('0' <= fmt[i] && fmt[i] <= '9') {
+                got_field_width = true;
+                field_width = 10 * field_width + (fmt[i] - '0');
+                i++;
+            }
+        }
+        // Read the conversion specifier
         switch (fmt[i++]) {
         case '%':
+            if (got_field_width)
+                printf_padding(file, offset, field_width, 1);
             printf_char(file, offset, '%');
             break;
         case 'c': {
             int c = va_arg(args, int);
+            if (got_field_width)
+                printf_padding(file, offset, field_width, 1);
             printf_char(file, offset, (unsigned char)c);
             break;
         }
         case 's': {
             const char *s = va_arg(args, const char *);
+            if (got_field_width)
+                printf_padding(file, offset, field_width, strlen(s));
             printf_string(file, offset, s);
             break;
         }
         case 'd':
         case 'i': {
             int n = va_arg(args, int);
+            if (got_field_width) {
+                size_t length = 0;
+                printf_dec_signed(&dummy_file, &length, n);
+                printf_padding(file, offset, field_width, length);
+            }
             printf_dec_signed(file, offset, n);
             break;
         }
         case 'o': {
             unsigned int n = va_arg(args, unsigned int);
+            if (got_field_width) {
+                size_t length = 0;
+                printf_oct(&dummy_file, &length, n);
+                printf_padding(file, offset, field_width, length);
+            }
             printf_oct(file, offset, n);
             break;
         }
         case 'x': {
             unsigned int n = va_arg(args, unsigned int);
+            if (got_field_width) {
+                size_t length = 0;
+                printf_hex(&dummy_file, &length, n, false);
+                printf_padding(file, offset, field_width, length);
+            }
             printf_hex(file, offset, n, false);
             break;
         }
         case 'X': {
             unsigned int n = va_arg(args, unsigned int);
+            if (got_field_width) {
+                size_t length = 0;
+                printf_hex(&dummy_file, &length, n, true);
+                printf_padding(file, offset, field_width, length);
+            }
             printf_hex(file, offset, n, true);
             break;
         }
         case 'u': {
             unsigned int n = va_arg(args, unsigned int);
+            if (got_field_width) {
+                size_t length = 0;
+                printf_dec(&dummy_file, &length, n);
+                printf_padding(file, offset, field_width, length);
+            }
             printf_dec(file, offset, n);
             break;
         }
         case 'f': {
             double f = va_arg(args, double);
+            if (got_field_width) {
+                size_t length = 0;
+                printf_float(&dummy_file, &length, f, false);
+                printf_padding(file, offset, field_width, length);
+            }
             printf_float(file, offset, f, false);
             break;
         }
         case 'F': {
             double f = va_arg(args, double);
+            if (got_field_width) {
+                size_t length = 0;
+                printf_float(&dummy_file, &length, f, true);
+                printf_padding(file, offset, field_width, length);
+            }
             printf_float(file, offset, f, true);
             break;
         }
@@ -610,6 +681,7 @@ int vsnprintf(char *restrict buffer, size_t size, const char *restrict format, v
     // One is subtracted from the size to make room for the null terminator.
     FILE file = {
         .type = FILE_BUFFER,
+        .mode = FILE_W,
         .buffer = buffer,
         .buffer_size = size > 0 ? size - 1 : 0,
         .buffer_offset = 0,
@@ -626,21 +698,38 @@ int vsnprintf(char *restrict buffer, size_t size, const char *restrict format, v
     return offset;
 }
 
-static void scanf_whitespace(FILE *file) {
+static int scanf_char(FILE *file, size_t *offset, size_t *field_width) {
+    if (field_width != NULL) {
+        if (*field_width == 0)
+            return EOF;
+        (*field_width)--;
+    }
+    (*offset)++;
+    return fgetc(file);
+}
+
+static void scanf_ungetc(FILE *file, size_t *offset, size_t *field_width, int c) {
+    if (field_width != NULL)
+        (*field_width)++;
+    (*offset)--;
+    ungetc(c, file);
+}
+
+static void scanf_whitespace(FILE *file, size_t *offset) {
     while (1) {
-        int c = fgetc(file);
+        int c = scanf_char(file, offset, NULL);
         if (!isspace(c)) {
-            ungetc(c, file);
+            scanf_ungetc(file, offset, NULL, c);
             break;
         }
     }
 }
 
-static bool scanf_int_unsigned(FILE *file, uintmax_t *n_ptr, int base) {
+static bool scanf_int_unsigned(FILE *file, size_t *offset, size_t *field_width, uintmax_t *n_ptr, int base) {
     int c;
     // Read sign
     bool negate;
-    c = fgetc(file);
+    c = scanf_char(file, offset, field_width);
     switch (c) {
     case '+':
         negate = false;
@@ -650,21 +739,21 @@ static bool scanf_int_unsigned(FILE *file, uintmax_t *n_ptr, int base) {
         break;
     default:
         negate = false;
-        ungetc(c, file);
+        scanf_ungetc(file, offset, field_width, c);
         break;
     }
     // Read base prefix
     bool has_digits = false;
     if (base == 0 || base == 8 || base == 16) {
-        c = fgetc(file);
+        c = scanf_char(file, offset, field_width);
         if (c == '0') {
             if (base == 0 || base == 16) {
-                c = fgetc(file);
+                c = scanf_char(file, offset, field_width);
                 if (c == 'x' || c == 'X') {
                     if (base == 0)
                         base = 16;
                 } else {
-                    ungetc(c, file);
+                    scanf_ungetc(file, offset, field_width, c);
                     if (base == 0)
                         base = 8;
                     has_digits = true;
@@ -673,7 +762,7 @@ static bool scanf_int_unsigned(FILE *file, uintmax_t *n_ptr, int base) {
                 has_digits = true;
             }
         } else {
-            ungetc(c, file);
+            scanf_ungetc(file, offset, field_width, c);
             if (base == 0)
                 base = 10;
         }
@@ -681,7 +770,7 @@ static bool scanf_int_unsigned(FILE *file, uintmax_t *n_ptr, int base) {
     // Read digits
     uintmax_t number = 0;
     while (1) {
-        c = fgetc(file);
+        c = scanf_char(file, offset, field_width);
         int digit;
         if ('0' <= c && c <= '9')
             digit = c - '0';
@@ -692,7 +781,7 @@ static bool scanf_int_unsigned(FILE *file, uintmax_t *n_ptr, int base) {
         else
             digit = -1;
         if (digit < 0 || digit >= base) {
-            ungetc(c, file);
+            scanf_ungetc(file, offset, field_width, c);
             if (has_digits)
                 *n_ptr = negate ? -number : number;
             return has_digits;
@@ -702,20 +791,20 @@ static bool scanf_int_unsigned(FILE *file, uintmax_t *n_ptr, int base) {
     }
 }
 
-static bool scanf_int_signed(FILE *file, intmax_t *n_ptr, int base) {
+static bool scanf_int_signed(FILE *file, size_t *offset, size_t *field_width, intmax_t *n_ptr, int base) {
     uintmax_t un;
-    if (!scanf_int_unsigned(file, &un, base))
+    if (!scanf_int_unsigned(file, offset, field_width, &un, base))
         return false;
     *n_ptr = (intmax_t)un;
     return true;
 }
 
-static bool scanf_float(FILE *file, long double *f_ptr) {
+static bool scanf_float(FILE *file, size_t *offset, size_t *field_width, long double *f_ptr) {
     int c;
     union long_double_cast f_cast;
     // Read sign
     bool sign;
-    c = fgetc(file);
+    c = scanf_char(file, offset, field_width);
     switch (c) {
     case '+':
         sign = false;
@@ -725,24 +814,24 @@ static bool scanf_float(FILE *file, long double *f_ptr) {
         break;
     default:
         sign = false;
-        ungetc(c, file);
+        scanf_ungetc(file, offset, field_width, c);
         break;
     }
     // Check first character after sign
-    c = fgetc(file);
+    c = scanf_char(file, offset, field_width);
     if (tolower(c) == 'i') {
         // Parse infinity
         for (const char *s = "nf"; *s != '\0'; s++) {
-            c = fgetc(file);
+            c = scanf_char(file, offset, field_width);
             if (tolower(c) != *s) {
-                ungetc(c, file);
+                scanf_ungetc(file, offset, field_width, c);
                 return false;
             }
         }
         for (const char *s = "inity"; *s != '\0'; s++) {
-            c = fgetc(file);
+            c = scanf_char(file, offset, field_width);
             if (tolower(c) != *s) {
-                ungetc(c, file);
+                scanf_ungetc(file, offset, field_width, c);
                 goto return_inf;
             }
         }
@@ -750,38 +839,38 @@ static bool scanf_float(FILE *file, long double *f_ptr) {
     } else if (tolower(c) == 'n') {
         // Parse NaN
         for (const char *s = "an"; *s != '\0'; s++) {
-            c = fgetc(file);
+            c = scanf_char(file, offset, field_width);
             if (tolower(c) != *s) {
-                ungetc(c, file);
+                scanf_ungetc(file, offset, field_width, c);
                 return false;
             }
         }
-        c = fgetc(file);
+        c = scanf_char(file, offset, field_width);
         if (c == '(') {
             while (1) {
-                c = fgetc(file);
+                c = scanf_char(file, offset, field_width);
                 if (c == ')') {
                     break;
                 } else if (!(isalnum(c) || c == '_')) {
-                    ungetc(c, file);
+                    scanf_ungetc(file, offset, field_width, c);
                     break;
                 }
             }
         } else {
-            ungetc(c, file);
+            scanf_ungetc(file, offset, field_width, c);
         }
         f_cast.mantissa = UINT64_C(-1);
         f_cast.sign_exponent = sign ? 0xFFFF : 0x7FFF;
         *f_ptr = f_cast.ld;
         return true;
     }
-    ungetc(c, file);
+    scanf_ungetc(file, offset, field_width, c);
     // Skip initial zeroes
     bool got_digit = false;
     while (1) {
-        c = fgetc(file);
+        c = scanf_char(file, offset, field_width);
         if (c != '0') {
-            ungetc(c, file);
+            scanf_ungetc(file, offset, field_width, c);
             break;
         } else {
             got_digit = true;
@@ -801,7 +890,7 @@ static bool scanf_float(FILE *file, long double *f_ptr) {
     while (1) {
         u64 digit_group = 0;
         for (int digit_i = 0; digit_i < 19; ) {
-            c = fgetc(file);
+            c = scanf_char(file, offset, field_width);
             if ('0' <= c && c <= '9') {
                 // Digit
                 got_digit = true;
@@ -814,7 +903,7 @@ static bool scanf_float(FILE *file, long double *f_ptr) {
                 decimal_point_digit_i = digit_i;
             } else {
                 // Unexpected character
-                ungetc(c, file);
+                scanf_ungetc(file, offset, field_width, c);
                 // Place decimal point at end if we didn't get one yet
                 if (!got_decimal_point) {
                     dec_digit_groups_integral_num = dec_digit_groups_stored_num;
@@ -1001,6 +1090,7 @@ end:
 }
 
 static int scanf_common(FILE *file, const char *fmt, va_list args) {
+    size_t offset = 0;
     int matches = 0;
     size_t i = 0;
     while (1) {
@@ -1009,27 +1099,37 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
             return matches;
         // For whitespace characters, match all available whitespace
         if (isspace(fmt[i])) {
-            scanf_whitespace(file);
+            scanf_whitespace(file, &offset);
             i++;
             continue;
         }
         // If the next character is a normal character, try to match it
         if (fmt[i] != '%') {
-            if (fgetc(file) != fmt[i])
+            if (scanf_char(file, &offset, NULL) != fmt[i])
                 return matches;
             i++;
             continue;
         }
         i++;
-        // Previous character was '%', so the next character is a conversion specifier
+        // Read field width
+        bool got_field_width = false;
+        size_t field_width = 0;
+        while ('0' <= fmt[i] && fmt[i] <= '9') {
+            got_field_width = true;
+            field_width = 10 * field_width + (fmt[i] - '0');
+            i++;
+        }
+        if (!got_field_width)
+            field_width = SIZE_MAX;
+        // Read conversion specifier
         switch (fmt[i++]) {
         case '%':
-            if (fgetc(file) != '%')
+            if (scanf_char(file, &offset, &field_width) != '%')
                 return matches;
             break;
         case 'c': {
             char *c_ptr = va_arg(args, char *);
-            int c = fgetc(file);
+            int c = scanf_char(file, &offset, &field_width);
             if (c == EOF)
                 return matches;
             *c_ptr = (char)c;
@@ -1037,10 +1137,10 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
             break;
         }
         case 's': {
-            scanf_whitespace(file);
+            scanf_whitespace(file, &offset);
             char *s = va_arg(args, char *);
             while (1) {
-                int c = fgetc(file);
+                int c = scanf_char(file, &offset, &field_width);
                 if (c == EOF || isspace(c))
                     break;
                 *s++ = (char)c;
@@ -1050,30 +1150,30 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
             break;
         }
         case 'd': {
-            scanf_whitespace(file);
+            scanf_whitespace(file, &offset);
             int *n_ptr = va_arg(args, int *);
             intmax_t n;
-            if (!scanf_int_signed(file, &n, 10))
+            if (!scanf_int_signed(file, &offset, &field_width, &n, 10))
                 return matches;
             *n_ptr = (int)n;
             matches++;
             break;
         }
         case 'i': {
-            scanf_whitespace(file);
+            scanf_whitespace(file, &offset);
             int *n_ptr = va_arg(args, int *);
             intmax_t n;
-            if (!scanf_int_signed(file, &n, 0))
+            if (!scanf_int_signed(file, &offset, &field_width, &n, 0))
                 return matches;
             *n_ptr = (int)n;
             matches++;
             break;
         }
         case 'o': {
-            scanf_whitespace(file);
+            scanf_whitespace(file, &offset);
             unsigned int *n_ptr = va_arg(args, unsigned int *);
             uintmax_t n;
-            if (!scanf_int_unsigned(file, &n, 8))
+            if (!scanf_int_unsigned(file, &offset, &field_width, &n, 8))
                 return matches;
             *n_ptr = (unsigned int)n;
             matches++;
@@ -1081,20 +1181,20 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
         }
         case 'x':
         case 'X': {
-            scanf_whitespace(file);
+            scanf_whitespace(file, &offset);
             unsigned int *n_ptr = va_arg(args, unsigned int *);
             uintmax_t n;
-            if (!scanf_int_unsigned(file, &n, 16))
+            if (!scanf_int_unsigned(file, &offset, &field_width, &n, 16))
                 return matches;
             *n_ptr = (unsigned int)n;
             matches++;
             break;
         }
         case 'u': {
-            scanf_whitespace(file);
+            scanf_whitespace(file, &offset);
             unsigned int *n_ptr = va_arg(args, unsigned int *);
             uintmax_t n;
-            if (!scanf_int_unsigned(file, &n, 10))
+            if (!scanf_int_unsigned(file, &offset, &field_width, &n, 10))
                 return matches;
             *n_ptr = (unsigned int)n;
             matches++;
@@ -1102,10 +1202,10 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
         }
         case 'f':
         case 'F': {
-            scanf_whitespace(file);
+            scanf_whitespace(file, &offset);
             float *f_ptr = va_arg(args, float *);
             long double f;
-            if (!scanf_float(file, &f))
+            if (!scanf_float(file, &offset, &field_width, &f))
                 return matches;
             *f_ptr = (float)f;
             matches++;
@@ -1151,6 +1251,7 @@ int vscanf(const char *restrict format, va_list args) {
 int vsscanf(const char *restrict s, const char *restrict format, va_list args) {
     FILE file = {
         .type = FILE_BUFFER,
+        .mode = FILE_R,
         .buffer = (char *restrict)s,
         .buffer_size = strlen(s),
         .buffer_offset = 0,
