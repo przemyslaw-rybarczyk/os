@@ -1,6 +1,7 @@
 #include <zr/types.h>
 #include <stdio.h>
 
+#include <ctype.h>
 #include <float.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -139,7 +140,14 @@ int fgetc(FILE *f) {
     case FILE_INVALID:
         goto fail;
     case FILE_BUFFER:
-        goto fail;
+        if (f->buffer_offset < f->buffer_size) {
+            int c = f->buffer[f->buffer_offset];
+            f->buffer_offset++;
+            return c;
+        } else {
+            f->eof = true;
+            return EOF;
+        }
     case FILE_CHANNEL:
         switch (f->buffer_mode) {
         case _IONBF: {
@@ -394,11 +402,10 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
     // We divide by 10^19 instead of 10 to produce 19 digits at a time.
     dec_digit_groups_num = 0;
     while (fp_digits_num > 0) {
-        // Divide the integral part by 10^19 using long division
+        // Divide the integral part by 10^19
         u64 remainder = 0;
         for (int i = fp_digits_num - 1; i >= 0; i--) {
             // Set fp_digits[i] = remainder:fp_digits[i] / POW_10_19 and remainder = remainder:fp_digits[i] % POW_10_19 (":" indicates concatenation)
-            // This is done in inline assembly since there isn't a good way to divide a 128-bit integer by a 64-bit integer to get a 64-bit result in C.
             asm ("div %[d]"
                 : "=a"(fp_digits[i]), "=d"(remainder)
                 : [d] "r"(POW_10_19), "d"(remainder), "a"(fp_digits[i])
@@ -454,13 +461,12 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
         fp_digits[(- exponent - 1) / 64 + 1] = mantissa << (64 - (- exponent - 1) % 64);
         memset(fp_digits, 0, sizeof(u64) * ((- exponent - 1) / 64));
     }
-    // Multiply the fractional part by 10^19 using long multiplication to get the highest 19 digits
+    // Multiply the fractional part by 10^19 to get the highest 19 digits
     u64 remainder = 0;
     for (int i = fp_digits_num - 1; i >= 0; i--) {
         // Set remainder:fp_digits[i] = fp_digits[i] * POW_10_19 + remainder (":" indicates concatenation)
-        // As with the division, there is no good way to this is C, so inline assembly is used.
         asm ("mul %[m]; add rax, %[r]; adc rdx, 0"
-            : "=d"(remainder), "=a"(fp_digits[i])
+            : "=&d"(remainder), "=&a"(fp_digits[i])
             : [m] "r"(POW_10_19), [r] "r"(remainder), "a"(fp_digits[i])
         );
     }
@@ -476,7 +482,7 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
 
 // Print to a printf target
 // This function implements the main logic of all printf() family functions.
-static void printf_common(FILE *file, size_t *offset, const char *restrict fmt, va_list args) {
+static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list args) {
     size_t i = 0;
     while (1) {
         // Check for end of format string
@@ -618,6 +624,542 @@ int vsnprintf(char *restrict buffer, size_t size, const char *restrict format, v
             buffer[size - 1] = '\0';
     }
     return offset;
+}
+
+static void scanf_whitespace(FILE *file) {
+    while (1) {
+        int c = fgetc(file);
+        if (!isspace(c)) {
+            ungetc(c, file);
+            break;
+        }
+    }
+}
+
+static bool scanf_int_unsigned(FILE *file, uintmax_t *n_ptr, int base) {
+    int c;
+    // Read sign
+    bool negate;
+    c = fgetc(file);
+    switch (c) {
+    case '+':
+        negate = false;
+        break;
+    case '-':
+        negate = true;
+        break;
+    default:
+        negate = false;
+        ungetc(c, file);
+        break;
+    }
+    // Read base prefix
+    bool has_digits = false;
+    if (base == 0 || base == 8 || base == 16) {
+        c = fgetc(file);
+        if (c == '0') {
+            if (base == 0 || base == 16) {
+                c = fgetc(file);
+                if (c == 'x' || c == 'X') {
+                    if (base == 0)
+                        base = 16;
+                } else {
+                    ungetc(c, file);
+                    if (base == 0)
+                        base = 8;
+                    has_digits = true;
+                }
+            } else {
+                has_digits = true;
+            }
+        } else {
+            ungetc(c, file);
+            if (base == 0)
+                base = 10;
+        }
+    }
+    // Read digits
+    uintmax_t number = 0;
+    while (1) {
+        c = fgetc(file);
+        int digit;
+        if ('0' <= c && c <= '9')
+            digit = c - '0';
+        else if ('a' <= c && c <= 'z')
+            digit = c - 'a' + 10;
+        else if ('A' <= c && c <= 'Z')
+            digit = c - 'A' + 10;
+        else
+            digit = -1;
+        if (digit < 0 || digit >= base) {
+            ungetc(c, file);
+            if (has_digits)
+                *n_ptr = negate ? -number : number;
+            return has_digits;
+        }
+        number = base * number + digit;
+        has_digits = true;
+    }
+}
+
+static bool scanf_int_signed(FILE *file, intmax_t *n_ptr, int base) {
+    uintmax_t un;
+    if (!scanf_int_unsigned(file, &un, base))
+        return false;
+    *n_ptr = (intmax_t)un;
+    return true;
+}
+
+static bool scanf_float(FILE *file, long double *f_ptr) {
+    int c;
+    union long_double_cast f_cast;
+    // Read sign
+    bool sign;
+    c = fgetc(file);
+    switch (c) {
+    case '+':
+        sign = false;
+        break;
+    case '-':
+        sign = true;
+        break;
+    default:
+        sign = false;
+        ungetc(c, file);
+        break;
+    }
+    // Check first character after sign
+    c = fgetc(file);
+    if (tolower(c) == 'i') {
+        // Parse infinity
+        for (const char *s = "nf"; *s != '\0'; s++) {
+            c = fgetc(file);
+            if (tolower(c) != *s) {
+                ungetc(c, file);
+                return false;
+            }
+        }
+        for (const char *s = "inity"; *s != '\0'; s++) {
+            c = fgetc(file);
+            if (tolower(c) != *s) {
+                ungetc(c, file);
+                goto return_inf;
+            }
+        }
+        goto return_inf;
+    } else if (tolower(c) == 'n') {
+        // Parse NaN
+        for (const char *s = "an"; *s != '\0'; s++) {
+            c = fgetc(file);
+            if (tolower(c) != *s) {
+                ungetc(c, file);
+                return false;
+            }
+        }
+        c = fgetc(file);
+        if (c == '(') {
+            while (1) {
+                c = fgetc(file);
+                if (c == ')') {
+                    break;
+                } else if (!(isalnum(c) || c == '_')) {
+                    ungetc(c, file);
+                    break;
+                }
+            }
+        } else {
+            ungetc(c, file);
+        }
+        f_cast.mantissa = UINT64_C(-1);
+        f_cast.sign_exponent = sign ? 0xFFFF : 0x7FFF;
+        *f_ptr = f_cast.ld;
+        return true;
+    }
+    ungetc(c, file);
+    // Skip initial zeroes
+    bool got_digit = false;
+    while (1) {
+        c = fgetc(file);
+        if (c != '0') {
+            ungetc(c, file);
+            break;
+        } else {
+            got_digit = true;
+        }
+    }
+    // Buffer for storing groups of digits forming the integral part
+    // Each element represents 19 decimal digits.
+    // Must be long enough to hold log (2^(16383+63)) base (10^19) elements ≈ 260.56522 elements,
+    // plus one at the end to account for normalization.
+#define DEC_DIGIT_GROUPS_SIZE 262
+    u64 dec_digit_groups[DEC_DIGIT_GROUPS_SIZE + 1];
+    int dec_digit_groups_stored_num = 0;
+    // Read the digits
+    bool got_decimal_point = false;
+    int dec_digit_groups_integral_num = 0;
+    int decimal_point_digit_i;
+    while (1) {
+        u64 digit_group = 0;
+        for (int digit_i = 0; digit_i < 19; ) {
+            c = fgetc(file);
+            if ('0' <= c && c <= '9') {
+                // Digit
+                got_digit = true;
+                digit_group = 10 * digit_group + (c - '0');
+                digit_i++;
+            } else if (c == '.' && !got_decimal_point) {
+                // Decimal point
+                got_decimal_point = true;
+                dec_digit_groups_integral_num = dec_digit_groups_stored_num;
+                decimal_point_digit_i = digit_i;
+            } else {
+                // Unexpected character
+                ungetc(c, file);
+                // Place decimal point at end if we didn't get one yet
+                if (!got_decimal_point) {
+                    dec_digit_groups_integral_num = dec_digit_groups_stored_num;
+                    decimal_point_digit_i = digit_i;
+                }
+                // Write last digit group
+                if (digit_i != 0) {
+                    for (int i = 0; i < 19 - digit_i; i++)
+                        digit_group *= 10;
+                    if (dec_digit_groups_stored_num < DEC_DIGIT_GROUPS_SIZE) {
+                        dec_digit_groups[dec_digit_groups_stored_num] = digit_group;
+                        dec_digit_groups_stored_num++;
+                    } else if (!got_decimal_point) {
+                        goto return_inf;
+                    }
+                }
+                goto end_of_digits;
+            }
+        }
+        // Write next digit group
+        if (dec_digit_groups_stored_num < DEC_DIGIT_GROUPS_SIZE) {
+            dec_digit_groups[dec_digit_groups_stored_num] = digit_group;
+            dec_digit_groups_stored_num++;
+        } else if (!got_decimal_point) {
+            // If there are too many digits before the decimal point to fit, return infinity
+            goto return_inf;
+        }
+    }
+end_of_digits:
+    // Fail if we didn't find any digits
+    if (!got_digit)
+        return false;
+    // Normalize the digits to align decimal point with digit group boundary
+    if (decimal_point_digit_i != 0) {
+        // Divide the number by 10 ^ (19 - decimal_point_digit_i) in base 10^19
+        u64 divisor = 1;
+        for (int i = 0; i < 19 - decimal_point_digit_i; i++)
+            divisor *= 10;
+        u64 remainder = 0;
+        for (int i = 0; i < dec_digit_groups_stored_num; i++) {
+            // Set dec_digit_groups[i] = (remainder * POW_10_19 + dec_digit_groups[i]) / divisor
+            // and remainder = (remainder * POW_10_19 + dec_digit_groups[i]) % divisor
+            asm ("mul %[b]; add rax, %[l]; adc rdx, 0; div %[d]"
+                : "=&a"(dec_digit_groups[i]), "=&d"(remainder)
+                : [b] "r"(POW_10_19), [l] "r"(dec_digit_groups[i]), [d] "r"(divisor), "a"(remainder)
+            );
+        }
+        for (int i = 0; i < decimal_point_digit_i; i++)
+            remainder *= 10;
+        dec_digit_groups[dec_digit_groups_stored_num] = remainder;
+        dec_digit_groups_stored_num++;
+        dec_digit_groups_integral_num++;
+    }
+    int dec_digit_groups_fractional_start = dec_digit_groups_integral_num;
+    // Covert the integral part into base 2^63
+    // We only need the two highest digits to fill the mantissa.
+    u64 mantissa_integral_digit_groups[2] = {0, 0};
+    int mantissa_integral_digit_groups_num = 0;
+    int first_dec_digit_group = 0;
+    while (dec_digit_groups_integral_num > 0) {
+        // Divide the integral part by 2^63 in base 10^19
+        u64 remainder = 0;
+        for (int i = first_dec_digit_group; i < first_dec_digit_group + dec_digit_groups_integral_num; i++) {
+            // Set dec_digit_groups[i] = (remainder * 10^19 + dec_digit_groups[i]) / 2^63
+            // and remainder = (remainder * 10^19 + dec_digit_groups[i]) % 2^63
+            u64 product_high, product_low;
+            asm ("mul %[b]; add rax, %[l]; adc rdx, 0"
+                : "=&d"(product_high), "=&a"(product_low)
+                : [b] "r"(POW_10_19), [l] "r"(dec_digit_groups[i]), "a"(remainder)
+            );
+            dec_digit_groups[i] = (product_high << 1) | (product_low >> 63);
+            remainder = product_low & (UINT64_C(-1) >> 1);
+        }
+        // The final remainder is the next digit
+        mantissa_integral_digit_groups[1] = mantissa_integral_digit_groups[0];
+        mantissa_integral_digit_groups[0] = remainder;
+        mantissa_integral_digit_groups_num++;
+        // If the highest digit group became zero, remove it
+        if (dec_digit_groups[first_dec_digit_group] == 0) {
+            first_dec_digit_group++;
+            dec_digit_groups_integral_num--;
+        }
+    }
+    // Assemble the result
+    if (mantissa_integral_digit_groups_num == 0) {
+        // The integral part is empty
+        // Remove all trailing zeroes from the fractional part
+        while (dec_digit_groups_stored_num > dec_digit_groups_fractional_start
+                && dec_digit_groups[dec_digit_groups_stored_num - 1] == 0)
+            dec_digit_groups_stored_num--;
+        // If the fractional part is empty, the result is zero
+        if (dec_digit_groups_fractional_start == dec_digit_groups_stored_num) {
+            f_cast.mantissa = 0;
+            f_cast.sign_exponent = 0;
+            goto end;
+        }
+        // Covert the fractional part into base 2^63
+        // We only need the two highest nonzero digits to fill the mantissa.
+        u64 mantissa_fractional_digit_groups[2] = {0, 0};
+        int mantissa_fractional_digit_groups_num = 0;
+        int significant_digit_groups = 0;
+        while (significant_digit_groups < 2) {
+            // Multiply the fractional part by 2^63 in base 10^19
+            u64 carry = 0;
+            for (int i = dec_digit_groups_fractional_start; i < dec_digit_groups_stored_num; i++) {
+                // Set dec_digit_groups[i] = (dec_digit_groups[i] * 2^63 + carry) % 10^19
+                // and carry = (dec_digit_groups[i] * 2^63 + carry) / 10^19
+                u64 product_high = dec_digit_groups[i] >> 1;
+                u64 product_low = (dec_digit_groups[i] << 63) | carry;
+                asm ("div %[b]"
+                    : "=d"(dec_digit_groups[i]), "=a"(carry)
+                    : "d"(product_high), "a"(product_low), [b] "r"(POW_10_19)
+                );
+            }
+            // The final carry is the next digit
+            // We move past all initial zero digits.
+            if (significant_digit_groups > 0 || carry != 0) {
+                mantissa_fractional_digit_groups[significant_digit_groups] = carry;
+                significant_digit_groups++;
+            } else {
+                mantissa_fractional_digit_groups_num++;
+            }
+        }
+        int leading_zeroes = __builtin_clzll(mantissa_fractional_digit_groups[0]);
+        int exponent = - (mantissa_fractional_digit_groups_num * 63) - (leading_zeroes - 1) - 1;
+        if (exponent < -16382 - 63) {
+            // The exponent is too small to represent, so we return zero
+            f_cast.mantissa = 0;
+            f_cast.sign_exponent = 0;
+        } else if (exponent < -16382) {
+            // The number is subnormal
+            f_cast.mantissa = mantissa_fractional_digit_groups[0] >> (-16382 - exponent);
+            f_cast.sign_exponent = 0;
+        } else {
+            // The number is normal
+            f_cast.mantissa = (mantissa_fractional_digit_groups[0] << leading_zeroes) | (mantissa_fractional_digit_groups[1] >> (63 - leading_zeroes));
+            // Add bias to exponent
+            f_cast.sign_exponent = exponent + 16383;
+        }
+    } else {
+        // Convert the fractional part into base 2^63
+        // We only need the highest digit to fill the mantissa.
+        u64 mantissa_fractional_part;
+        {
+            // Multiply the fractional part by 2^63 in base 10^19 using
+            u64 carry = 0;
+            for (int i = dec_digit_groups_stored_num - 1; i >= dec_digit_groups_fractional_start; i--) {
+                // Set carry = (dec_digit_groups[i] * 2^63 + carry) / 10^19
+                u64 product_high = dec_digit_groups[i] >> 1;
+                u64 product_low = (dec_digit_groups[i] << 63) | carry;
+                asm ("div %[b]"
+                    : "=a"(carry)
+                    : "d"(product_high), "a"(product_low), [b] "r"(POW_10_19)
+                );
+            }
+            // The final carry is the next digit
+            mantissa_fractional_part = carry;
+        }
+        // Calculate exponent
+        int leading_zeroes = __builtin_clzll(mantissa_integral_digit_groups[0]);
+        int exponent = (mantissa_integral_digit_groups_num * 63) - (leading_zeroes - 1) - 1;
+        if (exponent > 16383) {
+            // The exponent is too large to represent, so we return infinity
+return_inf:
+            f_cast.mantissa = UINT64_C(1) << 63;
+            f_cast.sign_exponent = 0x7FFF;
+        } else if (exponent >= 63) {
+            // The mantissa lies entirely within the integral part
+            f_cast.mantissa = (mantissa_integral_digit_groups[0] << leading_zeroes) | (mantissa_integral_digit_groups[1] >> (63 - leading_zeroes));
+            // Add bias to exponent
+            f_cast.sign_exponent = exponent + 16383;
+        } else {
+            // The mantissa is split between the integral and fractional part
+            f_cast.mantissa = (mantissa_integral_digit_groups[0] << leading_zeroes) | (mantissa_fractional_part >> (63 - leading_zeroes));
+            // Add bias to exponent
+            f_cast.sign_exponent = exponent + 16383;
+        }
+    }
+end:
+    if (sign)
+        f_cast.sign_exponent |= 0x8000;
+    *f_ptr = f_cast.ld;
+    return true;
+}
+
+static int scanf_common(FILE *file, const char *fmt, va_list args) {
+    int matches = 0;
+    size_t i = 0;
+    while (1) {
+        // Check for end of format string
+        if (fmt[i] == '\0')
+            return matches;
+        // For whitespace characters, match all available whitespace
+        if (isspace(fmt[i])) {
+            scanf_whitespace(file);
+            i++;
+            continue;
+        }
+        // If the next character is a normal character, try to match it
+        if (fmt[i] != '%') {
+            if (fgetc(file) != fmt[i])
+                return matches;
+            i++;
+            continue;
+        }
+        i++;
+        // Previous character was '%', so the next character is a conversion specifier
+        switch (fmt[i++]) {
+        case '%':
+            if (fgetc(file) != '%')
+                return matches;
+            break;
+        case 'c': {
+            char *c_ptr = va_arg(args, char *);
+            int c = fgetc(file);
+            if (c == EOF)
+                return matches;
+            *c_ptr = (char)c;
+            matches++;
+            break;
+        }
+        case 's': {
+            scanf_whitespace(file);
+            char *s = va_arg(args, char *);
+            while (1) {
+                int c = fgetc(file);
+                if (c == EOF || isspace(c))
+                    break;
+                *s++ = (char)c;
+            }
+            *s = '\0';
+            matches++;
+            break;
+        }
+        case 'd': {
+            scanf_whitespace(file);
+            int *n_ptr = va_arg(args, int *);
+            intmax_t n;
+            if (!scanf_int_signed(file, &n, 10))
+                return matches;
+            *n_ptr = (int)n;
+            matches++;
+            break;
+        }
+        case 'i': {
+            scanf_whitespace(file);
+            int *n_ptr = va_arg(args, int *);
+            intmax_t n;
+            if (!scanf_int_signed(file, &n, 0))
+                return matches;
+            *n_ptr = (int)n;
+            matches++;
+            break;
+        }
+        case 'o': {
+            scanf_whitespace(file);
+            unsigned int *n_ptr = va_arg(args, unsigned int *);
+            uintmax_t n;
+            if (!scanf_int_unsigned(file, &n, 8))
+                return matches;
+            *n_ptr = (unsigned int)n;
+            matches++;
+            break;
+        }
+        case 'x':
+        case 'X': {
+            scanf_whitespace(file);
+            unsigned int *n_ptr = va_arg(args, unsigned int *);
+            uintmax_t n;
+            if (!scanf_int_unsigned(file, &n, 16))
+                return matches;
+            *n_ptr = (unsigned int)n;
+            matches++;
+            break;
+        }
+        case 'u': {
+            scanf_whitespace(file);
+            unsigned int *n_ptr = va_arg(args, unsigned int *);
+            uintmax_t n;
+            if (!scanf_int_unsigned(file, &n, 10))
+                return matches;
+            *n_ptr = (unsigned int)n;
+            matches++;
+            break;
+        }
+        case 'f':
+        case 'F': {
+            scanf_whitespace(file);
+            float *f_ptr = va_arg(args, float *);
+            long double f;
+            if (!scanf_float(file, &f))
+                return matches;
+            *f_ptr = (float)f;
+            matches++;
+            break;
+        }
+        // Incorrect specifiers have undefined behavior, so we choose to ignore them
+        case '\0':
+            return matches;
+        default:
+            break;
+        }
+    }
+}
+
+int scanf(const char *restrict format, ...) {
+    va_list args;
+    va_start(args, format);
+    int ret = vscanf(format, args);
+    va_end(args);
+    return ret;
+}
+
+int fscanf(FILE *restrict f, const char *restrict format, ...) {
+    va_list args;
+    va_start(args, format);
+    int ret = vfscanf(f, format, args);
+    va_end(args);
+    return ret;
+}
+
+int sscanf(const char *restrict s, const char *restrict format, ...) {
+    va_list args;
+    va_start(args, format);
+    int ret = vsscanf(s, format, args);
+    va_end(args);
+    return ret;
+}
+
+int vscanf(const char *restrict format, va_list args) {
+    return vfscanf(stdin, format, args);
+}
+
+int vsscanf(const char *restrict s, const char *restrict format, va_list args) {
+    FILE file = {
+        .type = FILE_BUFFER,
+        .buffer = (char *restrict)s,
+        .buffer_size = strlen(s),
+        .buffer_offset = 0,
+    };
+    return vfscanf(&file, format, args);
+}
+
+int vfscanf(FILE *restrict f, const char *restrict format, va_list args) {
+    return scanf_common(f, format, args);
 }
 
 int feof(FILE *f) {
