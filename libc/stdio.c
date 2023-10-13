@@ -264,17 +264,13 @@ static void printf_padding(FILE *file, size_t *offset, size_t field_width, size_
 }
 
 // Print a null-terminated string
-static void printf_string(FILE *file, size_t *offset, const char *s) {
-    for (const char *p = s; *p != '\0'; p++)
-        printf_char(file, offset, *p);
+static void printf_string(FILE *file, size_t *offset, const char *s, int precision) {
+    for (size_t i = 0; i < (size_t)precision && s[i] != '\0'; i++)
+        printf_char(file, offset, s[i]);
 }
 
 // Print an unsinged decimal number
-static void printf_dec(FILE *file, size_t *offset, uintmax_t n) {
-    if (n == 0) {
-        printf_char(file, offset, '0');
-        return;
-    }
+static void printf_dec(FILE *file, size_t *offset, uintmax_t n, int precision) {
     // Since the digits will be generated in the reverse order from the one we need, we put them in a buffer before printing them.
     // 2.41 is a little above the decimal logarithm of 256 (the number of decimal digits a byte contains).
     char digits[(size_t)(sizeof(uintmax_t) * 2.41 + 1)];
@@ -282,13 +278,17 @@ static void printf_dec(FILE *file, size_t *offset, uintmax_t n) {
     // Generate the digits
     for (; n > 0; n /= 10)
         digits[i++] = (n % 10) + '0';
+    // Print leading zeroes
+    if (i < precision)
+        for (int j = i; j < precision; j++)
+            printf_char(file, offset, '0');
     // Print the digits in reverse order
     for (int j = 0; j < i; j++)
         printf_char(file, offset, digits[i - j - 1]);
 }
 
 // Print a singed decimal number
-static void printf_dec_signed(FILE *file, size_t *offset, intmax_t n) {
+static void printf_dec_signed(FILE *file, size_t *offset, intmax_t n, int precision) {
     uintmax_t nu; // Absolute value of n
     // If the number is negative, print a minus sign and invert it
     if (n < 0) {
@@ -298,20 +298,20 @@ static void printf_dec_signed(FILE *file, size_t *offset, intmax_t n) {
         nu = n;
     }
     // Print the number without the sign
-    printf_dec(file, offset, nu);
+    printf_dec(file, offset, nu, precision);
 }
 
 // Print an unsinged octal number
-static void printf_oct(FILE *file, size_t *offset, uintmax_t n) {
-    if (n == 0) {
-        printf_char(file, offset, '0');
-        return;
-    }
+static void printf_oct(FILE *file, size_t *offset, uintmax_t n, int precision) {
     // Index of octal digit
     int i = (8 * sizeof(uintmax_t) - 1) / 3;
     // Skip initial zeroes
     for (; i >= 0 && ((n >> (3 * i)) & 0x7) == 0; i--)
         ;
+    // Print leading zeroes
+    if (i + 1 < precision)
+        for (int j = i + 1; j < precision; j++)
+            printf_char(file, offset, '0');
     // Print digits
     for (; i >= 0; i--) {
         int digit = (n >> (3 * i)) & 0x7;
@@ -321,16 +321,16 @@ static void printf_oct(FILE *file, size_t *offset, uintmax_t n) {
 
 // Print an unsinged hexadecimal number
 // `uppercase` determines whether digits above 9 are printed as "ABCDEF" or "abcdef".
-static void printf_hex(FILE *file, size_t *offset, uintmax_t n, bool uppercase) {
-    if (n == 0) {
-        printf_char(file, offset, '0');
-        return;
-    }
+static void printf_hex(FILE *file, size_t *offset, uintmax_t n, bool uppercase, int precision) {
     // Index of hexadecimal digit
     int i = 2 * sizeof(uintmax_t) - 1;
     // Skip initial zeroes
     for (; i >= 0 && ((n >> (4 * i)) & 0xF) == 0; i--)
         ;
+    // Print leading zeroes
+    if (i + 1 < precision)
+        for (int j = i + 1; j < precision; j++)
+            printf_char(file, offset, '0');
     // Print digits
     for (; i >= 0; i--) {
         int digit = (n >> (4 * i)) & 0xF;
@@ -359,7 +359,7 @@ union long_double_cast {
 // Print a floating-point number
 // `uppercase` determines whether nan and inf are printed in lowercase or uppercase.
 // The conversion algorithm used is very basic and does not properly round the result, but only truncates it.
-static void printf_float(FILE *file, size_t *offset, long double f, bool uppercase) {
+static void printf_float(FILE *file, size_t *offset, long double f, bool uppercase, int precision) {
     // Extract mantissa and exponent fields
     union long_double_cast f_cast;
     f_cast.ld = f;
@@ -372,9 +372,9 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
     if (exponent_field == 0x7FFF) {
         // When checking the mantissa, ignore the highest bit, since it should be 1
         if ((mantissa & 0x7FFFFFFFFFFFFFFF) == 0)
-            printf_string(file, offset, uppercase ? "INF" : "inf");
+            printf_string(file, offset, uppercase ? "INF" : "inf", -1);
         else
-            printf_string(file, offset, uppercase ? "NAN" : "nan");
+            printf_string(file, offset, uppercase ? "NAN" : "nan", -1);
         return;
     }
     // Subtract the bias from the exponent
@@ -477,23 +477,29 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
         fp_digits[(- exponent - 1) / 64 + 1] = mantissa << (64 - (- exponent - 1) % 64);
         memset(fp_digits, 0, sizeof(u64) * ((- exponent - 1) / 64));
     }
-    // Multiply the fractional part by 10^19 to get the highest 19 digits
-    u64 remainder = 0;
-    for (int i = fp_digits_num - 1; i >= 0; i--) {
-        // Set remainder:fp_digits[i] = fp_digits[i] * POW_10_19 + remainder (":" indicates concatenation)
-        asm ("mul %[m]; add rax, %[r]; adc rdx, 0"
-            : "=&d"(remainder), "=&a"(fp_digits[i])
-            : [m] "r"(POW_10_19), [r] "r"(remainder), "a"(fp_digits[i])
-        );
+    // Print the fractional part
+    for (int gi = 0; gi < (precision + 18) / 19; gi++) {
+        // Multiply the fractional part by 10^19 to get the highest 19 digits
+        u64 remainder = 0;
+        for (int i = fp_digits_num - 1; i >= 0; i--) {
+            // Set remainder:fp_digits[i] = fp_digits[i] * POW_10_19 + remainder (":" indicates concatenation)
+            asm ("mul %[m]; add rax, %[r]; adc rdx, 0"
+                : "=&d"(remainder), "=&a"(fp_digits[i])
+                : [m] "r"(POW_10_19), [r] "r"(remainder), "a"(fp_digits[i])
+            );
+        }
+        // Convert the remainder to digits and print the first 6
+        u64 n = remainder;
+        for (int j = 0; j < 19; j++) {
+            dec_digits[j] = (n % 10) + '0';
+            n /= 10;
+        }
+        int digits_to_print = precision - 19 * gi;
+        if (digits_to_print > 19)
+            digits_to_print = 19;
+        for (int j = 0; j < digits_to_print; j++)
+            printf_char(file, offset, dec_digits[18 - j]);
     }
-    // Convert the remainder to digits and print the first 6
-    u64 n = remainder;
-    for (int j = 0; j < 19; j++) {
-        dec_digits[j] = (n % 10) + '0';
-        n /= 10;
-    }
-    for (int j = 0; j < 6; j++)
-        printf_char(file, offset, dec_digits[18 - j]);
 }
 
 // Print to a printf target
@@ -525,6 +531,23 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
                 i++;
             }
         }
+        // Read precision
+        bool got_precision = false;
+        int precision = 0;
+        if (fmt[i] == '.') {
+            i++;
+            if (fmt[i] == '*') {
+                got_precision = true;
+                precision = va_arg(args, int);
+                i++;
+            } else {
+                while ('0' <= fmt[i] && fmt[i] <= '9') {
+                    got_precision = true;
+                    precision = 10 * precision + (fmt[i] - '0');
+                    i++;
+                }
+            }
+        }
         // Read the conversion specifier
         switch (fmt[i++]) {
         case '%':
@@ -543,7 +566,7 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
             const char *s = va_arg(args, const char *);
             if (got_field_width)
                 printf_padding(file, offset, field_width, strlen(s));
-            printf_string(file, offset, s);
+            printf_string(file, offset, s, got_precision ? precision : -1);
             break;
         }
         case 'd':
@@ -551,70 +574,70 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
             int n = va_arg(args, int);
             if (got_field_width) {
                 size_t length = 0;
-                printf_dec_signed(&dummy_file, &length, n);
+                printf_dec_signed(&dummy_file, &length, n, got_precision ? precision : 1);
                 printf_padding(file, offset, field_width, length);
             }
-            printf_dec_signed(file, offset, n);
+            printf_dec_signed(file, offset, n, got_precision ? precision : 1);
             break;
         }
         case 'o': {
             unsigned int n = va_arg(args, unsigned int);
             if (got_field_width) {
                 size_t length = 0;
-                printf_oct(&dummy_file, &length, n);
+                printf_oct(&dummy_file, &length, n, got_precision ? precision : 1);
                 printf_padding(file, offset, field_width, length);
             }
-            printf_oct(file, offset, n);
+            printf_oct(file, offset, n, got_precision ? precision : 1);
             break;
         }
         case 'x': {
             unsigned int n = va_arg(args, unsigned int);
             if (got_field_width) {
                 size_t length = 0;
-                printf_hex(&dummy_file, &length, n, false);
+                printf_hex(&dummy_file, &length, n, false, got_precision ? precision : 1);
                 printf_padding(file, offset, field_width, length);
             }
-            printf_hex(file, offset, n, false);
+            printf_hex(file, offset, n, false, got_precision ? precision : 1);
             break;
         }
         case 'X': {
             unsigned int n = va_arg(args, unsigned int);
             if (got_field_width) {
                 size_t length = 0;
-                printf_hex(&dummy_file, &length, n, true);
+                printf_hex(&dummy_file, &length, n, true, got_precision ? precision : 1);
                 printf_padding(file, offset, field_width, length);
             }
-            printf_hex(file, offset, n, true);
+            printf_hex(file, offset, n, true, got_precision ? precision : 1);
             break;
         }
         case 'u': {
             unsigned int n = va_arg(args, unsigned int);
             if (got_field_width) {
                 size_t length = 0;
-                printf_dec(&dummy_file, &length, n);
+                printf_dec(&dummy_file, &length, n, got_precision ? precision : 1);
                 printf_padding(file, offset, field_width, length);
             }
-            printf_dec(file, offset, n);
+            printf_dec(file, offset, n, got_precision ? precision : 1);
             break;
         }
         case 'f': {
             double f = va_arg(args, double);
             if (got_field_width) {
                 size_t length = 0;
-                printf_float(&dummy_file, &length, f, false);
+                printf_float(&dummy_file, &length, f, false, got_precision ? precision : 6);
                 printf_padding(file, offset, field_width, length);
             }
-            printf_float(file, offset, f, false);
+            printf_float(file, offset, f, false, got_precision ? precision : 6);
             break;
         }
         case 'F': {
             double f = va_arg(args, double);
             if (got_field_width) {
                 size_t length = 0;
-                printf_float(&dummy_file, &length, f, true);
+                printf_float(&dummy_file, &length, f, true, got_precision ? precision : 6);
                 printf_padding(file, offset, field_width, length);
             }
-            printf_float(file, offset, f, true);
+            printf_float(file, offset, f, true, got_precision ? precision : 6);
             break;
         }
         // Incorrect specifiers have undefined behavior, so we choose to ignore them
