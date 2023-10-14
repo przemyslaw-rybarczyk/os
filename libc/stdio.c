@@ -359,7 +359,7 @@ union long_double_cast {
 // Print a floating-point number
 // `uppercase` determines whether nan and inf are printed in lowercase or uppercase.
 // The conversion algorithm used is very basic and does not properly round the result, but only truncates it.
-static void printf_float(FILE *file, size_t *offset, long double f, bool uppercase, int precision) {
+static void printf_float(FILE *file, size_t *offset, long double f, bool uppercase, bool exponential, int precision) {
     // Extract mantissa and exponent fields
     union long_double_cast f_cast;
     f_cast.ld = f;
@@ -371,7 +371,7 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
     // Handle NaN and infinity
     if (exponent_field == 0x7FFF) {
         // When checking the mantissa, ignore the highest bit, since it should be 1
-        if ((mantissa & 0x7FFFFFFFFFFFFFFF) == 0)
+        if ((mantissa & (UINT64_C(-1) >> 1)) == 0)
             printf_string(file, offset, uppercase ? "INF" : "inf", -1);
         else
             printf_string(file, offset, uppercase ? "NAN" : "nan", -1);
@@ -379,6 +379,15 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
     }
     // Subtract the bias from the exponent
     i32 exponent = exponent_field - 16383;
+    // In order to avoid going into an infinite loop when printing the fractional part, handle zeroes in exponential representation separately
+    if (exponential && exponent_field == 0 && (mantissa & (UINT64_C(-1) >> 1)) == 0) {
+        printf_string(file, offset, "0.", -1);
+        for (int i = 0; i < precision; i++)
+            printf_char(file, offset, '0');
+        printf_char(file, offset, uppercase ? 'E' : 'e');
+        printf_string(file, offset, "+00", -1);
+        return;
+    }
     // If the number is denormal, adjust the exponent to account for it
     // There is no need to change anything else, since the integral part of the mantissa is already explicitly stored in this format.
     if (exponent_field == 0) {
@@ -434,17 +443,35 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
             fp_digits_num -= 1;
     }
     // Print the integral part
+    bool got_decimal_point = false;
+    int dec_exponent = 0;
+    int digits_printed = 0;
     if (dec_digit_groups_num == 0) {
         // If the integral part is zero, print a zero
-        printf_char(file, offset, '0');
+        if (!exponential)
+            printf_char(file, offset, '0');
+        else
+            dec_exponent--;
     } else {
         // Print the first digit group while skipping initial zeroes
         size_t n = dec_digit_groups[dec_digit_groups_num - 1];
         int i = 0;
         for (; n > 0; n /= 10)
             dec_digits[i++] = (n % 10) + '0';
-        for (int j = 0; j < i; j++)
+        if (exponential) {
+            // First digit in exponential form has decimal point after it
+            printf_char(file, offset, dec_digits[i - 1]);
+            i--;
+            printf_char(file, offset, '.');
+            got_decimal_point = true;
+        }
+        for (int j = 0; j < i; j++) {
             printf_char(file, offset, dec_digits[i - j - 1]);
+            dec_exponent++;
+            digits_printed++;
+            if (exponential && digits_printed >= precision)
+                goto end_digits;
+        }
         // Print the remaining digit groups
         for (int i = dec_digit_groups_num - 2; i >= 0; i--) {
             u64 n = dec_digit_groups[i];
@@ -452,12 +479,19 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
                 dec_digits[j] = (n % 10) + '0';
                 n /= 10;
             }
-            for (int j = 0; j < 19; j++)
+            for (int j = 0; j < 19; j++) {
                 printf_char(file, offset, dec_digits[18 - j]);
+                dec_exponent++;
+                digits_printed++;
+                if (exponential && digits_printed >= precision)
+                    goto end_digits;
+            }
         }
     }
-    // Print the decimal point
-    printf_char(file, offset, '.');
+    if (!exponential) {
+        // Print the decimal point
+        printf_char(file, offset, '.');
+    }
     // Convert the fractional part to a big-endian big integer
     // This involves shifting the mantissa left by the negated exponent
     fp_digits_num = (- exponent + 62) / 64 + 1;
@@ -478,7 +512,7 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
         memset(fp_digits, 0, sizeof(u64) * ((- exponent - 1) / 64));
     }
     // Print the fractional part
-    for (int gi = 0; gi < (precision + 18) / 19; gi++) {
+    for (int gi = 0; ; gi++) {
         // Multiply the fractional part by 10^19 to get the highest 19 digits
         u64 remainder = 0;
         for (int i = fp_digits_num - 1; i >= 0; i--) {
@@ -488,17 +522,39 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
                 : [m] "r"(POW_10_19), [r] "r"(remainder), "a"(fp_digits[i])
             );
         }
-        // Convert the remainder to digits and print the first 6
+        // Convert the remainder to digits and print the digits
         u64 n = remainder;
         for (int j = 0; j < 19; j++) {
             dec_digits[j] = (n % 10) + '0';
             n /= 10;
         }
-        int digits_to_print = precision - 19 * gi;
-        if (digits_to_print > 19)
-            digits_to_print = 19;
-        for (int j = 0; j < digits_to_print; j++)
-            printf_char(file, offset, dec_digits[18 - j]);
+        for (int j = 0; j < 19; j++) {
+            if (exponential) {
+                if (got_decimal_point) {
+                    printf_char(file, offset, dec_digits[18 - j]);
+                    digits_printed++;
+                    if (digits_printed >= precision)
+                        goto end_digits;
+                } else if (dec_digits[18 - j] != '0') {
+                    printf_char(file, offset, dec_digits[18 - j]);
+                    printf_char(file, offset, '.');
+                    got_decimal_point = true;
+                } else {
+                    dec_exponent--;
+                }
+            } else {
+                if (19 * gi + j < precision)
+                    printf_char(file, offset, dec_digits[18 - j]);
+                else
+                    goto end_digits;
+            }
+        }
+    }
+end_digits:
+    if (exponential) {
+        printf_char(file, offset, uppercase ? 'E' : 'e');
+        printf_char(file, offset, dec_exponent >= 0 ? '+' : '-');
+        printf_dec(file, offset, dec_exponent >= 0 ? dec_exponent : -dec_exponent, 2);
     }
 }
 
@@ -624,20 +680,40 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
             double f = va_arg(args, double);
             if (got_field_width) {
                 size_t length = 0;
-                printf_float(&dummy_file, &length, f, false, got_precision ? precision : 6);
+                printf_float(&dummy_file, &length, f, false, false, got_precision ? precision : 6);
                 printf_padding(file, offset, field_width, length);
             }
-            printf_float(file, offset, f, false, got_precision ? precision : 6);
+            printf_float(file, offset, f, false, false, got_precision ? precision : 6);
             break;
         }
         case 'F': {
             double f = va_arg(args, double);
             if (got_field_width) {
                 size_t length = 0;
-                printf_float(&dummy_file, &length, f, true, got_precision ? precision : 6);
+                printf_float(&dummy_file, &length, f, true, false, got_precision ? precision : 6);
                 printf_padding(file, offset, field_width, length);
             }
-            printf_float(file, offset, f, true, got_precision ? precision : 6);
+            printf_float(file, offset, f, true, false, got_precision ? precision : 6);
+            break;
+        }
+        case 'e': {
+            double f = va_arg(args, double);
+            if (got_field_width) {
+                size_t length = 0;
+                printf_float(&dummy_file, &length, f, false, true, got_precision ? precision : 6);
+                printf_padding(file, offset, field_width, length);
+            }
+            printf_float(file, offset, f, false, true, got_precision ? precision : 6);
+            break;
+        }
+        case 'E': {
+            double f = va_arg(args, double);
+            if (got_field_width) {
+                size_t length = 0;
+                printf_float(&dummy_file, &length, f, true, true, got_precision ? precision : 6);
+                printf_padding(file, offset, field_width, length);
+            }
+            printf_float(file, offset, f, true, true, got_precision ? precision : 6);
             break;
         }
         // Incorrect specifiers have undefined behavior, so we choose to ignore them
@@ -890,13 +966,19 @@ static bool scanf_float(FILE *file, size_t *offset, size_t *field_width, long do
     scanf_ungetc(file, offset, field_width, c);
     // Skip initial zeroes
     bool got_digit = false;
+    bool got_decimal_point = false;
+    ptrdiff_t decimal_point_position = 0;
     while (1) {
         c = scanf_char(file, offset, field_width);
-        if (c != '0') {
+        if (c == '0') {
+            got_digit = true;
+            if (got_decimal_point)
+                decimal_point_position--;
+        } else if (c == '.' && !got_decimal_point) {
+            got_decimal_point = true;
+        } else {
             scanf_ungetc(file, offset, field_width, c);
             break;
-        } else {
-            got_digit = true;
         }
     }
     // Buffer for storing groups of digits forming the integral part
@@ -905,11 +987,8 @@ static bool scanf_float(FILE *file, size_t *offset, size_t *field_width, long do
     // plus one at the end to account for normalization.
 #define DEC_DIGIT_GROUPS_SIZE 262
     u64 dec_digit_groups[DEC_DIGIT_GROUPS_SIZE + 1];
-    int dec_digit_groups_stored_num = 0;
+    int dec_digit_groups_read_num = 0;
     // Read the digits
-    bool got_decimal_point = false;
-    int dec_digit_groups_integral_num = 0;
-    int decimal_point_digit_i;
     while (1) {
         u64 digit_group = 0;
         for (int digit_i = 0; digit_i < 19; ) {
@@ -917,48 +996,99 @@ static bool scanf_float(FILE *file, size_t *offset, size_t *field_width, long do
             if ('0' <= c && c <= '9') {
                 // Digit
                 got_digit = true;
+                if (!got_decimal_point)
+                    decimal_point_position++;
                 digit_group = 10 * digit_group + (c - '0');
                 digit_i++;
             } else if (c == '.' && !got_decimal_point) {
                 // Decimal point
                 got_decimal_point = true;
-                dec_digit_groups_integral_num = dec_digit_groups_stored_num;
-                decimal_point_digit_i = digit_i;
             } else {
                 // Unexpected character
                 scanf_ungetc(file, offset, field_width, c);
-                // Place decimal point at end if we didn't get one yet
-                if (!got_decimal_point) {
-                    dec_digit_groups_integral_num = dec_digit_groups_stored_num;
-                    decimal_point_digit_i = digit_i;
-                }
                 // Write last digit group
                 if (digit_i != 0) {
                     for (int i = 0; i < 19 - digit_i; i++)
                         digit_group *= 10;
-                    if (dec_digit_groups_stored_num < DEC_DIGIT_GROUPS_SIZE) {
-                        dec_digit_groups[dec_digit_groups_stored_num] = digit_group;
-                        dec_digit_groups_stored_num++;
-                    } else if (!got_decimal_point) {
-                        goto return_inf;
-                    }
+                    if (dec_digit_groups_read_num < DEC_DIGIT_GROUPS_SIZE)
+                        dec_digit_groups[dec_digit_groups_read_num] = digit_group;
+                    dec_digit_groups_read_num++;
                 }
                 goto end_of_digits;
             }
         }
         // Write next digit group
-        if (dec_digit_groups_stored_num < DEC_DIGIT_GROUPS_SIZE) {
-            dec_digit_groups[dec_digit_groups_stored_num] = digit_group;
-            dec_digit_groups_stored_num++;
-        } else if (!got_decimal_point) {
-            // If there are too many digits before the decimal point to fit, return infinity
-            goto return_inf;
-        }
+        if (dec_digit_groups_read_num < DEC_DIGIT_GROUPS_SIZE)
+            dec_digit_groups[dec_digit_groups_read_num] = digit_group;
+        dec_digit_groups_read_num++;
     }
 end_of_digits:
     // Fail if we didn't find any digits
     if (!got_digit)
         return false;
+    // Read exponent
+    c = scanf_char(file, offset, field_width);
+    if (c == 'e' || c == 'E') {
+        // Read sign
+        bool dec_exponent_sign;
+        c = scanf_char(file, offset, field_width);
+        switch (c) {
+        case '+':
+            dec_exponent_sign = false;
+            break;
+        case '-':
+            dec_exponent_sign = true;
+            break;
+        default:
+            dec_exponent_sign = false;
+            scanf_ungetc(file, offset, field_width, c);
+            break;
+        }
+        // Read magnitude
+        ptrdiff_t dec_exponent = 0;
+        while (1) {
+            c = scanf_char(file, offset, field_width);
+            if ('0' <= c && c <= '9') {
+                // TODO overflow
+                dec_exponent = 10 * dec_exponent + (c - '0');
+            } else {
+                scanf_ungetc(file, offset, field_width, c);
+                break;
+            }
+        }
+        if (dec_exponent_sign)
+            dec_exponent *= -1;
+        // Apply exponent
+        decimal_point_position += dec_exponent;
+    } else {
+        scanf_ungetc(file, offset, field_width, c);
+    }
+    // Shift digits so that decimal point is within stored digit groups
+    int dec_digit_groups_stored_num;
+    int dec_digit_groups_fractional_start;
+    int decimal_point_digit_i;
+    if (decimal_point_position > DEC_DIGIT_GROUPS_SIZE * 19) {
+        // The number is too big to fit, so we return infinity
+        goto return_inf;
+    } else if (decimal_point_position > 0) {
+        // Number has nonzero integral part
+        dec_digit_groups_stored_num = dec_digit_groups_read_num <= DEC_DIGIT_GROUPS_SIZE ? dec_digit_groups_read_num : DEC_DIGIT_GROUPS_SIZE;
+        dec_digit_groups_fractional_start = decimal_point_position / 19;
+        decimal_point_digit_i = decimal_point_position % 19;
+    } else {
+        // Number has no integral part, so we shift it so that the decimal point is at the start
+        size_t copy_offset = (- decimal_point_position + 18) / 19;
+        if (copy_offset > DEC_DIGIT_GROUPS_SIZE)
+            copy_offset = DEC_DIGIT_GROUPS_SIZE;
+        size_t copy_size = dec_digit_groups_read_num;
+        if (copy_offset + copy_size > DEC_DIGIT_GROUPS_SIZE)
+            copy_size = DEC_DIGIT_GROUPS_SIZE - copy_offset;
+        memmove(dec_digit_groups + copy_offset, dec_digit_groups, copy_size * sizeof(u64));
+        memset(dec_digit_groups, 0, copy_offset * sizeof(u64));
+        dec_digit_groups_stored_num = copy_offset + copy_size;
+        dec_digit_groups_fractional_start = 0;
+        decimal_point_digit_i = (19 + decimal_point_position % 19) % 19;
+    }
     // Normalize the digits to align decimal point with digit group boundary
     if (decimal_point_digit_i != 0) {
         // Divide the number by 10 ^ (19 - decimal_point_digit_i) in base 10^19
@@ -974,18 +1104,24 @@ end_of_digits:
                 : [b] "r"(POW_10_19), [l] "r"(dec_digit_groups[i]), [d] "r"(divisor), "a"(remainder)
             );
         }
+        // Store reimainder in new final digit
         for (int i = 0; i < decimal_point_digit_i; i++)
             remainder *= 10;
         dec_digit_groups[dec_digit_groups_stored_num] = remainder;
         dec_digit_groups_stored_num++;
-        dec_digit_groups_integral_num++;
+        dec_digit_groups_fractional_start++;
     }
-    int dec_digit_groups_fractional_start = dec_digit_groups_integral_num;
     // Covert the integral part into base 2^63
     // We only need the two highest digits to fill the mantissa.
     u64 mantissa_integral_digit_groups[2] = {0, 0};
     int mantissa_integral_digit_groups_num = 0;
+    int dec_digit_groups_integral_num = dec_digit_groups_fractional_start;
     int first_dec_digit_group = 0;
+    // Remove initial zeroes
+    while (dec_digit_groups_integral_num > 0 && dec_digit_groups[first_dec_digit_group] == 0) {
+        first_dec_digit_group++;
+        dec_digit_groups_integral_num--;
+    }
     while (dec_digit_groups_integral_num > 0) {
         // Divide the integral part by 2^63 in base 10^19
         u64 remainder = 0;
@@ -1224,7 +1360,9 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
             break;
         }
         case 'f':
-        case 'F': {
+        case 'F':
+        case 'e':
+        case 'E': {
             scanf_whitespace(file, &offset);
             float *f_ptr = va_arg(args, float *);
             long double f;
