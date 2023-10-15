@@ -360,6 +360,7 @@ typedef enum FloatRepr {
     FLOAT_REPR_F,
     FLOAT_REPR_E,
     FLOAT_REPR_G,
+    FLOAT_REPR_A,
 } FloatRepr;
 
 // Print a floating-point number
@@ -383,8 +384,6 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
             printf_string(file, offset, uppercase ? "NAN" : "nan", -1);
         return;
     }
-    // Subtract the bias from the exponent
-    i32 exponent = exponent_field - 16383;
     // In order to avoid going into an infinite loop when printing the fractional part, handle zeroes in exponential representations separately
     if (exponent_field == 0 && (mantissa & (UINT64_C(-1) >> 1)) == 0) {
         if (repr == FLOAT_REPR_E) {
@@ -399,10 +398,34 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
             return;
         }
     }
+    // Subtract the bias from the exponent
+    i32 exponent = exponent_field - 16383;
     // If the number is denormal, adjust the exponent to account for it
     // There is no need to change anything else, since the integral part of the mantissa is already explicitly stored in this format.
-    if (exponent_field == 0) {
+    if (exponent_field == 0)
         exponent += 1;
+    // Handle hexadecimal representation separately
+    if (repr == FLOAT_REPR_A) {
+        if (exponent_field == 0 && (mantissa & (UINT64_C(-1) >> 1)) == 0)
+            exponent = 0;
+        printf_string(file, offset, uppercase ? "0X" : "0x", -1);
+        // Print first digit
+        printf_char(file, offset, '0' + (mantissa >> 63));
+        mantissa <<= 1;
+        // Print decimal point
+        if (precision != 0)
+            printf_char(file, offset, '.');
+        // Print remaining digits
+        for (int i = 0; i < precision; i++) {
+            int digit = mantissa >> 60;
+            printf_char(file, offset, digit < 10 ? digit + '0' : digit - 10 + (uppercase ? 'A' : 'a'));
+            mantissa <<= 4;
+        }
+        // Print exponent
+        printf_char(file, offset, uppercase ? 'P' : 'p');
+        printf_char(file, offset, exponent >= 0 ? '+' : '-');
+        printf_dec(file, offset, exponent >= 0 ? exponent : -exponent, 1);
+        return;
     }
     // Buffer for storing the expanded form of the integral part or the fractional part of the floating-point number
     // Must be long enough to hold -(maximum exponent) + (length of mantissa) - 1 bits = (16383 + 64 - 1) / 8 qwords = 256.96875 qwords
@@ -810,6 +833,26 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
             printf_float(file, offset, f, true, FLOAT_REPR_G, got_precision ? precision : 6);
             break;
         }
+        case 'a': {
+            double f = va_arg(args, double);
+            if (got_field_width) {
+                size_t length = 0;
+                printf_float(&dummy_file, &length, f, false, FLOAT_REPR_A, got_precision ? precision : 13);
+                printf_padding(file, offset, field_width, length);
+            }
+            printf_float(file, offset, f, false, FLOAT_REPR_A, got_precision ? precision : 13);
+            break;
+        }
+        case 'A': {
+            double f = va_arg(args, double);
+            if (got_field_width) {
+                size_t length = 0;
+                printf_float(&dummy_file, &length, f, true, FLOAT_REPR_A, got_precision ? precision : 13);
+                printf_padding(file, offset, field_width, length);
+            }
+            printf_float(file, offset, f, true, FLOAT_REPR_A, got_precision ? precision : 13);
+            break;
+        }
         // Incorrect specifiers have undefined behavior, so we choose to ignore them
         case '\0':
             return;
@@ -992,6 +1035,44 @@ static bool scanf_int_signed(FILE *file, size_t *offset, size_t *field_width, in
     return true;
 }
 
+static ptrdiff_t scanf_exponent(FILE *file, size_t *offset, size_t *field_width) {
+    int c;
+    // Read sign
+    bool exponent_sign;
+    c = scanf_char(file, offset, field_width);
+    switch (c) {
+    case '+':
+        exponent_sign = false;
+        break;
+    case '-':
+        exponent_sign = true;
+        break;
+    default:
+        exponent_sign = false;
+        scanf_ungetc(file, offset, field_width, c);
+        break;
+    }
+    // Read magnitude
+    ptrdiff_t exponent = 0;
+    size_t exponent_digits_read = 0;
+    while (1) {
+        c = scanf_char(file, offset, field_width);
+        if ('0' <= c && c <= '9') {
+            exponent = 10 * exponent + (c - '0');
+            exponent_digits_read++;
+        } else {
+            scanf_ungetc(file, offset, field_width, c);
+            break;
+        }
+    }
+    // if we read more than 18 digits, consider the exponent as having overflow and clamp it to 10^18
+    if (exponent_digits_read > 18)
+        exponent = 1000000000000000000;
+    if (exponent_sign)
+        exponent *= -1;
+    return exponent;
+}
+
 static bool scanf_float(FILE *file, size_t *offset, size_t *field_width, long double *f_ptr) {
     int c;
     union long_double_cast f_cast;
@@ -1011,6 +1092,7 @@ static bool scanf_float(FILE *file, size_t *offset, size_t *field_width, long do
         break;
     }
     // Check first character after sign
+    bool got_digit = false;
     c = scanf_char(file, offset, field_width);
     if (tolower(c) == 'i') {
         // Parse infinity
@@ -1056,10 +1138,105 @@ static bool scanf_float(FILE *file, size_t *offset, size_t *field_width, long do
         f_cast.sign_exponent = sign ? 0xFFFF : 0x7FFF;
         *f_ptr = f_cast.ld;
         return true;
+    } else if (c == '0') {
+        got_digit = true;
+        c = scanf_char(file, offset, field_width);
+        if (c == 'x' || c == 'X') {
+            // Read hexadecimal floating-point number
+            // Skip initial zeroes
+            bool got_decimal_point = false;
+            ptrdiff_t exponent = -1;
+            while (1) {
+                c = scanf_char(file, offset, field_width);
+                if (c == '0') {
+                    got_digit = true;
+                    if (got_decimal_point)
+                        exponent -= 4;
+                } else if (c == '.' && !got_decimal_point) {
+                    got_decimal_point = true;
+                } else {
+                    scanf_ungetc(file, offset, field_width, c);
+                    break;
+                }
+            }
+            // Read digits
+            u64 mantissa = 0;
+            int digit_shift = 60;
+            while (1) {
+                c = scanf_char(file, offset, field_width);
+                int digit;
+                if ('0' <= c && c <= '9') {
+                    digit = c - '0';
+                } else if ('a' <= c && c <= 'f') {
+                    digit = c - 'a' + 10;
+                } else if ('A' <= c && c <= 'F') {
+                    digit = c - 'A' + 10;
+                } else if (c == '.' && !got_decimal_point) {
+                    // Decimal point
+                    got_decimal_point = true;
+                    continue;
+                } else {
+                    // Unexpected character
+                    scanf_ungetc(file, offset, field_width, c);
+                    break;
+                }
+                // Add digit to mantissa
+                got_digit = true;
+                if (!got_decimal_point)
+                    exponent += 4;
+                if (digit_shift >= 0)
+                    mantissa |= (u64)digit << digit_shift;
+                else if (digit_shift > -4)
+                    mantissa |= (u64)digit >> -digit_shift;
+                digit_shift -= 4;
+                // Normalize after reading first digit
+                if (digit_shift == 56) {
+                    while ((mantissa & (UINT64_C(1) << 63)) == 0) {
+                        mantissa <<= 1;
+                        digit_shift++;
+                        exponent--;
+                    }
+                }
+            }
+            // Return zero if there are no non-zero digits
+            if ((mantissa & (UINT64_C(1) << 63)) == 0)
+                goto return_zero;
+            // Fail if we didn't find any digits
+            if (!got_digit)
+                return false;
+            // Read exponent
+            c = scanf_char(file, offset, field_width);
+            if (c == 'p' || c == 'P')
+                exponent += scanf_exponent(file, offset, field_width);
+            else
+                scanf_ungetc(file, offset, field_width, c);
+            // Assemble value
+            if (exponent > 16383) {
+                // Exponent is too large to fit, so we return infinity
+                goto return_inf;
+            } else if (exponent >= -16382) {
+                // Number is normal
+                f_cast.mantissa = mantissa;
+                f_cast.sign_exponent = exponent + 16383;
+            } else if (exponent >= -16382 - 63) {
+                // Number is subnormal
+                f_cast.mantissa = mantissa >> (-16382 - exponent);
+                f_cast.sign_exponent = 0;
+            } else {
+                // Exponent is too small, so we return zero
+                goto return_zero;
+            }
+            if (sign)
+                f_cast.sign_exponent |= 0x8000;
+            *f_ptr = f_cast.ld;
+            return true;
+        } else {
+            scanf_ungetc(file, offset, field_width, c);
+        }
+    } else {
+        scanf_ungetc(file, offset, field_width, c);
     }
-    scanf_ungetc(file, offset, field_width, c);
     // Skip initial zeroes
-    bool got_digit = false;
     bool got_decimal_point = false;
     ptrdiff_t decimal_point_position = 0;
     while (1) {
@@ -1122,45 +1299,10 @@ end_of_digits:
         return false;
     // Read exponent
     c = scanf_char(file, offset, field_width);
-    if (c == 'e' || c == 'E') {
-        // Read sign
-        bool dec_exponent_sign;
-        c = scanf_char(file, offset, field_width);
-        switch (c) {
-        case '+':
-            dec_exponent_sign = false;
-            break;
-        case '-':
-            dec_exponent_sign = true;
-            break;
-        default:
-            dec_exponent_sign = false;
-            scanf_ungetc(file, offset, field_width, c);
-            break;
-        }
-        // Read magnitude
-        ptrdiff_t dec_exponent = 0;
-        size_t exponent_digits_read = 0;
-        while (1) {
-            c = scanf_char(file, offset, field_width);
-            if ('0' <= c && c <= '9') {
-                dec_exponent = 10 * dec_exponent + (c - '0');
-                exponent_digits_read++;
-            } else {
-                scanf_ungetc(file, offset, field_width, c);
-                break;
-            }
-        }
-        // if we read more than 18 digits, consider the exponent as having overflow and clamp it to 10^18
-        if (exponent_digits_read > 18)
-            dec_exponent = 1000000000000000000;
-        if (dec_exponent_sign)
-            dec_exponent *= -1;
-        // Apply exponent
-        decimal_point_position += dec_exponent;
-    } else {
+    if (c == 'e' || c == 'E')
+        decimal_point_position += scanf_exponent(file, offset, field_width);
+    else
         scanf_ungetc(file, offset, field_width, c);
-    }
     // Shift digits so that decimal point is within stored digit groups
     int dec_digit_groups_stored_num;
     int dec_digit_groups_fractional_start;
@@ -1288,6 +1430,7 @@ end_of_digits:
         int exponent = - (mantissa_fractional_digit_groups_num * 63) - (leading_zeroes - 1) - 1;
         if (exponent < -16382 - 63) {
             // The exponent is too small to represent, so we return zero
+return_zero:
             f_cast.mantissa = 0;
             f_cast.sign_exponent = 0;
         } else if (exponent < -16382) {
@@ -1462,7 +1605,9 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
         case 'e':
         case 'E':
         case 'g':
-        case 'G': {
+        case 'G':
+        case 'a':
+        case 'A': {
             scanf_whitespace(file, &offset);
             float *f_ptr = va_arg(args, float *);
             long double f;
