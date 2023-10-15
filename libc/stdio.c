@@ -1140,16 +1140,20 @@ end_of_digits:
         }
         // Read magnitude
         ptrdiff_t dec_exponent = 0;
+        size_t exponent_digits_read = 0;
         while (1) {
             c = scanf_char(file, offset, field_width);
             if ('0' <= c && c <= '9') {
-                // TODO overflow
                 dec_exponent = 10 * dec_exponent + (c - '0');
+                exponent_digits_read++;
             } else {
                 scanf_ungetc(file, offset, field_width, c);
                 break;
             }
         }
+        // if we read more than 18 digits, consider the exponent as having overflow and clamp it to 10^18
+        if (exponent_digits_read > 18)
+            dec_exponent = 1000000000000000000;
         if (dec_exponent_sign)
             dec_exponent *= -1;
         // Apply exponent
@@ -1261,7 +1265,7 @@ end_of_digits:
         while (significant_digit_groups < 2) {
             // Multiply the fractional part by 2^63 in base 10^19
             u64 carry = 0;
-            for (int i = dec_digit_groups_fractional_start; i < dec_digit_groups_stored_num; i++) {
+            for (int i = dec_digit_groups_stored_num - 1; i >= dec_digit_groups_fractional_start; i--) {
                 // Set dec_digit_groups[i] = (dec_digit_groups[i] * 2^63 + carry) % 10^19
                 // and carry = (dec_digit_groups[i] * 2^63 + carry) / 10^19
                 u64 product_high = dec_digit_groups[i] >> 1;
