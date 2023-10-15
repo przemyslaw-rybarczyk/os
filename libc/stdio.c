@@ -356,10 +356,16 @@ union long_double_cast {
 // 10^19 - the largest power of 10 that can fit in a u64
 #define POW_10_19 UINT64_C(10000000000000000000)
 
+typedef enum FloatRepr {
+    FLOAT_REPR_F,
+    FLOAT_REPR_E,
+    FLOAT_REPR_G,
+} FloatRepr;
+
 // Print a floating-point number
 // `uppercase` determines whether nan and inf are printed in lowercase or uppercase.
 // The conversion algorithm used is very basic and does not properly round the result, but only truncates it.
-static void printf_float(FILE *file, size_t *offset, long double f, bool uppercase, bool exponential, int precision) {
+static void printf_float(FILE *file, size_t *offset, long double f, bool uppercase, FloatRepr repr, int precision) {
     // Extract mantissa and exponent fields
     union long_double_cast f_cast;
     f_cast.ld = f;
@@ -379,14 +385,19 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
     }
     // Subtract the bias from the exponent
     i32 exponent = exponent_field - 16383;
-    // In order to avoid going into an infinite loop when printing the fractional part, handle zeroes in exponential representation separately
-    if (exponential && exponent_field == 0 && (mantissa & (UINT64_C(-1) >> 1)) == 0) {
-        printf_string(file, offset, "0.", -1);
-        for (int i = 0; i < precision; i++)
+    // In order to avoid going into an infinite loop when printing the fractional part, handle zeroes in exponential representations separately
+    if (exponent_field == 0 && (mantissa & (UINT64_C(-1) >> 1)) == 0) {
+        if (repr == FLOAT_REPR_E) {
+            printf_string(file, offset, "0.", -1);
+            for (int i = 0; i < precision; i++)
+                printf_char(file, offset, '0');
+            printf_char(file, offset, uppercase ? 'E' : 'e');
+            printf_string(file, offset, "+00", -1);
+            return;
+        } else if (repr == FLOAT_REPR_G) {
             printf_char(file, offset, '0');
-        printf_char(file, offset, uppercase ? 'E' : 'e');
-        printf_string(file, offset, "+00", -1);
-        return;
+            return;
+        }
     }
     // If the number is denormal, adjust the exponent to account for it
     // There is no need to change anything else, since the integral part of the mantissa is already explicitly stored in this format.
@@ -443,54 +454,72 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
             fp_digits_num -= 1;
     }
     // Print the integral part
+    bool exponential = repr == FLOAT_REPR_E;
     bool got_decimal_point = false;
     int dec_exponent = 0;
     int digits_printed = 0;
+    bool decimal_point_skipped = false;
+    int zeroes_skipped = 0;
     if (dec_digit_groups_num == 0) {
         // If the integral part is zero, print a zero
-        if (!exponential)
+        if (repr == FLOAT_REPR_F)
             printf_char(file, offset, '0');
         else
-            dec_exponent--;
+            dec_exponent = -1;
     } else {
         // Print the first digit group while skipping initial zeroes
-        size_t n = dec_digit_groups[dec_digit_groups_num - 1];
-        int i = 0;
-        for (; n > 0; n /= 10)
-            dec_digits[i++] = (n % 10) + '0';
+        int initial_limit = 0;
+        for (u64 n = dec_digit_groups[dec_digit_groups_num - 1]; n > 0; n /= 10)
+            dec_digits[initial_limit++] = (n % 10) + '0';
+        dec_exponent = 19 * (dec_digit_groups_num - 1) + initial_limit - 1;
+        if (repr == FLOAT_REPR_G) {
+            if (dec_exponent >= precision) {
+                exponential = true;
+                precision--;
+            } else {
+                precision -= 1 + dec_exponent;
+            }
+        }
         if (exponential) {
             // First digit in exponential form has decimal point after it
-            printf_char(file, offset, dec_digits[i - 1]);
-            i--;
-            printf_char(file, offset, '.');
+            printf_char(file, offset, dec_digits[initial_limit - 1]);
+            initial_limit--;
+            decimal_point_skipped = true;
             got_decimal_point = true;
         }
-        for (int j = 0; j < i; j++) {
-            printf_char(file, offset, dec_digits[i - j - 1]);
-            dec_exponent++;
-            digits_printed++;
-            if (exponential && digits_printed >= precision)
-                goto end_digits;
-        }
-        // Print the remaining digit groups
-        for (int i = dec_digit_groups_num - 2; i >= 0; i--) {
+        // Print the digit groups
+        for (int i = dec_digit_groups_num - 1; i >= 0; i--) {
             u64 n = dec_digit_groups[i];
             for (int j = 0; j < 19; j++) {
                 dec_digits[j] = (n % 10) + '0';
                 n /= 10;
             }
-            for (int j = 0; j < 19; j++) {
-                printf_char(file, offset, dec_digits[18 - j]);
-                dec_exponent++;
-                digits_printed++;
-                if (exponential && digits_printed >= precision)
-                    goto end_digits;
+            int limit = i == dec_digit_groups_num - 1 ? initial_limit : 19;
+            for (int j = 0; j < limit; j++) {
+                if (repr == FLOAT_REPR_G && exponential && dec_digits[limit - 1 - j] == '0') {
+                    if (digits_printed >= precision)
+                        goto end_digits;
+                    zeroes_skipped++;
+                    digits_printed++;
+                } else {
+                    if (exponential && digits_printed >= precision)
+                        goto end_digits;
+                    if (decimal_point_skipped) {
+                        printf_char(file, offset, '.');
+                        decimal_point_skipped = false;
+                    }
+                    for (; zeroes_skipped > 0; zeroes_skipped--)
+                        printf_char(file, offset, '0');
+                    printf_char(file, offset, dec_digits[limit - 1 - j]);
+                    digits_printed++;
+                }
             }
         }
     }
-    if (!exponential) {
+    if (repr == FLOAT_REPR_F || (repr == FLOAT_REPR_G && dec_digit_groups_num != 0 && !exponential)) {
         // Print the decimal point
-        printf_char(file, offset, '.');
+        decimal_point_skipped = true;
+        got_decimal_point = true;
     }
     // Convert the fractional part to a big-endian big integer
     // This involves shifting the mantissa left by the negated exponent
@@ -529,24 +558,65 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
             n /= 10;
         }
         for (int j = 0; j < 19; j++) {
-            if (exponential) {
-                if (got_decimal_point) {
+            if (repr == FLOAT_REPR_G && !got_decimal_point && !exponential) {
+                if (dec_digits[18 - j] != '0') {
+                    printf_char(file, offset, '0');
+                    printf_char(file, offset, '.');
+                    for (int i = -1; i > dec_exponent; i--)
+                        printf_char(file, offset, '0');
                     printf_char(file, offset, dec_digits[18 - j]);
-                    digits_printed++;
+                    got_decimal_point = true;
+                    precision -= 1 + dec_exponent;
+                } else {
+                    dec_exponent--;
+                    if (dec_exponent <= -4) {
+                        exponential = true;
+                        precision--;
+                    }
+                }
+            } else if (exponential) {
+                if (repr == FLOAT_REPR_G && got_decimal_point && dec_digits[18 - j] == '0') {
                     if (digits_printed >= precision)
                         goto end_digits;
+                    zeroes_skipped++;
+                    digits_printed++;
+                } else if (got_decimal_point) {
+                    if (digits_printed >= precision)
+                        goto end_digits;
+                    if (decimal_point_skipped) {
+                        printf_char(file, offset, '.');
+                        decimal_point_skipped = false;
+                    }
+                    for (; zeroes_skipped > 0; zeroes_skipped--)
+                        printf_char(file, offset, '0');
+                    printf_char(file, offset, dec_digits[18 - j]);
+                    digits_printed++;
                 } else if (dec_digits[18 - j] != '0') {
                     printf_char(file, offset, dec_digits[18 - j]);
-                    printf_char(file, offset, '.');
+                    decimal_point_skipped = true;
                     got_decimal_point = true;
                 } else {
                     dec_exponent--;
                 }
             } else {
-                if (19 * gi + j < precision)
-                    printf_char(file, offset, dec_digits[18 - j]);
-                else
+                if (19 * gi + j < precision) {
+                    if (repr == FLOAT_REPR_G && dec_digits[18 - j] == '0') {
+                        if (digits_printed >= precision)
+                            goto end_digits;
+                        zeroes_skipped++;
+                        digits_printed++;
+                    } else {
+                        if (decimal_point_skipped) {
+                            printf_char(file, offset, '.');
+                            decimal_point_skipped = false;
+                        }
+                        for (; zeroes_skipped > 0; zeroes_skipped--)
+                            printf_char(file, offset, '0');
+                        printf_char(file, offset, dec_digits[18 - j]);
+                    }
+                } else {
                     goto end_digits;
+                }
             }
         }
     }
@@ -587,6 +657,8 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
                 i++;
             }
         }
+        if (field_width < 0)
+            field_width = 0;
         // Read precision
         bool got_precision = false;
         int precision = 0;
@@ -604,6 +676,8 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
                 }
             }
         }
+        if (precision < 0)
+            precision = 0;
         // Read the conversion specifier
         switch (fmt[i++]) {
         case '%':
@@ -680,40 +754,60 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
             double f = va_arg(args, double);
             if (got_field_width) {
                 size_t length = 0;
-                printf_float(&dummy_file, &length, f, false, false, got_precision ? precision : 6);
+                printf_float(&dummy_file, &length, f, false, FLOAT_REPR_F, got_precision ? precision : 6);
                 printf_padding(file, offset, field_width, length);
             }
-            printf_float(file, offset, f, false, false, got_precision ? precision : 6);
+            printf_float(file, offset, f, false, FLOAT_REPR_F, got_precision ? precision : 6);
             break;
         }
         case 'F': {
             double f = va_arg(args, double);
             if (got_field_width) {
                 size_t length = 0;
-                printf_float(&dummy_file, &length, f, true, false, got_precision ? precision : 6);
+                printf_float(&dummy_file, &length, f, true, FLOAT_REPR_F, got_precision ? precision : 6);
                 printf_padding(file, offset, field_width, length);
             }
-            printf_float(file, offset, f, true, false, got_precision ? precision : 6);
+            printf_float(file, offset, f, true, FLOAT_REPR_F, got_precision ? precision : 6);
             break;
         }
         case 'e': {
             double f = va_arg(args, double);
             if (got_field_width) {
                 size_t length = 0;
-                printf_float(&dummy_file, &length, f, false, true, got_precision ? precision : 6);
+                printf_float(&dummy_file, &length, f, false, FLOAT_REPR_E, got_precision ? precision : 6);
                 printf_padding(file, offset, field_width, length);
             }
-            printf_float(file, offset, f, false, true, got_precision ? precision : 6);
+            printf_float(file, offset, f, false, FLOAT_REPR_E, got_precision ? precision : 6);
             break;
         }
         case 'E': {
             double f = va_arg(args, double);
             if (got_field_width) {
                 size_t length = 0;
-                printf_float(&dummy_file, &length, f, true, true, got_precision ? precision : 6);
+                printf_float(&dummy_file, &length, f, true, FLOAT_REPR_E, got_precision ? precision : 6);
                 printf_padding(file, offset, field_width, length);
             }
-            printf_float(file, offset, f, true, true, got_precision ? precision : 6);
+            printf_float(file, offset, f, true, FLOAT_REPR_E, got_precision ? precision : 6);
+            break;
+        }
+        case 'g': {
+            double f = va_arg(args, double);
+            if (got_field_width) {
+                size_t length = 0;
+                printf_float(&dummy_file, &length, f, false, FLOAT_REPR_G, got_precision ? precision : 6);
+                printf_padding(file, offset, field_width, length);
+            }
+            printf_float(file, offset, f, false, FLOAT_REPR_G, got_precision ? precision : 6);
+            break;
+        }
+        case 'G': {
+            double f = va_arg(args, double);
+            if (got_field_width) {
+                size_t length = 0;
+                printf_float(&dummy_file, &length, f, true, FLOAT_REPR_G, got_precision ? precision : 6);
+                printf_padding(file, offset, field_width, length);
+            }
+            printf_float(file, offset, f, true, FLOAT_REPR_G, got_precision ? precision : 6);
             break;
         }
         // Incorrect specifiers have undefined behavior, so we choose to ignore them
@@ -1362,7 +1456,9 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
         case 'f':
         case 'F':
         case 'e':
-        case 'E': {
+        case 'E':
+        case 'g':
+        case 'G': {
             scanf_whitespace(file, &offset);
             float *f_ptr = va_arg(args, float *);
             long double f;
