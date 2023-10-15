@@ -867,6 +867,9 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
             }
             break;
         }
+        case 'n':
+            *va_arg(args, int *) = *offset;
+            break;
         // Incorrect specifiers have undefined behavior, so we choose to ignore them
         case '\0':
             return;
@@ -1641,6 +1644,10 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
             matches++;
             break;
         }
+        case 'n':
+            *va_arg(args, int *) = offset;
+            matches++;
+            break;
         // Incorrect specifiers have undefined behavior, so we choose to ignore them
         case '\0':
             return matches;
