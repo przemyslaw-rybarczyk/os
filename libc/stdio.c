@@ -651,6 +651,9 @@ end_digits:
     }
 }
 
+// Number of hex digits necessary to represent a pointer value
+#define PTR_HEX_DIGITS (2 * sizeof(void *))
+
 // Print to a printf target
 // This function implements the main logic of all printf() family functions.
 static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list args) {
@@ -851,6 +854,17 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
                 printf_padding(file, offset, field_width, length);
             }
             printf_float(file, offset, f, true, FLOAT_REPR_A, got_precision ? precision : 13);
+            break;
+        }
+        case 'p': {
+            void *p = va_arg(args, void *);
+            if (got_field_width)
+                printf_padding(file, offset, field_width, 2 + PTR_HEX_DIGITS);
+            printf_string(file, offset, "0x", -1);
+            for (int i = PTR_HEX_DIGITS - 1; i >= 0; i--) {
+                int digit = ((uintptr_t)p >> (4 * i)) & 0xF;
+                printf_char(file, offset, digit < 10 ? digit + '0' : digit - 10 + 'a');
+            }
             break;
         }
         // Incorrect specifiers have undefined behavior, so we choose to ignore them
@@ -1614,6 +1628,16 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
             if (!scanf_float(file, &offset, &field_width, &f))
                 return matches;
             *f_ptr = (float)f;
+            matches++;
+            break;
+        }
+        case 'p': {
+            scanf_whitespace(file, &offset);
+            void **p_ptr = va_arg(args, void **);
+            uintmax_t n;
+            if (!scanf_int_unsigned(file, &offset, &field_width, &n, 16))
+                return matches;
+            *p_ptr = (void *)n;
             matches++;
             break;
         }
