@@ -257,10 +257,15 @@ static void printf_char(FILE *file, size_t *offset, char c) {
 }
 
 // Print enough padding to pad field of length `length` to fill `field_width` characters
-static void printf_padding(FILE *file, size_t *offset, size_t field_width, size_t length) {
-    if (length < field_width)
-        for (size_t i = 0; i < field_width - length; i++)
-            printf_char(file, offset, ' ');
+static void printf_padding(FILE *file, size_t *offset, size_t field_width, size_t length, size_t *padding_zeroes) {
+    if (length < field_width) {
+        if (padding_zeroes) {
+            *padding_zeroes = field_width - length;
+        } else {
+            for (size_t i = 0; i < field_width - length; i++)
+                printf_char(file, offset, ' ');
+        }
+    }
 }
 
 // Print a null-terminated string
@@ -269,8 +274,17 @@ static void printf_string(FILE *file, size_t *offset, const char *s, int precisi
         printf_char(file, offset, s[i]);
 }
 
+typedef enum PrintfFlags {
+    PRINTF_SIGN_ALWAYS = 1,
+    PRINTF_SIGN_SPACE = 2,
+    PRINTF_ALTERNATIVE_FORM = 4,
+} PrintfFlags;
+
 // Print an unsinged decimal number
-static void printf_dec(FILE *file, size_t *offset, uintmax_t n, int precision) {
+static void printf_dec(FILE *file, size_t *offset, uintmax_t n, int precision, size_t padding_zeroes) {
+    // Print padding zeroes
+    for (size_t i = 0; i < padding_zeroes; i++)
+        printf_char(file, offset, '0');
     // Since the digits will be generated in the reverse order from the one we need, we put them in a buffer before printing them.
     // 2.41 is a little above the decimal logarithm of 256 (the number of decimal digits a byte contains).
     char digits[(size_t)(sizeof(uintmax_t) * 2.41 + 1)];
@@ -288,21 +302,28 @@ static void printf_dec(FILE *file, size_t *offset, uintmax_t n, int precision) {
 }
 
 // Print a singed decimal number
-static void printf_dec_signed(FILE *file, size_t *offset, intmax_t n, int precision) {
+static void printf_dec_signed(FILE *file, size_t *offset, intmax_t n, int precision, PrintfFlags flags, size_t padding_zeroes) {
     uintmax_t nu; // Absolute value of n
     // If the number is negative, print a minus sign and invert it
     if (n < 0) {
         printf_char(file, offset, '-');
         nu = -n;
     } else {
+        if (flags & PRINTF_SIGN_ALWAYS)
+            printf_char(file, offset, '+');
+        else if (flags & PRINTF_SIGN_SPACE)
+            printf_char(file, offset, ' ');
         nu = n;
     }
     // Print the number without the sign
-    printf_dec(file, offset, nu, precision);
+    printf_dec(file, offset, nu, precision, padding_zeroes);
 }
 
 // Print an unsinged octal number
-static void printf_oct(FILE *file, size_t *offset, uintmax_t n, int precision) {
+static void printf_oct(FILE *file, size_t *offset, uintmax_t n, int precision, PrintfFlags flags, size_t padding_zeroes) {
+    // Print padding zeroes
+    for (size_t i = 0; i < padding_zeroes; i++)
+        printf_char(file, offset, '0');
     // Index of octal digit
     int i = (8 * sizeof(uintmax_t) - 1) / 3;
     // Skip initial zeroes
@@ -312,6 +333,8 @@ static void printf_oct(FILE *file, size_t *offset, uintmax_t n, int precision) {
     if (i + 1 < precision)
         for (int j = i + 1; j < precision; j++)
             printf_char(file, offset, '0');
+    else if (flags & PRINTF_ALTERNATIVE_FORM)
+        printf_char(file, offset, '0');
     // Print digits
     for (; i >= 0; i--) {
         int digit = (n >> (3 * i)) & 0x7;
@@ -321,7 +344,13 @@ static void printf_oct(FILE *file, size_t *offset, uintmax_t n, int precision) {
 
 // Print an unsinged hexadecimal number
 // `uppercase` determines whether digits above 9 are printed as "ABCDEF" or "abcdef".
-static void printf_hex(FILE *file, size_t *offset, uintmax_t n, bool uppercase, int precision) {
+static void printf_hex(FILE *file, size_t *offset, uintmax_t n, bool uppercase, int precision, PrintfFlags flags, size_t padding_zeroes) {
+    // Print prefix for alternative form
+    if (flags & PRINTF_ALTERNATIVE_FORM)
+        printf_string(file, offset, uppercase ? "0X" : "0x", -1);
+    // Print padding zeroes
+    for (size_t i = 0; i < padding_zeroes; i++)
+        printf_char(file, offset, '0');
     // Index of hexadecimal digit
     int i = 2 * sizeof(uintmax_t) - 1;
     // Skip initial zeroes
@@ -366,7 +395,7 @@ typedef enum FloatRepr {
 // Print a floating-point number
 // `uppercase` determines whether nan and inf are printed in lowercase or uppercase.
 // The conversion algorithm used is very basic and does not properly round the result, but only truncates it.
-static void printf_float(FILE *file, size_t *offset, long double f, bool uppercase, FloatRepr repr, int precision) {
+static void printf_float(FILE *file, size_t *offset, long double f, bool uppercase, FloatRepr repr, int precision, PrintfFlags flags, size_t padding_zeroes) {
     // Extract mantissa and exponent fields
     union long_double_cast f_cast;
     f_cast.ld = f;
@@ -375,6 +404,16 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
     // If the sign bit is set, print a minus sign
     if (f_cast.sign_exponent & 0x8000)
         printf_char(file, offset, '-');
+    else if (flags & PRINTF_SIGN_ALWAYS)
+        printf_char(file, offset, '+');
+    else if (flags & PRINTF_SIGN_SPACE)
+        printf_char(file, offset, ' ');
+    // Print hexadecimal prefix
+    if (repr == FLOAT_REPR_A)
+        printf_string(file, offset, uppercase ? "0X" : "0x", -1);
+    // Print padding zeroes
+    for (size_t i = 0; i < padding_zeroes; i++)
+        printf_char(file, offset, '0');
     // Handle NaN and infinity
     if (exponent_field == 0x7FFF) {
         // When checking the mantissa, ignore the highest bit, since it should be 1
@@ -387,14 +426,22 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
     // In order to avoid going into an infinite loop when printing the fractional part, handle zeroes in exponential representations separately
     if (exponent_field == 0 && (mantissa & (UINT64_C(-1) >> 1)) == 0) {
         if (repr == FLOAT_REPR_E) {
-            printf_string(file, offset, "0.", -1);
-            for (int i = 0; i < precision; i++)
-                printf_char(file, offset, '0');
+            printf_char(file, offset, '0');
+            if (precision != 0 || (flags & PRINTF_ALTERNATIVE_FORM)) {
+                printf_char(file, offset, '.');
+                for (int i = 0; i < precision; i++)
+                    printf_char(file, offset, '0');
+            }
             printf_char(file, offset, uppercase ? 'E' : 'e');
             printf_string(file, offset, "+00", -1);
             return;
         } else if (repr == FLOAT_REPR_G) {
             printf_char(file, offset, '0');
+            if (flags & PRINTF_ALTERNATIVE_FORM) {
+                printf_char(file, offset, '.');
+                for (int i = 0; i < precision - 1; i++)
+                    printf_char(file, offset, '0');
+            }
             return;
         }
     }
@@ -406,14 +453,14 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
         exponent += 1;
     // Handle hexadecimal representation separately
     if (repr == FLOAT_REPR_A) {
+        // Set exponent for 0 to be 0
         if (exponent_field == 0 && (mantissa & (UINT64_C(-1) >> 1)) == 0)
             exponent = 0;
-        printf_string(file, offset, uppercase ? "0X" : "0x", -1);
         // Print first digit
         printf_char(file, offset, '0' + (mantissa >> 63));
         mantissa <<= 1;
         // Print decimal point
-        if (precision != 0)
+        if (precision != 0 || (flags & PRINTF_ALTERNATIVE_FORM))
             printf_char(file, offset, '.');
         // Print remaining digits
         for (int i = 0; i < precision; i++) {
@@ -424,7 +471,7 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
         // Print exponent
         printf_char(file, offset, uppercase ? 'P' : 'p');
         printf_char(file, offset, exponent >= 0 ? '+' : '-');
-        printf_dec(file, offset, exponent >= 0 ? exponent : -exponent, 1);
+        printf_dec(file, offset, exponent >= 0 ? exponent : -exponent, 1, 0);
         return;
     }
     // Buffer for storing the expanded form of the integral part or the fractional part of the floating-point number
@@ -534,7 +581,8 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
                     for (; zeroes_skipped > 0; zeroes_skipped--)
                         printf_char(file, offset, '0');
                     printf_char(file, offset, dec_digits[limit - 1 - j]);
-                    digits_printed++;
+                    if (exponential)
+                        digits_printed++;
                 }
             }
         }
@@ -564,7 +612,7 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
         memset(fp_digits, 0, sizeof(u64) * ((- exponent - 1) / 64));
     }
     // Print the fractional part
-    for (int gi = 0; ; gi++) {
+    while (1) {
         // Multiply the fractional part by 10^19 to get the highest 19 digits
         u64 remainder = 0;
         for (int i = fp_digits_num - 1; i >= 0; i--) {
@@ -622,32 +670,39 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
                     dec_exponent--;
                 }
             } else {
-                if (19 * gi + j < precision) {
-                    if (repr == FLOAT_REPR_G && dec_digits[18 - j] == '0') {
-                        if (digits_printed >= precision)
-                            goto end_digits;
-                        zeroes_skipped++;
-                        digits_printed++;
-                    } else {
-                        if (decimal_point_skipped) {
-                            printf_char(file, offset, '.');
-                            decimal_point_skipped = false;
-                        }
-                        for (; zeroes_skipped > 0; zeroes_skipped--)
-                            printf_char(file, offset, '0');
-                        printf_char(file, offset, dec_digits[18 - j]);
-                    }
+                if (repr == FLOAT_REPR_G && dec_digits[18 - j] == '0') {
+                    if (digits_printed >= precision)
+                        goto end_digits;
+                    zeroes_skipped++;
+                    digits_printed++;
                 } else {
-                    goto end_digits;
+                    if (digits_printed >= precision)
+                        goto end_digits;
+                    if (decimal_point_skipped) {
+                        printf_char(file, offset, '.');
+                        decimal_point_skipped = false;
+                    }
+                    for (; zeroes_skipped > 0; zeroes_skipped--)
+                        printf_char(file, offset, '0');
+                    printf_char(file, offset, dec_digits[18 - j]);
+                    digits_printed++;
                 }
             }
         }
     }
 end_digits:
+    if (flags & PRINTF_ALTERNATIVE_FORM) {
+        if (decimal_point_skipped) {
+            printf_char(file, offset, '.');
+            decimal_point_skipped = false;
+        }
+        for (; zeroes_skipped > 0; zeroes_skipped--)
+            printf_char(file, offset, '0');
+    }
     if (exponential) {
         printf_char(file, offset, uppercase ? 'E' : 'e');
         printf_char(file, offset, dec_exponent >= 0 ? '+' : '-');
-        printf_dec(file, offset, dec_exponent >= 0 ? dec_exponent : -dec_exponent, 2);
+        printf_dec(file, offset, dec_exponent >= 0 ? dec_exponent : -dec_exponent, 2, 0);
     }
 }
 
@@ -716,12 +771,51 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
             continue;
         }
         i++;
+        // Read flags
+        bool left_justify = false;
+        bool zero_pad = false;
+        PrintfFlags flags = 0;
+        while (1) {
+            switch (fmt[i]) {
+            case '-':
+                left_justify = true;
+                i++;
+                break;
+            case '+':
+                flags |= PRINTF_SIGN_ALWAYS;
+                i++;
+                break;
+            case ' ':
+                flags |= PRINTF_SIGN_SPACE;
+                i++;
+                break;
+            case '#':
+                flags |= PRINTF_ALTERNATIVE_FORM;
+                i++;
+                break;
+            case '0':
+                zero_pad = true;
+                i++;
+                break;
+            default:
+                goto flags_end;
+            }
+        }
+flags_end:
+        if (flags & PRINTF_SIGN_ALWAYS)
+            flags &= ~PRINTF_SIGN_SPACE;
         // Read field width
         bool got_field_width = false;
         size_t field_width = 0;
         if (fmt[i] == '*') {
             got_field_width = true;
-            field_width = (size_t)va_arg(args, int);
+            int n = va_arg(args, int);
+            if (n >= 0) {
+                field_width = n;
+            } else {
+                left_justify = true;
+                field_width = -n;
+            }
             i++;
         } else {
             while ('0' <= fmt[i] && fmt[i] <= '9') {
@@ -730,8 +824,8 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
                 i++;
             }
         }
-        if (field_width < 0)
-            field_width = 0;
+        if (left_justify)
+            zero_pad = false;
         // Read precision
         bool got_precision = false;
         int precision = 0;
@@ -748,6 +842,7 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
                     i++;
                 }
             }
+            zero_pad = false;
         }
         if (precision < 0)
             precision = 0;
@@ -756,20 +851,21 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
         // Read the conversion specifier
         char specifier = fmt[i];
         i++;
+        size_t offset_before = *offset;
         switch (specifier) {
         case '%':
             if (length_modifier != LENGTH_MOD_NONE)
                 return;
-            if (got_field_width)
-                printf_padding(file, offset, field_width, 1);
+            if (got_field_width && !left_justify)
+                printf_padding(file, offset, field_width, 1, NULL);
             printf_char(file, offset, '%');
             break;
         case 'c': {
             if (length_modifier != LENGTH_MOD_NONE)
                 return;
             int c = va_arg(args, int);
-            if (got_field_width)
-                printf_padding(file, offset, field_width, 1);
+            if (got_field_width && !left_justify)
+                printf_padding(file, offset, field_width, 1, NULL);
             printf_char(file, offset, (unsigned char)c);
             break;
         }
@@ -777,8 +873,8 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
             if (length_modifier != LENGTH_MOD_NONE)
                 return;
             const char *s = va_arg(args, const char *);
-            if (got_field_width)
-                printf_padding(file, offset, field_width, strlen(s));
+            if (got_field_width && !left_justify)
+                printf_padding(file, offset, field_width, strlen(s), NULL);
             printf_string(file, offset, s, got_precision ? precision : -1);
             break;
         }
@@ -817,12 +913,15 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
             }
             }
             // Print number
-            if (got_field_width) {
+            if (!got_precision)
+                precision = 1;
+            size_t padding_zeroes = 0;
+            if (got_field_width && !left_justify) {
                 size_t length = 0;
-                printf_dec_signed(&dummy_file, &length, n, got_precision ? precision : 1);
-                printf_padding(file, offset, field_width, length);
+                printf_dec_signed(&dummy_file, &length, n, precision, flags, 0);
+                printf_padding(file, offset, field_width, length, zero_pad ? &padding_zeroes : NULL);
             }
-            printf_dec_signed(file, offset, n, got_precision ? precision : 1);
+            printf_dec_signed(file, offset, n, precision, flags, padding_zeroes);
             break;
         }
         case 'o':
@@ -860,36 +959,39 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
                 return;
             }
             // Print number
-            if (got_field_width) {
+            if (!got_precision)
+                precision = 1;
+            size_t padding_zeroes = 0;
+            if (got_field_width && !left_justify) {
                 size_t length = 0;
                 switch (specifier) {
                 case 'o':
-                    printf_oct(file, &length, n, got_precision ? precision : 1);
+                    printf_oct(&dummy_file, &length, n, precision, flags, 0);
                     break;
                 case 'x':
-                    printf_hex(file, &length, n, false, got_precision ? precision : 1);
+                    printf_hex(&dummy_file, &length, n, false, precision, flags, 0);
                     break;
                 case 'X':
-                    printf_hex(file, &length, n, true, got_precision ? precision : 1);
+                    printf_hex(&dummy_file, &length, n, true, precision, flags, 0);
                     break;
                 case 'u':
-                    printf_dec(file, &length, n, got_precision ? precision : 1);
+                    printf_dec(&dummy_file, &length, n, precision, 0);
                     break;
                 }
-                printf_padding(file, offset, field_width, length);
+                printf_padding(file, offset, field_width, length, zero_pad ? &padding_zeroes : NULL);
             }
             switch (specifier) {
             case 'o':
-                printf_oct(file, offset, n, got_precision ? precision : 1);
+                printf_oct(file, offset, n, precision, flags, padding_zeroes);
                 break;
             case 'x':
-                printf_hex(file, offset, n, false, got_precision ? precision : 1);
+                printf_hex(file, offset, n, false, precision, flags, padding_zeroes);
                 break;
             case 'X':
-                printf_hex(file, offset, n, true, got_precision ? precision : 1);
+                printf_hex(file, offset, n, true, precision, flags, padding_zeroes);
                 break;
             case 'u':
-                printf_dec(file, offset, n, got_precision ? precision : 1);
+                printf_dec(file, offset, n, precision, padding_zeroes);
                 break;
             }
             break;
@@ -963,20 +1065,21 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
                 }
             }
             // Print number
-            if (got_field_width) {
+            size_t padding_zeroes = 0;
+            if (got_field_width && !left_justify) {
                 size_t length = 0;
-                printf_float(&dummy_file, &length, f, uppercase, repr, precision);
-                printf_padding(file, offset, field_width, length);
+                printf_float(&dummy_file, &length, f, uppercase, repr, precision, flags, 0);
+                printf_padding(file, offset, field_width, length, zero_pad ? &padding_zeroes : NULL);
             }
-            printf_float(file, offset, f, uppercase, repr, precision);
+            printf_float(file, offset, f, uppercase, repr, precision, flags, padding_zeroes);
             break;
         }
         case 'p': {
             if (length_modifier != LENGTH_MOD_NONE)
                 return;
             void *p = va_arg(args, void *);
-            if (got_field_width)
-                printf_padding(file, offset, field_width, 2 + PTR_HEX_DIGITS);
+            if (got_field_width && !left_justify)
+                printf_padding(file, offset, field_width, 2 + PTR_HEX_DIGITS, NULL);
             printf_string(file, offset, "0x", -1);
             for (int i = PTR_HEX_DIGITS - 1; i >= 0; i--) {
                 int digit = ((uintptr_t)p >> (4 * i)) & 0xF;
@@ -1018,6 +1121,8 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
         default:
             return;
         }
+        if (got_field_width && left_justify)
+            printf_padding(file, offset, field_width, *offset - offset_before, NULL);
     }
 }
 
