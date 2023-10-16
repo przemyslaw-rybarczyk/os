@@ -1566,6 +1566,40 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
             matches++;
             break;
         }
+        case '[': {
+            // Parse character set
+            bool negate = false;
+            if (fmt[i] == '^') {
+                negate = true;
+                i++;
+            }
+            size_t group_start = i;
+            if (fmt[i] == '\0')
+                return matches;
+            i++;
+            while (fmt[i] != ']') {
+                if (fmt[i] == '\0')
+                    return matches;
+                i++;
+            }
+            size_t group_end = i;
+            i++;
+            // Read string
+            char *s = va_arg(args, char *);
+            while (1) {
+                int c = scanf_char(file, &offset, &field_width);
+                bool matched = false;
+                for (size_t j = group_start; j < group_end; j++)
+                    if (c == fmt[j])
+                        matched = true;
+                if (c == EOF || negate == matched)
+                    break;
+                *s++ = (char)c;
+            }
+            *s = '\0';
+            matches++;
+            break;
+        }
         case 'd': {
             scanf_whitespace(file, &offset);
             int *n_ptr = va_arg(args, int *);
