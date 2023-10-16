@@ -651,6 +651,53 @@ end_digits:
     }
 }
 
+typedef enum LengthModifier {
+    LENGTH_MOD_NONE,
+    LENGTH_MOD_h,
+    LENGTH_MOD_hh,
+    LENGTH_MOD_l,
+    LENGTH_MOD_ll,
+    LENGTH_MOD_j,
+    LENGTH_MOD_z,
+    LENGTH_MOD_t,
+    LENGTH_MOD_L,
+} LengthModifier;
+
+static LengthModifier read_length_modifier(const char *fmt, size_t *i) {
+    switch (fmt[*i]) {
+    case 'h':
+        (*i)++;
+        if (fmt[*i] == 'h') {
+            (*i)++;
+            return LENGTH_MOD_hh;
+        } else {
+            return LENGTH_MOD_h;
+        }
+    case 'l':
+        (*i)++;
+        if (fmt[*i] == 'l') {
+            (*i)++;
+            return LENGTH_MOD_ll;
+        } else {
+            return LENGTH_MOD_l;
+        }
+    case 'j':
+        (*i)++;
+        return LENGTH_MOD_j;
+    case 'z':
+        (*i)++;
+        return LENGTH_MOD_z;
+    case 't':
+        (*i)++;
+        return LENGTH_MOD_t;
+    case 'L':
+        (*i)++;
+        return LENGTH_MOD_L;
+    default:
+        return LENGTH_MOD_NONE;
+    }
+}
+
 // Number of hex digits necessary to represent a pointer value
 #define PTR_HEX_DIGITS (2 * sizeof(void *))
 
@@ -704,14 +751,22 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
         }
         if (precision < 0)
             precision = 0;
+        // Read the length modifier
+        LengthModifier length_modifier = read_length_modifier(fmt, &i);
         // Read the conversion specifier
-        switch (fmt[i++]) {
+        char specifier = fmt[i];
+        i++;
+        switch (specifier) {
         case '%':
+            if (length_modifier != LENGTH_MOD_NONE)
+                return;
             if (got_field_width)
                 printf_padding(file, offset, field_width, 1);
             printf_char(file, offset, '%');
             break;
         case 'c': {
+            if (length_modifier != LENGTH_MOD_NONE)
+                return;
             int c = va_arg(args, int);
             if (got_field_width)
                 printf_padding(file, offset, field_width, 1);
@@ -719,6 +774,8 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
             break;
         }
         case 's': {
+            if (length_modifier != LENGTH_MOD_NONE)
+                return;
             const char *s = va_arg(args, const char *);
             if (got_field_width)
                 printf_padding(file, offset, field_width, strlen(s));
@@ -727,7 +784,39 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
         }
         case 'd':
         case 'i': {
-            int n = va_arg(args, int);
+            // Read argument
+            intmax_t n;
+            switch (length_modifier) {
+            case LENGTH_MOD_hh:
+            case LENGTH_MOD_h:
+            case LENGTH_MOD_NONE:
+                n = (intmax_t)va_arg(args, int);
+                break;
+            case LENGTH_MOD_l:
+                n = (intmax_t)va_arg(args, long);
+                break;
+            case LENGTH_MOD_ll:
+                n = (intmax_t)va_arg(args, long long);
+                break;
+            case LENGTH_MOD_j:
+                n = va_arg(args, intmax_t);
+                break;
+            case LENGTH_MOD_t:
+                n = (intmax_t)va_arg(args, ptrdiff_t);
+                break;
+            case LENGTH_MOD_z: {
+                uintmax_t un = (uintmax_t)va_arg(args, size_t);
+                // Sign-extend if necessary
+                if (sizeof(size_t) < sizeof(uintmax_t))
+                    n = (intmax_t)(un | ((un >> (8 * sizeof(size_t) - 1)) * (UINTMAX_C(-1) << (8 * sizeof(size_t)))));
+                else
+                    n = (intmax_t)un;
+                break;
+            case LENGTH_MOD_L:
+                return;
+            }
+            }
+            // Print number
             if (got_field_width) {
                 size_t length = 0;
                 printf_dec_signed(&dummy_file, &length, n, got_precision ? precision : 1);
@@ -736,127 +825,155 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
             printf_dec_signed(file, offset, n, got_precision ? precision : 1);
             break;
         }
-        case 'o': {
-            unsigned int n = va_arg(args, unsigned int);
-            if (got_field_width) {
-                size_t length = 0;
-                printf_oct(&dummy_file, &length, n, got_precision ? precision : 1);
-                printf_padding(file, offset, field_width, length);
-            }
-            printf_oct(file, offset, n, got_precision ? precision : 1);
-            break;
-        }
-        case 'x': {
-            unsigned int n = va_arg(args, unsigned int);
-            if (got_field_width) {
-                size_t length = 0;
-                printf_hex(&dummy_file, &length, n, false, got_precision ? precision : 1);
-                printf_padding(file, offset, field_width, length);
-            }
-            printf_hex(file, offset, n, false, got_precision ? precision : 1);
-            break;
-        }
-        case 'X': {
-            unsigned int n = va_arg(args, unsigned int);
-            if (got_field_width) {
-                size_t length = 0;
-                printf_hex(&dummy_file, &length, n, true, got_precision ? precision : 1);
-                printf_padding(file, offset, field_width, length);
-            }
-            printf_hex(file, offset, n, true, got_precision ? precision : 1);
-            break;
-        }
+        case 'o':
+        case 'x':
+        case 'X':
         case 'u': {
-            unsigned int n = va_arg(args, unsigned int);
+            // Read argument
+            uintmax_t n;
+            switch (length_modifier) {
+            case LENGTH_MOD_hh:
+            case LENGTH_MOD_h:
+            case LENGTH_MOD_NONE:
+                n = (uintmax_t)va_arg(args, unsigned int);
+                break;
+            case LENGTH_MOD_l:
+                n = (uintmax_t)va_arg(args, unsigned long);
+                break;
+            case LENGTH_MOD_ll:
+                n = (uintmax_t)va_arg(args, unsigned long long);
+                break;
+            case LENGTH_MOD_j:
+                n = va_arg(args, uintmax_t);
+                break;
+            case LENGTH_MOD_z: {
+                n = (uintmax_t)va_arg(args, size_t);
+                break;
+            }
+            case LENGTH_MOD_t:
+                n = (uintmax_t)va_arg(args, ptrdiff_t);
+                // Remove sign extension if necessary
+                if (sizeof(ptrdiff_t) < sizeof(uintmax_t))
+                    n &= (UINTMAX_C(-1) >> (8 * (sizeof(uintmax_t) - sizeof(ptrdiff_t))));
+                break;
+            case LENGTH_MOD_L:
+                return;
+            }
+            // Print number
             if (got_field_width) {
                 size_t length = 0;
-                printf_dec(&dummy_file, &length, n, got_precision ? precision : 1);
+                switch (specifier) {
+                case 'o':
+                    printf_oct(file, &length, n, got_precision ? precision : 1);
+                    break;
+                case 'x':
+                    printf_hex(file, &length, n, false, got_precision ? precision : 1);
+                    break;
+                case 'X':
+                    printf_hex(file, &length, n, true, got_precision ? precision : 1);
+                    break;
+                case 'u':
+                    printf_dec(file, &length, n, got_precision ? precision : 1);
+                    break;
+                }
                 printf_padding(file, offset, field_width, length);
             }
-            printf_dec(file, offset, n, got_precision ? precision : 1);
-            break;
-        }
-        case 'f': {
-            double f = va_arg(args, double);
-            if (got_field_width) {
-                size_t length = 0;
-                printf_float(&dummy_file, &length, f, false, FLOAT_REPR_F, got_precision ? precision : 6);
-                printf_padding(file, offset, field_width, length);
+            switch (specifier) {
+            case 'o':
+                printf_oct(file, offset, n, got_precision ? precision : 1);
+                break;
+            case 'x':
+                printf_hex(file, offset, n, false, got_precision ? precision : 1);
+                break;
+            case 'X':
+                printf_hex(file, offset, n, true, got_precision ? precision : 1);
+                break;
+            case 'u':
+                printf_dec(file, offset, n, got_precision ? precision : 1);
+                break;
             }
-            printf_float(file, offset, f, false, FLOAT_REPR_F, got_precision ? precision : 6);
             break;
         }
-        case 'F': {
-            double f = va_arg(args, double);
-            if (got_field_width) {
-                size_t length = 0;
-                printf_float(&dummy_file, &length, f, true, FLOAT_REPR_F, got_precision ? precision : 6);
-                printf_padding(file, offset, field_width, length);
-            }
-            printf_float(file, offset, f, true, FLOAT_REPR_F, got_precision ? precision : 6);
-            break;
-        }
-        case 'e': {
-            double f = va_arg(args, double);
-            if (got_field_width) {
-                size_t length = 0;
-                printf_float(&dummy_file, &length, f, false, FLOAT_REPR_E, got_precision ? precision : 6);
-                printf_padding(file, offset, field_width, length);
-            }
-            printf_float(file, offset, f, false, FLOAT_REPR_E, got_precision ? precision : 6);
-            break;
-        }
-        case 'E': {
-            double f = va_arg(args, double);
-            if (got_field_width) {
-                size_t length = 0;
-                printf_float(&dummy_file, &length, f, true, FLOAT_REPR_E, got_precision ? precision : 6);
-                printf_padding(file, offset, field_width, length);
-            }
-            printf_float(file, offset, f, true, FLOAT_REPR_E, got_precision ? precision : 6);
-            break;
-        }
-        case 'g': {
-            double f = va_arg(args, double);
-            if (got_field_width) {
-                size_t length = 0;
-                printf_float(&dummy_file, &length, f, false, FLOAT_REPR_G, got_precision ? precision : 6);
-                printf_padding(file, offset, field_width, length);
-            }
-            printf_float(file, offset, f, false, FLOAT_REPR_G, got_precision ? precision : 6);
-            break;
-        }
-        case 'G': {
-            double f = va_arg(args, double);
-            if (got_field_width) {
-                size_t length = 0;
-                printf_float(&dummy_file, &length, f, true, FLOAT_REPR_G, got_precision ? precision : 6);
-                printf_padding(file, offset, field_width, length);
-            }
-            printf_float(file, offset, f, true, FLOAT_REPR_G, got_precision ? precision : 6);
-            break;
-        }
-        case 'a': {
-            double f = va_arg(args, double);
-            if (got_field_width) {
-                size_t length = 0;
-                printf_float(&dummy_file, &length, f, false, FLOAT_REPR_A, got_precision ? precision : 13);
-                printf_padding(file, offset, field_width, length);
-            }
-            printf_float(file, offset, f, false, FLOAT_REPR_A, got_precision ? precision : 13);
-            break;
-        }
+        case 'f':
+        case 'F':
+        case 'e':
+        case 'E':
+        case 'g':
+        case 'G':
+        case 'a':
         case 'A': {
-            double f = va_arg(args, double);
+            // Read argument
+            long double f;
+            switch (length_modifier) {
+            case LENGTH_MOD_NONE:
+            case LENGTH_MOD_l:
+                f = (long double)va_arg(args, double);
+                break;
+            case LENGTH_MOD_L:
+                f = va_arg(args, long double);
+                break;
+            default:
+                return;
+            }
+            // Get properties
+            bool uppercase;
+            FloatRepr repr;
+            switch (specifier) {
+            case 'f':
+                uppercase = false;
+                repr = FLOAT_REPR_F;
+                break;
+            case 'F':
+                uppercase = true;
+                repr = FLOAT_REPR_F;
+                break;
+            case 'e':
+                uppercase = false;
+                repr = FLOAT_REPR_E;
+                break;
+            case 'E':
+                uppercase = true;
+                repr = FLOAT_REPR_E;
+                break;
+            case 'g':
+                uppercase = false;
+                repr = FLOAT_REPR_G;
+                break;
+            case 'G':
+                uppercase = true;
+                repr = FLOAT_REPR_G;
+                break;
+            case 'a':
+                uppercase = false;
+                repr = FLOAT_REPR_A;
+                break;
+            case 'A':
+                uppercase = true;
+                repr = FLOAT_REPR_A;
+                break;
+            }
+            if (!got_precision) {
+                if (specifier == 'a' || specifier == 'A') {
+                    if (length_modifier == LENGTH_MOD_L)
+                        precision = 16;
+                    else
+                        precision = 13;
+                } else {
+                    precision = 6;
+                }
+            }
+            // Print number
             if (got_field_width) {
                 size_t length = 0;
-                printf_float(&dummy_file, &length, f, true, FLOAT_REPR_A, got_precision ? precision : 13);
+                printf_float(&dummy_file, &length, f, uppercase, repr, precision);
                 printf_padding(file, offset, field_width, length);
             }
-            printf_float(file, offset, f, true, FLOAT_REPR_A, got_precision ? precision : 13);
+            printf_float(file, offset, f, uppercase, repr, precision);
             break;
         }
         case 'p': {
+            if (length_modifier != LENGTH_MOD_NONE)
+                return;
             void *p = va_arg(args, void *);
             if (got_field_width)
                 printf_padding(file, offset, field_width, 2 + PTR_HEX_DIGITS);
@@ -868,13 +985,38 @@ static void printf_common(FILE *file, size_t *offset, const char *fmt, va_list a
             break;
         }
         case 'n':
-            *va_arg(args, int *) = *offset;
+            switch (length_modifier) {
+            case LENGTH_MOD_hh:
+                *va_arg(args, signed char *) = (signed char)*offset;
+                break;
+            case LENGTH_MOD_h:
+                *va_arg(args, short *) = (short)*offset;
+                break;
+            case LENGTH_MOD_NONE:
+                *va_arg(args, int *) = (int)*offset;
+                break;
+            case LENGTH_MOD_l:
+                *va_arg(args, long *) = (long)*offset;
+                break;
+            case LENGTH_MOD_ll:
+                *va_arg(args, long long *) = (long long)*offset;
+                break;
+            case LENGTH_MOD_j:
+                *va_arg(args, intmax_t *) = (intmax_t)*offset;
+                break;
+            case LENGTH_MOD_z:
+                *va_arg(args, size_t *) = *offset;
+                break;
+            case LENGTH_MOD_t:
+                *va_arg(args, ptrdiff_t *) = (ptrdiff_t)*offset;
+                break;
+            case LENGTH_MOD_L:
+                return;
+            }
             break;
-        // Incorrect specifiers have undefined behavior, so we choose to ignore them
-        case '\0':
-            return;
+        // Incorrect specifiers have undefined behavior, so we choose to fail if we encounter one
         default:
-            break;
+            return;
         }
     }
 }
@@ -978,7 +1120,7 @@ static void scanf_whitespace(FILE *file, size_t *offset) {
     }
 }
 
-static bool scanf_int_unsigned(FILE *file, size_t *offset, size_t *field_width, uintmax_t *n_ptr, int base) {
+static bool scanf_int(FILE *file, size_t *offset, size_t *field_width, uintmax_t *n_ptr, int base) {
     int c;
     // Read sign
     bool negate;
@@ -1042,14 +1184,6 @@ static bool scanf_int_unsigned(FILE *file, size_t *offset, size_t *field_width, 
         number = base * number + digit;
         has_digits = true;
     }
-}
-
-static bool scanf_int_signed(FILE *file, size_t *offset, size_t *field_width, intmax_t *n_ptr, int base) {
-    uintmax_t un;
-    if (!scanf_int_unsigned(file, offset, field_width, &un, base))
-        return false;
-    *n_ptr = (intmax_t)un;
-    return true;
 }
 
 static ptrdiff_t scanf_exponent(FILE *file, size_t *offset, size_t *field_width) {
@@ -1538,13 +1672,21 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
         }
         if (!got_field_width)
             field_width = SIZE_MAX;
+        // Read the length modifier
+        LengthModifier length_modifier = read_length_modifier(fmt, &i);
         // Read conversion specifier
-        switch (fmt[i++]) {
+        char specifier = fmt[i];
+        i++;
+        switch (specifier) {
         case '%':
+            if (length_modifier != LENGTH_MOD_NONE)
+                return matches;
             if (scanf_char(file, &offset, &field_width) != '%')
                 return matches;
             break;
         case 'c': {
+            if (length_modifier != LENGTH_MOD_NONE)
+                return matches;
             char *c_ptr = va_arg(args, char *);
             int c = scanf_char(file, &offset, &field_width);
             if (c == EOF)
@@ -1554,6 +1696,8 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
             break;
         }
         case 's': {
+            if (length_modifier != LENGTH_MOD_NONE)
+                return matches;
             scanf_whitespace(file, &offset);
             char *s = va_arg(args, char *);
             while (1) {
@@ -1567,6 +1711,8 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
             break;
         }
         case '[': {
+            if (length_modifier != LENGTH_MOD_NONE)
+                return matches;
             // Parse character set
             bool negate = false;
             if (fmt[i] == '^') {
@@ -1600,54 +1746,66 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
             matches++;
             break;
         }
-        case 'd': {
-            scanf_whitespace(file, &offset);
-            int *n_ptr = va_arg(args, int *);
-            intmax_t n;
-            if (!scanf_int_signed(file, &offset, &field_width, &n, 10))
-                return matches;
-            *n_ptr = (int)n;
-            matches++;
-            break;
-        }
-        case 'i': {
-            scanf_whitespace(file, &offset);
-            int *n_ptr = va_arg(args, int *);
-            intmax_t n;
-            if (!scanf_int_signed(file, &offset, &field_width, &n, 0))
-                return matches;
-            *n_ptr = (int)n;
-            matches++;
-            break;
-        }
-        case 'o': {
-            scanf_whitespace(file, &offset);
-            unsigned int *n_ptr = va_arg(args, unsigned int *);
-            uintmax_t n;
-            if (!scanf_int_unsigned(file, &offset, &field_width, &n, 8))
-                return matches;
-            *n_ptr = (unsigned int)n;
-            matches++;
-            break;
-        }
+        case 'd':
+        case 'i':
+        case 'o':
         case 'x':
-        case 'X': {
-            scanf_whitespace(file, &offset);
-            unsigned int *n_ptr = va_arg(args, unsigned int *);
+        case 'X':
+        case 'u':
+        case 'n': {
             uintmax_t n;
-            if (!scanf_int_unsigned(file, &offset, &field_width, &n, 16))
+            if (specifier == 'n') {
+                n = offset;
+            } else {
+                scanf_whitespace(file, &offset);
+                int base;
+                switch (specifier) {
+                    case 'd':
+                    case 'u':
+                        base = 10;
+                        break;
+                    case 'i':
+                        base = 0;
+                        break;
+                    case 'o':
+                        base = 8;
+                        break;
+                    case 'x':
+                    case 'X':
+                        base = 16;
+                        break;
+                }
+                if (!scanf_int(file, &offset, &field_width, &n, base))
+                    return matches;
+            }
+            switch (length_modifier) {
+            case LENGTH_MOD_hh:
+                *va_arg(args, unsigned char *) = (unsigned char)n;
+                break;
+            case LENGTH_MOD_h:
+                *va_arg(args, unsigned short *) = (unsigned short)n;
+                break;
+            case LENGTH_MOD_NONE:
+                *va_arg(args, unsigned int *) = (unsigned int)n;
+                break;
+            case LENGTH_MOD_l:
+                *va_arg(args, unsigned long *) = (unsigned long)n;
+                break;
+            case LENGTH_MOD_ll:
+                *va_arg(args, unsigned long long *) = (unsigned long long)n;
+                break;
+            case LENGTH_MOD_j:
+                *va_arg(args, uintmax_t *) = n;
+                break;
+            case LENGTH_MOD_z:
+                *va_arg(args, size_t *) = (size_t)n;
+                break;
+            case LENGTH_MOD_t:
+                *va_arg(args, ptrdiff_t *) = (ptrdiff_t)n;
+                break;
+            case LENGTH_MOD_L:
                 return matches;
-            *n_ptr = (unsigned int)n;
-            matches++;
-            break;
-        }
-        case 'u': {
-            scanf_whitespace(file, &offset);
-            unsigned int *n_ptr = va_arg(args, unsigned int *);
-            uintmax_t n;
-            if (!scanf_int_unsigned(file, &offset, &field_width, &n, 10))
-                return matches;
-            *n_ptr = (unsigned int)n;
+            }
             matches++;
             break;
         }
@@ -1660,33 +1818,40 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
         case 'a':
         case 'A': {
             scanf_whitespace(file, &offset);
-            float *f_ptr = va_arg(args, float *);
             long double f;
             if (!scanf_float(file, &offset, &field_width, &f))
                 return matches;
-            *f_ptr = (float)f;
+            switch (length_modifier) {
+            case LENGTH_MOD_NONE:
+                *va_arg(args, float *) = (float)f;
+                break;
+            case LENGTH_MOD_l:
+                *va_arg(args, double *) = (double)f;
+                break;
+            case LENGTH_MOD_L:
+                *va_arg(args, long double *) = (long double)f;
+                break;
+            default:
+                return matches;
+            }
             matches++;
             break;
         }
         case 'p': {
+            if (length_modifier != LENGTH_MOD_NONE)
+                return matches;
             scanf_whitespace(file, &offset);
             void **p_ptr = va_arg(args, void **);
             uintmax_t n;
-            if (!scanf_int_unsigned(file, &offset, &field_width, &n, 16))
+            if (!scanf_int(file, &offset, &field_width, &n, 16))
                 return matches;
             *p_ptr = (void *)n;
             matches++;
             break;
         }
-        case 'n':
-            *va_arg(args, int *) = offset;
-            matches++;
-            break;
-        // Incorrect specifiers have undefined behavior, so we choose to ignore them
-        case '\0':
-            return matches;
+        // Incorrect specifiers have undefined behavior, so we choose to fail if we encounter one
         default:
-            break;
+            return matches;
         }
     }
 }
