@@ -1767,6 +1767,12 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
             continue;
         }
         i++;
+        // Check for assignment-suppressing *
+        bool assign = true;
+        if (fmt[i] == '*') {
+            assign = false;
+            i++;
+        }
         // Read field width
         bool got_field_width = false;
         size_t field_width = 0;
@@ -1792,27 +1798,33 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
         case 'c': {
             if (length_modifier != LENGTH_MOD_NONE)
                 return matches;
-            char *c_ptr = va_arg(args, char *);
             int c = scanf_char(file, &offset, &field_width);
             if (c == EOF)
                 return matches;
-            *c_ptr = (char)c;
-            matches++;
+            if (assign) {
+                *va_arg(args, char *) = (char)c;
+                matches++;
+            }
             break;
         }
         case 's': {
             if (length_modifier != LENGTH_MOD_NONE)
                 return matches;
             scanf_whitespace(file, &offset);
-            char *s = va_arg(args, char *);
+            char *s;
+            if (assign)
+                s = va_arg(args, char *);
             while (1) {
                 int c = scanf_char(file, &offset, &field_width);
                 if (c == EOF || isspace(c))
                     break;
-                *s++ = (char)c;
+                if (assign)
+                    *s++ = (char)c;
             }
-            *s = '\0';
-            matches++;
+            if (assign) {
+                *s = '\0';
+                matches++;
+            }
             break;
         }
         case '[': {
@@ -1836,7 +1848,9 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
             size_t group_end = i;
             i++;
             // Read string
-            char *s = va_arg(args, char *);
+            char *s;
+            if (assign)
+                s = va_arg(args, char *);
             while (1) {
                 int c = scanf_char(file, &offset, &field_width);
                 bool matched = false;
@@ -1845,10 +1859,13 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
                         matched = true;
                 if (c == EOF || negate == matched)
                     break;
-                *s++ = (char)c;
+                if (assign)
+                    *s++ = (char)c;
             }
-            *s = '\0';
-            matches++;
+            if (assign) {
+                *s = '\0';
+                matches++;
+            }
             break;
         }
         case 'd':
@@ -1883,35 +1900,37 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
                 if (!scanf_int(file, &offset, &field_width, &n, base))
                     return matches;
             }
-            switch (length_modifier) {
-            case LENGTH_MOD_hh:
-                *va_arg(args, unsigned char *) = (unsigned char)n;
-                break;
-            case LENGTH_MOD_h:
-                *va_arg(args, unsigned short *) = (unsigned short)n;
-                break;
-            case LENGTH_MOD_NONE:
-                *va_arg(args, unsigned int *) = (unsigned int)n;
-                break;
-            case LENGTH_MOD_l:
-                *va_arg(args, unsigned long *) = (unsigned long)n;
-                break;
-            case LENGTH_MOD_ll:
-                *va_arg(args, unsigned long long *) = (unsigned long long)n;
-                break;
-            case LENGTH_MOD_j:
-                *va_arg(args, uintmax_t *) = n;
-                break;
-            case LENGTH_MOD_z:
-                *va_arg(args, size_t *) = (size_t)n;
-                break;
-            case LENGTH_MOD_t:
-                *va_arg(args, ptrdiff_t *) = (ptrdiff_t)n;
-                break;
-            case LENGTH_MOD_L:
-                return matches;
+            if (assign) {
+                switch (length_modifier) {
+                case LENGTH_MOD_hh:
+                    *va_arg(args, unsigned char *) = (unsigned char)n;
+                    break;
+                case LENGTH_MOD_h:
+                    *va_arg(args, unsigned short *) = (unsigned short)n;
+                    break;
+                case LENGTH_MOD_NONE:
+                    *va_arg(args, unsigned int *) = (unsigned int)n;
+                    break;
+                case LENGTH_MOD_l:
+                    *va_arg(args, unsigned long *) = (unsigned long)n;
+                    break;
+                case LENGTH_MOD_ll:
+                    *va_arg(args, unsigned long long *) = (unsigned long long)n;
+                    break;
+                case LENGTH_MOD_j:
+                    *va_arg(args, uintmax_t *) = n;
+                    break;
+                case LENGTH_MOD_z:
+                    *va_arg(args, size_t *) = (size_t)n;
+                    break;
+                case LENGTH_MOD_t:
+                    *va_arg(args, ptrdiff_t *) = (ptrdiff_t)n;
+                    break;
+                case LENGTH_MOD_L:
+                    return matches;
+                }
+                matches++;
             }
-            matches++;
             break;
         }
         case 'f':
@@ -1926,32 +1945,35 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
             long double f;
             if (!scanf_float(file, &offset, &field_width, &f))
                 return matches;
-            switch (length_modifier) {
-            case LENGTH_MOD_NONE:
-                *va_arg(args, float *) = (float)f;
-                break;
-            case LENGTH_MOD_l:
-                *va_arg(args, double *) = (double)f;
-                break;
-            case LENGTH_MOD_L:
-                *va_arg(args, long double *) = (long double)f;
-                break;
-            default:
-                return matches;
+            if (assign) {
+                switch (length_modifier) {
+                case LENGTH_MOD_NONE:
+                    *va_arg(args, float *) = (float)f;
+                    break;
+                case LENGTH_MOD_l:
+                    *va_arg(args, double *) = (double)f;
+                    break;
+                case LENGTH_MOD_L:
+                    *va_arg(args, long double *) = (long double)f;
+                    break;
+                default:
+                    return matches;
+                }
+                matches++;
             }
-            matches++;
             break;
         }
         case 'p': {
             if (length_modifier != LENGTH_MOD_NONE)
                 return matches;
             scanf_whitespace(file, &offset);
-            void **p_ptr = va_arg(args, void **);
             uintmax_t n;
             if (!scanf_int(file, &offset, &field_width, &n, 16))
                 return matches;
-            *p_ptr = (void *)n;
-            matches++;
+            if (assign) {
+                *va_arg(args, void **) = (void *)n;
+                matches++;
+            }
             break;
         }
         // Incorrect specifiers have undefined behavior, so we choose to fail if we encounter one
