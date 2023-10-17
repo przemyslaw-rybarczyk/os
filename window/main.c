@@ -102,6 +102,7 @@ typedef struct WindowContainer {
     handle_t video_resize_in;
     handle_t keyboard_data_in;
     handle_t mouse_data_in;
+    handle_t window_close_in;
 } WindowContainer;
 
 typedef struct SplitContainer {
@@ -151,6 +152,7 @@ static WindowContainer *create_window(void) {
     handle_t text_stdout_in, text_stdout_out;
     handle_t text_stderr_in, text_stderr_out;
     handle_t text_stdin_in, text_stdin_out;
+    handle_t window_close_in, window_close_out;
     err = channel_create(&video_size_in, &video_size_out);
     if (err)
         goto fail_video_size_channel_create;
@@ -175,6 +177,9 @@ static WindowContainer *create_window(void) {
     err = channel_create(&text_stdin_in, &text_stdin_out);
     if (err)
         goto fail_stdin_channel_create;
+    err = channel_create(&window_close_in, &window_close_out);
+    if (err)
+        goto fail_window_close_channel_create;
     // Allocate window
     WindowContainer *window = malloc(sizeof(WindowContainer));
     if (window == NULL)
@@ -183,6 +188,7 @@ static WindowContainer *create_window(void) {
     window->video_resize_in = video_resize_in;
     window->keyboard_data_in = keyboard_data_in;
     window->mouse_data_in = mouse_data_in;
+    window->window_close_in = window_close_in;
     window->video_buffer_size = (ScreenSize){0, 0};
     window->video_buffer_capacity = VIDEO_BUFFER_DEFAULT_SIZE;
     window->video_buffer = malloc(window->video_buffer_capacity);
@@ -198,6 +204,7 @@ static WindowContainer *create_window(void) {
         resource_name("text/stdout_r"),
         resource_name("text/stderr_r"),
         resource_name("text/stdin_r"),
+        resource_name("window/close"),
     };
     SendAttachedHandle program1_resource_handles[] = {
         {ATTACHED_HANDLE_FLAG_MOVE, video_size_in},
@@ -208,6 +215,7 @@ static WindowContainer *create_window(void) {
         {ATTACHED_HANDLE_FLAG_MOVE, text_stdout_out},
         {ATTACHED_HANDLE_FLAG_MOVE, text_stderr_out},
         {ATTACHED_HANDLE_FLAG_MOVE, text_stdin_out},
+        {ATTACHED_HANDLE_FLAG_MOVE, window_close_out},
     };
     err = channel_call(process_spawn_channel, &(SendMessage){
         2, (SendMessageData[]){
@@ -245,6 +253,9 @@ fail_process_spawn:
 fail_video_buffer_alloc:
     free(window);
 fail_window_alloc:
+    handle_free(window_close_in);
+    handle_free(window_close_out);
+fail_window_close_channel_create:
     handle_free(text_stdin_in);
     handle_free(text_stdin_out);
 fail_stdin_channel_create:
@@ -270,6 +281,15 @@ fail_video_data_channel_create:
     handle_free(video_size_out);
 fail_video_size_channel_create:
     return NULL;
+}
+
+// Free window object
+static void window_free(WindowContainer *window) {
+    free(window->video_buffer);
+    handle_free(window->video_resize_in);
+    handle_free(window->keyboard_data_in);
+    handle_free(window->mouse_data_in);
+    handle_free(window->window_close_in);
 }
 
 // Get the offset of the origin of a container within its parent's length
@@ -470,9 +490,118 @@ static void resize_focused_window(Direction side, i32 diff) {
     }
 }
 
+// Resize a container and its siblings after it has been inserted into its parent
+// Its length will be set to 1 / (number of siblings including itself).
+static void resize_after_insertion(Container *container) {
+    // Count siblings
+    size_t num_siblings = 0;
+    for (Container *child = container->parent->first_child; child != NULL; child = child->next_sibling)
+        num_siblings++;
+    // Shrink all siblings to make room for new container
+    for (Container *child = container->parent->first_child; child != NULL; child = child->next_sibling)
+        if (child != container)
+            child->offset_in_parent *= (double)(num_siblings - 1) / num_siblings;
+    // Set the new container's offset to the offset of the one coming after it
+    container->offset_in_parent = container->next_sibling != NULL
+        ? container->next_sibling->offset_in_parent
+        : (double)(num_siblings - 1) / num_siblings;
+    // Shift all containers after the new one to the right to make room for it
+    for (Container *child = container->next_sibling; child != NULL; child = child->next_sibling)
+        child->offset_in_parent += 1.0 / num_siblings;
+}
+
+// Insert a container before another one
+// Does not check if the resulting state is valid.
+static void container_insert_before(Container *container, Container *next_container) {
+    container->prev_sibling = next_container->prev_sibling;
+    container->next_sibling = next_container;
+    if (next_container->prev_sibling != NULL)
+        next_container->prev_sibling->next_sibling = container;
+    next_container->prev_sibling = container;
+    container->parent = next_container->parent;
+    if (next_container->parent->first_child == next_container)
+        next_container->parent->first_child = container;
+    resize_after_insertion(container);
+}
+
+// Insert a container after another one
+// Does not check if the resulting state is valid.
+static void container_insert_after(Container *container, Container *prev_container) {
+    container->prev_sibling = prev_container;
+    container->next_sibling = prev_container->next_sibling;
+    if (prev_container->next_sibling != NULL)
+        prev_container->next_sibling->prev_sibling = container;
+    prev_container->next_sibling = container;
+    container->parent = prev_container->parent;
+    resize_after_insertion(container);
+}
+
+// Remove a container from the its parent
+// Does not check if the resulting state is valid.
+static void container_remove(Container *container) {
+    if (container->prev_sibling != NULL)
+        container->prev_sibling->next_sibling = container->next_sibling;
+    if (container->next_sibling != NULL)
+        container->next_sibling->prev_sibling = container->prev_sibling;
+    if (container->parent->first_child == container)
+        container->parent->first_child = container->next_sibling;
+    // Resize siblings to take up remaining space evenly
+    double container_length = (container->next_sibling != NULL ? container->next_sibling->offset_in_parent : 1.0) - container->offset_in_parent;
+    for (Container *child = container->next_sibling; child != NULL; child = child->next_sibling)
+        child->offset_in_parent -= container_length;
+    for (Container *child = container->parent->first_child; child != NULL; child = child->next_sibling)
+        child->offset_in_parent *= 1.0 / (1.0 - container_length);
+}
+
+// Replace a window with a different one
+static void container_replace(Container *container, Container *old_container) {
+    container->parent = old_container->parent;
+    container->prev_sibling = old_container->prev_sibling;
+    container->next_sibling = old_container->next_sibling;
+    if (container->prev_sibling != NULL)
+        container->prev_sibling->next_sibling = container;
+    if (container->next_sibling != NULL)
+        container->next_sibling->prev_sibling = container;
+    if (old_container->parent != NULL) {
+        if (old_container->parent->first_child == old_container)
+            old_container->parent->first_child = container;
+    } else {
+        root_container = container;
+    }
+    container->offset_in_parent = old_container->offset_in_parent;
+}
+
+// Replace a window with another's children
+static void container_replace_with_children(SplitContainer *parent, Container *old_container) {
+    Container *last_child = NULL;
+    for (Container *child = parent->first_child; child != NULL; child = child->next_sibling) {
+        child->parent = old_container->parent;
+        last_child = child;
+    }
+    parent->first_child->prev_sibling = old_container->prev_sibling;
+    last_child->next_sibling = old_container->next_sibling;
+    if (parent->first_child->prev_sibling != NULL)
+        parent->first_child->prev_sibling->next_sibling = parent->first_child;
+    if (last_child->next_sibling != NULL)
+        last_child->next_sibling->prev_sibling = last_child;
+    if (old_container->parent != NULL) {
+        if (old_container->parent->first_child == old_container)
+            old_container->parent->first_child = parent->first_child;
+    } else {
+        root_container = (Container *)parent;
+    }
+    // Resize children to fit in space left after old container
+    double old_container_length =
+        (old_container->next_sibling != NULL ? old_container->next_sibling->offset_in_parent : 1.0)
+        - old_container->offset_in_parent;
+    for (Container *child = parent->first_child; child != NULL; child = child->next_sibling)
+        child->offset_in_parent = child->offset_in_parent * old_container_length + old_container->offset_in_parent;
+}
+
 // Add a new window neighboring the focused window in the given direction
 static void add_new_window_next_to_focused(Direction side) {
     if (root_container == NULL) {
+        // There are no containers, so the one we create becomes the root
         WindowContainer *window = create_window();
         if (window == NULL)
             return;
@@ -510,20 +639,7 @@ static void add_new_window_next_to_focused(Direction side) {
         // Create a new split container containing the old focused window and the new window and place it in place of the focused window
         // Each will occupy half ot the split container.
         split->header.type = direction_is_horizontal(side) ? CONTAINER_SPLIT_HORIZONTAL : CONTAINER_SPLIT_VERTICAL;
-        split->header.parent = focused_window->header.parent;
-        split->header.prev_sibling = focused_window->header.prev_sibling;
-        split->header.next_sibling = focused_window->header.next_sibling;
-        if (split->header.prev_sibling != NULL)
-            split->header.prev_sibling->next_sibling = (Container *)split;
-        if (split->header.next_sibling != NULL)
-            split->header.next_sibling->prev_sibling = (Container *)split;
-        split->header.offset_in_parent = focused_window->header.offset_in_parent;
-        if (focused_window->header.parent != NULL) {
-            if (focused_window->header.parent->first_child == (Container *)focused_window)
-                focused_window->header.parent->first_child = (Container *)split;
-        } else {
-            root_container = (Container *)split;
-        }
+        container_replace((Container *)split, (Container *)focused_window);
         focused_window->header.parent = split;
         window->header.parent = split;
         if (direction_is_forward(side)) {
@@ -547,36 +663,10 @@ static void add_new_window_next_to_focused(Direction side) {
         send_resize_messages((Container *)focused_window);
     } else {
         // Add the window as a sibling to the focused window
-        // Its witdth will be set to 1 / (number of siblings).
-        size_t num_siblings = 0;
-        for (Container *child = focused_window->header.parent->first_child; child != NULL; child = child->next_sibling)
-            num_siblings++;
-        // Shrink all siblings to make room for new window
-        for (Container *child = focused_window->header.parent->first_child; child != NULL; child = child->next_sibling)
-            child->offset_in_parent *= (double)num_siblings / (num_siblings + 1);
-        // Insert into tree structure, either after or before the focused window depending on the direction
-        window->header.parent = focused_window->header.parent;
-        if (direction_is_forward(side)) {
-            window->header.prev_sibling = (Container *)focused_window;
-            window->header.next_sibling = focused_window->header.next_sibling;
-            if (focused_window->header.next_sibling != NULL)
-                focused_window->header.next_sibling->prev_sibling = (Container *)window;
-            focused_window->header.next_sibling = (Container *)window;
-        } else {
-            window->header.prev_sibling = focused_window->header.prev_sibling;
-            window->header.next_sibling = (Container *)focused_window;
-            if (focused_window->header.prev_sibling != NULL) {
-                focused_window->header.prev_sibling->next_sibling = (Container *)window;
-            }
-            focused_window->header.prev_sibling = (Container *)window;
-            if (window->header.parent->first_child == (Container *)focused_window)
-                window->header.parent->first_child = (Container *)window;
-        }
-        // Set the new window's offset the offset of the window coming after it
-        window->header.offset_in_parent = window->header.next_sibling != NULL ? window->header.next_sibling->offset_in_parent : (double)num_siblings / (num_siblings + 1);
-        // Shift all windows after the new window to the right to make room for it
-        for (Container *child = window->header.next_sibling; child != NULL; child = child->next_sibling)
-            child->offset_in_parent += 1.0 / (num_siblings + 1);
+        if (direction_is_forward(side))
+            container_insert_after((Container *)window, (Container *)focused_window);
+        else
+            container_insert_before((Container *)window, (Container *)focused_window);
         // Send messages informing of the resize
         for (Container *child = focused_window->header.parent->first_child; child != NULL; child = child->next_sibling)
             if (child != (Container *)window)
@@ -585,6 +675,44 @@ static void add_new_window_next_to_focused(Direction side) {
     // Set the new window as focused
     // This will also update all `focused_window` links to have correct values.
     set_focused_window(window);
+}
+
+// Close a window
+static void close_window(WindowContainer *window) {
+    // Ask window process to terminate
+    channel_send(root_container->focused_window->window_close_in, NULL, FLAG_NONBLOCK);
+    if (window->header.parent == NULL) {
+        // The window is at the root
+        root_container = NULL;
+    } else if (window->header.prev_sibling != NULL && window->header.next_sibling == NULL && window->header.prev_sibling->prev_sibling == NULL) {
+        // The window has only one sibling after it
+        // Replace the parent with the sibling.
+        if (window->header.prev_sibling->type == CONTAINER_WINDOW)
+            container_replace(window->header.prev_sibling, (Container *)window->header.parent);
+        else
+            container_replace_with_children((SplitContainer *)(window->header.prev_sibling), (Container *)window->header.parent);
+        send_resize_messages(window->header.prev_sibling);
+        set_focused_window(window->header.prev_sibling->focused_window);
+        free(window->header.parent);
+    } else if (window->header.next_sibling != NULL && window->header.prev_sibling == NULL && window->header.next_sibling->next_sibling == NULL) {
+        // The window has only one sibling before it
+        // Replace the parent with the sibling.
+        if (window->header.next_sibling->type == CONTAINER_WINDOW)
+            container_replace(window->header.next_sibling, (Container *)window->header.parent);
+        else
+            container_replace_with_children((SplitContainer *)(window->header.next_sibling), (Container *)window->header.parent);
+        send_resize_messages(window->header.next_sibling);
+        set_focused_window(window->header.next_sibling->focused_window);
+        free(window->header.parent);
+    } else {
+        // The window has multiple siblings
+        // Simply remove it from the parent.
+        container_remove((Container *)window);
+        send_resize_messages((Container *)window->header.parent);
+        set_focused_window(window->header.next_sibling != NULL ? window->header.next_sibling->focused_window : window->header.prev_sibling->focused_window);
+    }
+    // Free the window
+    window_free(window);
 }
 
 // Draw a solid rectangle
@@ -800,6 +928,9 @@ void main(void) {
                             state = STATE_WINDOW_CREATE;
                         else
                             add_new_window_next_to_focused(DIRECTION_UP);
+                    } else if (key_event.keycode == KEY_Q) {
+                        if (root_container != NULL)
+                            close_window(root_container->focused_window);
                     }
                     draw_screen();
                 } else if (!meta_held && key_event.keycode != KEY_LEFT_META && key_event.keycode != KEY_RIGHT_META && root_container != NULL) {

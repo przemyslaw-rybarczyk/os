@@ -75,6 +75,9 @@ void main(void) {
     err = mqueue_add_channel_resource(event_mqueue, &resource_name("video/resize"), (MessageTag){3, 0});
     if (err)
         return;
+    err = mqueue_add_channel_resource(event_mqueue, &resource_name("window/close"), (MessageTag){4, 0});
+    if (err)
+        return;
     size_t screen_bytes = 16384;
     while (screen_bytes < screen_size.height * screen_size.width * 3)
         screen_bytes *= 2;
@@ -134,6 +137,8 @@ void main(void) {
             draw_screen(screen, color, mouse_x, mouse_y);
             break;
         }
+        case 4:
+            return;
         }
     }
 }
