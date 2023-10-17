@@ -4,6 +4,7 @@
 #include "alloc.h"
 #include "percpu.h"
 #include "process.h"
+#include "stack.h"
 
 #define GDT_RW (1 << 1)
 #define GDT_EXECUTABLE (1 << 3)
@@ -132,5 +133,14 @@ err_t gdt_init(void) {
     cpu_local->tss = tss;
     // Load the GDT
     asm volatile ("lgdt [%0]" : : "r"(gdtr));
+    return 0;
+}
+
+// Set stack for use by double fault handler
+err_t set_double_fault_stack(void) {
+    void *double_fault_stack = stack_alloc();
+    if (double_fault_stack == NULL)
+        return ERR_NO_MEMORY;
+    cpu_local->tss->ist1 = (u64)double_fault_stack;
     return 0;
 }

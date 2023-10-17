@@ -13,6 +13,7 @@
 
 #define IDT_ENTRIES_NUM 0x30
 
+#define INT_DOUBLE_FAULT 0x08
 #define INT_PAGE_FAULT 0x0E
 
 extern u64 interrupt_handlers[IDT_ENTRIES_NUM];
@@ -32,11 +33,11 @@ typedef struct IDTR {
     u64 offset;
 } __attribute__((packed)) IDTR;
 
-static void idt_set_entry(IDTEntry *entry, u64 addr) {
+static void idt_set_entry(IDTEntry *entry, u64 addr, u8 ist) {
     *entry = (IDTEntry){
         .addr1 = (u16)addr,
         .segment = SEGMENT_KERNEL_CODE,
-        .ist = 0,
+        .ist = ist,
         .gate_type = IDT_GATE_PRESENT | IDT_GATE_INTERRUPT,
         .addr2 = (u16)(addr >> 16),
         .addr3 = (u32)(addr >> 32),
@@ -67,7 +68,7 @@ err_t interrupt_init(bool bsp) {
     // Interrupts with handler address given as 0 don't have a handler.
     for (u64 i = 0; i < IDT_ENTRIES_NUM; i++) {
         if (interrupt_handlers[i] != 0)
-            idt_set_entry(&idt[i], interrupt_handlers[i]);
+            idt_set_entry(&idt[i], interrupt_handlers[i], i == INT_DOUBLE_FAULT ? 1 : 0);
     }
     // Load the IDT Descriptor
     asm volatile ("lidt [%0]" : : "r"(idtr));

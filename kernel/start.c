@@ -57,6 +57,12 @@ void kernel_start(void *stack) {
     smp_init();
     pit_init();
     smp_init_sync();
+    if (set_double_fault_stack() != 0) {
+        framebuffer_lock();
+        print_string("Failed to initialize double fault stack\n");
+        framebuffer_unlock();
+        goto halt;
+    }
     remove_identity_mapping();
     process_setup();
     sched_start();
@@ -88,6 +94,12 @@ void kernel_start_ap(void *stack) {
     userspace_init();
     apic_init(false);
     smp_init_sync();
+    if (set_double_fault_stack() != 0) {
+        framebuffer_lock();
+        print_string("Failed to initialize double fault stack\n");
+        framebuffer_unlock();
+        goto halt;
+    }
     sched_start();
 halt:
     interrupt_disable();

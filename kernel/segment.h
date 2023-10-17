@@ -12,3 +12,4 @@
 #define SEGMENT_RING_3 0x03
 
 err_t gdt_init(void);
+err_t set_double_fault_stack(void);
