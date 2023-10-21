@@ -106,7 +106,7 @@ static void send_from_input_buffer(handle_t msg, size_t bytes_requested) {
             {input_buffer_capacity - input_buffer_offset, input_buffer + input_buffer_offset},
             {bytes_to_send - (input_buffer_capacity - input_buffer_offset), input_buffer}
         }, 0, NULL});
-    input_buffer_offset += bytes_to_send;
+    input_buffer_offset = (input_buffer_offset + bytes_to_send) & (input_buffer_capacity - 1);
     input_buffer_size -= bytes_to_send;
     input_buffer_pending_size -= bytes_to_send;
 }
@@ -119,11 +119,19 @@ static err_t add_to_input_buffer(u8 c) {
         u8 *new_input_buffer = realloc(input_buffer, new_input_buffer_capacity);
         if (new_input_buffer == NULL)
             return ERR_NO_MEMORY;
-        input_buffer_capacity = new_input_buffer_capacity;
         input_buffer = new_input_buffer;
+        // Move final part of circular buffer if necessary
+        if (input_buffer_offset + input_buffer_size > input_buffer_capacity) {
+            memmove(
+                input_buffer + (input_buffer_offset + new_input_buffer_capacity - input_buffer_capacity),
+                input_buffer + input_buffer_offset,
+                input_buffer_capacity - input_buffer_offset);
+            input_buffer_offset += new_input_buffer_capacity - input_buffer_capacity;
+        }
+        input_buffer_capacity = new_input_buffer_capacity;
     }
     // Add to the input buffer
-    input_buffer[(input_buffer_offset + input_buffer_size) & (text_buffer_capacity - 1)] = c;
+    input_buffer[(input_buffer_offset + input_buffer_size) & (input_buffer_capacity - 1)] = c;
     input_buffer_size++;
     // If a newline character is entered, mark all characters in the buffer as pending
     if (c == '\n') {
@@ -397,7 +405,7 @@ void main(void) {
                     memmove(
                         text_buffer + (text_buffer_offset + new_text_buffer_capacity - text_buffer_capacity) * sizeof(TextCharacter),
                         text_buffer + text_buffer_offset * sizeof(TextCharacter),
-                        text_buffer_capacity - text_buffer_offset * sizeof(TextCharacter));
+                        (text_buffer_capacity - text_buffer_offset) * sizeof(TextCharacter));
                     text_buffer_offset += new_text_buffer_capacity - text_buffer_capacity;
                 }
                 text_buffer_capacity = new_text_buffer_capacity;
