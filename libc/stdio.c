@@ -9,6 +9,8 @@
 
 #include <zr/syscalls.h>
 
+#include "float_cast.h"
+
 typedef enum FileType {
     FILE_INVALID,
     FILE_BUFFER,
@@ -367,15 +369,6 @@ static void printf_hex(FILE *file, size_t *offset, uintmax_t n, bool uppercase, 
     }
 }
 
-// Used to cast a long double into its components
-union long_double_cast {
-    long double ld;
-    struct {
-        u64 mantissa;
-        u16 sign_exponent;
-    } __attribute__((packed));
-};
-
 // Verify that long double is 80-bit extended precision format
 // The code for printing floating point numbers relies on this assumption.
 #if !(FLT_RADIX == 2 && LDBL_MANT_DIG == 64 && LDBL_MIN_EXP == -16381 && LDBL_MAX_EXP == 16384)
@@ -398,7 +391,7 @@ typedef enum FloatRepr {
 static void printf_float(FILE *file, size_t *offset, long double f, bool uppercase, FloatRepr repr, int precision, PrintfFlags flags, size_t padding_zeroes) {
     // Extract mantissa and exponent fields
     union long_double_cast f_cast;
-    f_cast.ld = f;
+    f_cast.f = f;
     u64 mantissa = f_cast.mantissa;
     u16 exponent_field = f_cast.sign_exponent & 0x7FFF;
     // If the sign bit is set, print a minus sign
@@ -1392,7 +1385,7 @@ static bool scanf_float(FILE *file, size_t *offset, size_t *field_width, long do
         }
         f_cast.mantissa = UINT64_C(-1);
         f_cast.sign_exponent = sign ? 0xFFFF : 0x7FFF;
-        *f_ptr = f_cast.ld;
+        *f_ptr = f_cast.f;
         return true;
     } else if (c == '0') {
         got_digit = true;
@@ -1484,7 +1477,7 @@ static bool scanf_float(FILE *file, size_t *offset, size_t *field_width, long do
             }
             if (sign)
                 f_cast.sign_exponent |= 0x8000;
-            *f_ptr = f_cast.ld;
+            *f_ptr = f_cast.f;
             return true;
         } else {
             scanf_ungetc(file, offset, field_width, c);
@@ -1741,7 +1734,7 @@ return_inf:
 end:
     if (sign)
         f_cast.sign_exponent |= 0x8000;
-    *f_ptr = f_cast.ld;
+    *f_ptr = f_cast.f;
     return true;
 }
 
