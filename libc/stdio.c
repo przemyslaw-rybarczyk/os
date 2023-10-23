@@ -401,14 +401,11 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
         printf_char(file, offset, '+');
     else if (flags & PRINTF_SIGN_SPACE)
         printf_char(file, offset, ' ');
-    // Print hexadecimal prefix
-    if (repr == FLOAT_REPR_A)
-        printf_string(file, offset, uppercase ? "0X" : "0x", -1);
-    // Print padding zeroes
-    for (size_t i = 0; i < padding_zeroes; i++)
-        printf_char(file, offset, '0');
     // Handle NaN and infinity
     if (exponent_field == 0x7FFF) {
+        // Print padding zeroes as spaces
+        for (size_t i = 0; i < padding_zeroes; i++)
+            printf_char(file, offset, ' ');
         // When checking the mantissa, ignore the highest bit, since it should be 1
         if ((mantissa & (UINT64_C(-1) >> 1)) == 0)
             printf_string(file, offset, uppercase ? "INF" : "inf", -1);
@@ -416,6 +413,12 @@ static void printf_float(FILE *file, size_t *offset, long double f, bool upperca
             printf_string(file, offset, uppercase ? "NAN" : "nan", -1);
         return;
     }
+    // Print hexadecimal prefix
+    if (repr == FLOAT_REPR_A)
+        printf_string(file, offset, uppercase ? "0X" : "0x", -1);
+    // Print padding zeroes
+    for (size_t i = 0; i < padding_zeroes; i++)
+        printf_char(file, offset, '0');
     // In order to avoid going into an infinite loop when printing the fractional part, handle zeroes in exponential representations separately
     if (exponent_field == 0 && (mantissa & (UINT64_C(-1) >> 1)) == 0) {
         if (repr == FLOAT_REPR_E) {
