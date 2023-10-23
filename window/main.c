@@ -814,6 +814,10 @@ static void draw_container(const Container *container, u32 origin_x, u32 origin_
         WindowContainer *window = (WindowContainer *)container;
         // Draw window border
         const u8 *border_color = window == root_container->focused_window ? border_color_focused : border_color_unfocused;
+        if (width <= 2 * BORDER_THICKNESS || height <= 2 * BORDER_THICKNESS) {
+            draw_rectangle(border_color, origin_x, origin_y, width, height);
+            return;
+        }
         draw_rectangle(border_color, origin_x, origin_y, width, BORDER_THICKNESS);
         draw_rectangle(border_color, origin_x, origin_y + BORDER_THICKNESS, BORDER_THICKNESS, height - 2 * BORDER_THICKNESS);
         draw_rectangle(border_color, origin_x + width - BORDER_THICKNESS, origin_y + BORDER_THICKNESS, BORDER_THICKNESS, height - 2 * BORDER_THICKNESS);
