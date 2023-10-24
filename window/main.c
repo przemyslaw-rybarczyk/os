@@ -42,8 +42,10 @@ static u32 cursor_image[CURSOR_HEIGHT] = {
 };
 
 typedef enum EventSource : uintptr_t {
-    EVENT_KEYBOARD_DATA,
-    EVENT_MOUSE_DATA,
+    EVENT_KEYBOARD_KEY,
+    EVENT_MOUSE_BUTTON,
+    EVENT_MOUSE_MOVE,
+    EVENT_MOUSE_SCROLL,
     EVENT_VIDEO_SIZE,
     EVENT_VIDEO_DATA,
 } EventSource;
@@ -100,8 +102,10 @@ typedef struct WindowContainer {
     u8 *video_buffer;
     // Input channels
     handle_t video_resize_in;
-    handle_t keyboard_data_in;
-    handle_t mouse_data_in;
+    handle_t keyboard_key_in;
+    handle_t mouse_button_in;
+    handle_t mouse_move_in;
+    handle_t mouse_scroll_in;
     handle_t window_close_in;
 } WindowContainer;
 
@@ -147,8 +151,10 @@ static WindowContainer *create_window(void) {
     handle_t video_size_in, video_size_out;
     handle_t video_data_in, video_data_out;
     handle_t video_resize_in, video_resize_out;
-    handle_t keyboard_data_in, keyboard_data_out;
-    handle_t mouse_data_in, mouse_data_out;
+    handle_t keyboard_key_in, keyboard_key_out;
+    handle_t mouse_button_in, mouse_button_out;
+    handle_t mouse_move_in, mouse_move_out;
+    handle_t mouse_scroll_in, mouse_scroll_out;
     handle_t text_stdout_in, text_stdout_out;
     handle_t text_stderr_in, text_stderr_out;
     handle_t text_stdin_in, text_stdin_out;
@@ -162,12 +168,18 @@ static WindowContainer *create_window(void) {
     err = channel_create(&video_resize_in, &video_resize_out);
     if (err)
         goto fail_video_resize_channel_create;
-    err = channel_create(&keyboard_data_in, &keyboard_data_out);
+    err = channel_create(&keyboard_key_in, &keyboard_key_out);
     if (err)
-        goto fail_keyboard_channel_create;
-    err = channel_create(&mouse_data_in, &mouse_data_out);
+        goto fail_keyboard_key_channel_create;
+    err = channel_create(&mouse_button_in, &mouse_button_out);
     if (err)
-        goto fail_mouse_channel_create;
+        goto fail_mouse_button_channel_create;
+    err = channel_create(&mouse_move_in, &mouse_move_out);
+    if (err)
+        goto fail_mouse_move_channel_create;
+    err = channel_create(&mouse_scroll_in, &mouse_scroll_out);
+    if (err)
+        goto fail_mouse_scroll_channel_create;
     err = channel_create(&text_stdout_in, &text_stdout_out);
     if (err)
         goto fail_stdout_channel_create;
@@ -186,8 +198,10 @@ static WindowContainer *create_window(void) {
         goto fail_window_alloc;
     window->header.type = CONTAINER_WINDOW;
     window->video_resize_in = video_resize_in;
-    window->keyboard_data_in = keyboard_data_in;
-    window->mouse_data_in = mouse_data_in;
+    window->keyboard_key_in = keyboard_key_in;
+    window->mouse_button_in = mouse_button_in;
+    window->mouse_move_in = mouse_move_in;
+    window->mouse_scroll_in = mouse_scroll_in;
     window->window_close_in = window_close_in;
     window->video_buffer_size = (ScreenSize){0, 0};
     window->video_buffer_capacity = VIDEO_BUFFER_DEFAULT_SIZE;
@@ -199,8 +213,10 @@ static WindowContainer *create_window(void) {
         resource_name("video/size"),
         resource_name("video/data"),
         resource_name("video/resize"),
-        resource_name("keyboard/data"),
-        resource_name("mouse/data"),
+        resource_name("keyboard/key"),
+        resource_name("mouse/button"),
+        resource_name("mouse/move"),
+        resource_name("mouse/scroll"),
         resource_name("text/stdout_r"),
         resource_name("text/stderr_r"),
         resource_name("text/stdin_r"),
@@ -210,8 +226,10 @@ static WindowContainer *create_window(void) {
         {ATTACHED_HANDLE_FLAG_MOVE, video_size_in},
         {ATTACHED_HANDLE_FLAG_MOVE, video_data_in},
         {ATTACHED_HANDLE_FLAG_MOVE, video_resize_out},
-        {ATTACHED_HANDLE_FLAG_MOVE, keyboard_data_out},
-        {ATTACHED_HANDLE_FLAG_MOVE, mouse_data_out},
+        {ATTACHED_HANDLE_FLAG_MOVE, keyboard_key_out},
+        {ATTACHED_HANDLE_FLAG_MOVE, mouse_button_out},
+        {ATTACHED_HANDLE_FLAG_MOVE, mouse_move_out},
+        {ATTACHED_HANDLE_FLAG_MOVE, mouse_scroll_out},
         {ATTACHED_HANDLE_FLAG_MOVE, text_stdout_out},
         {ATTACHED_HANDLE_FLAG_MOVE, text_stderr_out},
         {ATTACHED_HANDLE_FLAG_MOVE, text_stdin_out},
@@ -265,12 +283,18 @@ fail_stderr_channel_create:
     handle_free(text_stdout_in);
     handle_free(text_stdout_out);
 fail_stdout_channel_create:
-    handle_free(mouse_data_in);
-    handle_free(mouse_data_out);
-fail_mouse_channel_create:
-    handle_free(keyboard_data_in);
-    handle_free(keyboard_data_out);
-fail_keyboard_channel_create:
+    handle_free(mouse_scroll_in);
+    handle_free(mouse_scroll_out);
+fail_mouse_scroll_channel_create:
+    handle_free(mouse_move_in);
+    handle_free(mouse_move_out);
+fail_mouse_move_channel_create:
+    handle_free(mouse_button_in);
+    handle_free(mouse_button_out);
+fail_mouse_button_channel_create:
+    handle_free(keyboard_key_in);
+    handle_free(keyboard_key_out);
+fail_keyboard_key_channel_create:
     handle_free(video_resize_in);
     handle_free(video_resize_out);
 fail_video_resize_channel_create:
@@ -287,8 +311,10 @@ fail_video_size_channel_create:
 static void window_free(WindowContainer *window) {
     free(window->video_buffer);
     handle_free(window->video_resize_in);
-    handle_free(window->keyboard_data_in);
-    handle_free(window->mouse_data_in);
+    handle_free(window->keyboard_key_in);
+    handle_free(window->mouse_button_in);
+    handle_free(window->mouse_move_in);
+    handle_free(window->mouse_scroll_in);
     handle_free(window->window_close_in);
 }
 
@@ -889,17 +915,11 @@ typedef enum ModKeys : u32 {
 
 void main(void) {
     err_t err;
-    handle_t video_size_channel, keyboard_data_channel, mouse_data_channel;
+    handle_t video_size_channel;
     err = resource_get(&resource_name("video/size"), RESOURCE_TYPE_CHANNEL_SEND, &video_size_channel);
     if (err)
         return;
     err = resource_get(&resource_name("video/data"), RESOURCE_TYPE_CHANNEL_SEND, &video_data_channel);
-    if (err)
-        return;
-    err = resource_get(&resource_name("keyboard/data"), RESOURCE_TYPE_CHANNEL_RECEIVE, &keyboard_data_channel);
-    if (err)
-        return;
-    err = resource_get(&resource_name("mouse/data"), RESOURCE_TYPE_CHANNEL_RECEIVE, &mouse_data_channel);
     if (err)
         return;
     err = resource_get(&resource_name("process/spawn"), RESOURCE_TYPE_CHANNEL_SEND, &process_spawn_channel);
@@ -908,8 +928,18 @@ void main(void) {
     err = mqueue_create(&event_queue);
     if (err)
         return;
-    mqueue_add_channel(event_queue, keyboard_data_channel, (MessageTag){EVENT_KEYBOARD_DATA, 0});
-    mqueue_add_channel(event_queue, mouse_data_channel, (MessageTag){EVENT_MOUSE_DATA, 0});
+    err = mqueue_add_channel_resource(event_queue, &resource_name("keyboard/key"), (MessageTag){EVENT_KEYBOARD_KEY, 0});
+    if (err)
+        return;
+    err = mqueue_add_channel_resource(event_queue, &resource_name("mouse/button"), (MessageTag){EVENT_MOUSE_BUTTON, 0});
+    if (err)
+        return;
+    err = mqueue_add_channel_resource(event_queue, &resource_name("mouse/move"), (MessageTag){EVENT_MOUSE_MOVE, 0});
+    if (err)
+        return;
+    err = mqueue_add_channel_resource(event_queue, &resource_name("mouse/scroll"), (MessageTag){EVENT_MOUSE_SCROLL, 0});
+    if (err)
+        return;
     err = channel_call_read(video_size_channel, NULL, &(ReceiveMessage){sizeof(ScreenSize), &screen_size, 0, NULL}, NULL);
     if (err)
         return;
@@ -928,7 +958,7 @@ void main(void) {
         if (err)
             continue;
         switch ((EventSource)tag.data[0]) {
-        case EVENT_KEYBOARD_DATA: {
+        case EVENT_KEYBOARD_KEY: {
             // Read key event
             KeyEvent key_event;
             err = message_read(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, 0, 0);
@@ -1021,7 +1051,7 @@ void main(void) {
                     draw_screen();
                 } else if (!meta_held && key_event.keycode != KEY_LEFT_META && key_event.keycode != KEY_RIGHT_META && root_container != NULL) {
                     // Send the key event to the focused window
-                    handle_t keyboard_data_in = root_container->focused_window->keyboard_data_in;
+                    handle_t keyboard_data_in = root_container->focused_window->keyboard_key_in;
                     channel_send(keyboard_data_in, &(SendMessage){1, &(SendMessageData){sizeof(KeyEvent), &key_event}, 0, NULL}, FLAG_NONBLOCK);
                 }
                 break;
@@ -1035,18 +1065,35 @@ void main(void) {
             }
             break;
         }
-        case EVENT_MOUSE_DATA: {
-            // Read mouse update
-            MouseUpdate mouse_update;
-            err = message_read(msg, &(ReceiveMessage){sizeof(MouseUpdate), &mouse_update, 0, NULL}, NULL, NULL, 0, 0);
+        case EVENT_MOUSE_BUTTON: {
+            // Read event
+            MouseButtonEvent button_event;
+            err = message_read(msg, &(ReceiveMessage){sizeof(MouseButtonEvent), &button_event, 0, NULL}, NULL, NULL, 0, 0);
+            if (err)
+                continue;
+            handle_free(msg);
+            WindowContainer *pointed_at_window = get_pointed_at_window(NULL);
+            if (pointed_at_window != NULL) {
+                channel_send(pointed_at_window->mouse_button_in, &(SendMessage){1, &(SendMessageData){sizeof(MouseButtonEvent), &button_event}, 0, NULL}, FLAG_NONBLOCK);
+                if (button_event.button == MOUSE_BUTTON_LEFT && button_event.pressed) {
+                    set_focused_window(pointed_at_window);
+                    draw_screen();
+                }
+            }
+            break;
+        }
+        case EVENT_MOUSE_MOVE: {
+            // Read event
+            MouseMoveEvent move_event;
+            err = message_read(msg, &(ReceiveMessage){sizeof(MouseMoveEvent), &move_event, 0, NULL}, NULL, NULL, 0, 0);
             if (err)
                 continue;
             handle_free(msg);
             // Get the window pointed at before updating the cursor
             WindowContainer *old_pointed_at_window = get_pointed_at_window(NULL);
             // Update the cursor position
-            cursor.x += mouse_update.diff_x;
-            cursor.y += mouse_update.diff_y;
+            cursor.x += move_event.diff_x;
+            cursor.y += move_event.diff_y;
             if (cursor.x < 0)
                 cursor.x = 0;
             if (cursor.x >= (i32)screen_size.width)
@@ -1063,12 +1110,23 @@ void main(void) {
                 if (pointed_at_window != old_pointed_at_window)
                     set_focused_window(pointed_at_window);
                 // Send the mouse update to the window pointed at
-                handle_t mouse_data_in = pointed_at_window->mouse_data_in;
-                mouse_update.abs_x = cursor.x - window_origin.x;
-                mouse_update.abs_y = cursor.y - window_origin.y;
-                channel_send(mouse_data_in, &(SendMessage){1, &(SendMessageData){sizeof(MouseUpdate), &mouse_update}, 0, NULL}, FLAG_NONBLOCK);
+                move_event.abs_x = cursor.x - window_origin.x;
+                move_event.abs_y = cursor.y - window_origin.y;
+                channel_send(pointed_at_window->mouse_move_in, &(SendMessage){1, &(SendMessageData){sizeof(MouseMoveEvent), &move_event}, 0, NULL}, FLAG_NONBLOCK);
             }
             draw_screen();
+            break;
+        }
+        case EVENT_MOUSE_SCROLL: {
+            // Read event
+            MouseScrollEvent scroll_event;
+            err = message_read(msg, &(ReceiveMessage){sizeof(MouseScrollEvent), &scroll_event, 0, NULL}, NULL, NULL, 0, 0);
+            if (err)
+                continue;
+            handle_free(msg);
+            WindowContainer *pointed_at_window = get_pointed_at_window(NULL);
+            if (pointed_at_window != NULL)
+                channel_send(pointed_at_window->mouse_scroll_in, &(SendMessage){1, &(SendMessageData){sizeof(MouseScrollEvent), &scroll_event}, 0, NULL}, FLAG_NONBLOCK);
             break;
         }
         case EVENT_VIDEO_SIZE: {

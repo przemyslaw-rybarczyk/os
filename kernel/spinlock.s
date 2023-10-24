@@ -7,20 +7,28 @@ global spinlock_release
 
 extern process_switch
 extern interrupt_disable
+extern send_input_events
+extern send_input_delayed
 
 preempt_disable:
   add qword gs:[PerCPU.preempt_disable], 1
   ret
 
 preempt_enable:
-  ; Check if preemption is only disabled once, there's a delayed preemption, and interrupts are enabled
+  ; Check if preemption is only disabled once and interrupts are enabled
   cmp qword gs:[PerCPU.preempt_disable], 1
   jne .no_preempt
-  cmp byte gs:[PerCPU.preempt_delayed], 0
-  je .no_preempt
   cmp qword gs:[PerCPU.interrupt_disable], 0
   jne .no_preempt
-  ; If all of these conditions hold, preempt the current thread
+  ; If there are pending messages in the input buffer, send them
+  cmp byte [send_input_delayed], 0
+  jz .no_input
+  mov byte [send_input_delayed], 0
+  call send_input_events
+.no_input:
+  ; If there's a pending preemption, preempt the current thread
+  cmp byte gs:[PerCPU.preempt_delayed], 0
+  je .no_preempt
   sub qword gs:[PerCPU.preempt_disable], 1
   call process_switch
   ret

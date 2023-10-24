@@ -66,10 +66,10 @@ void main(void) {
     err = mqueue_create(&event_mqueue);
     if (err)
         return;
-    err = mqueue_add_channel_resource(event_mqueue, &resource_name("keyboard/data"), (MessageTag){1, 0});
+    err = mqueue_add_channel_resource(event_mqueue, &resource_name("keyboard/key"), (MessageTag){1, 0});
     if (err)
         return;
-    err = mqueue_add_channel_resource(event_mqueue, &resource_name("mouse/data"), (MessageTag){2, 0});
+    err = mqueue_add_channel_resource(event_mqueue, &resource_name("mouse/move"), (MessageTag){2, 0});
     if (err)
         return;
     err = mqueue_add_channel_resource(event_mqueue, &resource_name("video/resize"), (MessageTag){3, 0});
@@ -107,8 +107,8 @@ void main(void) {
             break;
         }
         case 2: {
-            MouseUpdate mouse_update;
-            err = message_read(msg, &(ReceiveMessage){sizeof(MouseUpdate), &mouse_update, 0, NULL}, NULL, NULL, 0, 0);
+            MouseMoveEvent mouse_update;
+            err = message_read(msg, &(ReceiveMessage){sizeof(MouseMoveEvent), &mouse_update, 0, NULL}, NULL, NULL, 0, 0);
             if (err)
                 continue;
             handle_free(msg);

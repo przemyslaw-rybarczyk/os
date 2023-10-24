@@ -5,8 +5,6 @@
 #include "channel.h"
 #include "framebuffer.h"
 #include "interrupt.h"
-#include "keyboard.h"
-#include "mouse.h"
 #include "page.h"
 #include "percpu.h"
 #include "pic.h"

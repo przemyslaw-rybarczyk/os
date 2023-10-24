@@ -7,8 +7,7 @@
 #include "handle.h"
 #include "included_programs.h"
 #include "interrupt.h"
-#include "keyboard.h"
-#include "mouse.h"
+#include "input.h"
 #include "page.h"
 #include "percpu.h"
 #include "resource.h"
@@ -155,7 +154,6 @@ void process_set_kernel_stack(Process *process, void *entry_point) {
 
 // Add a process to the queue of running processes
 void process_enqueue(Process *process) {
-    interrupt_disable();
     spinlock_acquire(&scheduler_lock);
     // Add the process to end of the queue
     process_queue_add(&scheduler_queue, process);
@@ -165,7 +163,6 @@ void process_enqueue(Process *process) {
         idle_core_list = idle_core_list->next_cpu;
     }
     spinlock_release(&scheduler_lock);
-    interrupt_enable();
 }
 
 // Set up the initial processes
@@ -183,11 +180,17 @@ err_t process_setup(void) {
     framebuffer_size_channel = channel_alloc();
     if (framebuffer_size_channel == NULL)
         return ERR_KERNEL_NO_MEMORY;
-    keyboard_channel = channel_alloc();
-    if (keyboard_channel == NULL)
+    keyboard_key_channel = channel_alloc();
+    if (keyboard_key_channel == NULL)
         return ERR_KERNEL_NO_MEMORY;
-    mouse_channel = channel_alloc();
-    if (mouse_channel == NULL)
+    mouse_button_channel = channel_alloc();
+    if (mouse_button_channel == NULL)
+        return ERR_KERNEL_NO_MEMORY;
+    mouse_move_channel = channel_alloc();
+    if (mouse_move_channel == NULL)
+        return ERR_KERNEL_NO_MEMORY;
+    mouse_scroll_channel = channel_alloc();
+    if (mouse_scroll_channel == NULL)
         return ERR_KERNEL_NO_MEMORY;
     process_spawn_channel = channel_alloc();
     if (process_spawn_channel == NULL)
@@ -199,26 +202,20 @@ err_t process_setup(void) {
     err = process_create(&framebuffer_kernel_thread, (ResourceList){0, NULL});
     if (err)
         return err;
-    err = process_create(&keyboard_kernel_thread, (ResourceList){0, NULL});
-    if (err)
-        return err;
-    err = process_create(&mouse_kernel_thread, (ResourceList){0, NULL});
-    if (err)
-        return err;
     err = process_create(&process_spawn_kernel_thread, (ResourceList){0, NULL});
     if (err)
         return err;
     process_set_kernel_stack(framebuffer_kernel_thread, framebuffer_kernel_thread_main);
-    process_set_kernel_stack(keyboard_kernel_thread, keyboard_kernel_thread_main);
-    process_set_kernel_stack(mouse_kernel_thread, mouse_kernel_thread_main);
     process_set_kernel_stack(process_spawn_kernel_thread, process_spawn_kernel_thread_main);
     channel_add_ref(framebuffer_size_channel);
     channel_add_ref(framebuffer_data_channel);
-    channel_add_ref(keyboard_channel);
-    channel_add_ref(mouse_channel);
+    channel_add_ref(keyboard_key_channel);
+    channel_add_ref(mouse_button_channel);
+    channel_add_ref(mouse_move_channel);
+    channel_add_ref(mouse_scroll_channel);
     channel_add_ref(process_spawn_channel);
     Process *init_process;
-    ResourceListEntry *init_resources = malloc(5 * sizeof(ResourceListEntry));
+    ResourceListEntry *init_resources = malloc(7 * sizeof(ResourceListEntry));
     if (init_resources == NULL)
         return ERR_KERNEL_NO_MEMORY;
     init_resources[0] = (ResourceListEntry){
@@ -230,24 +227,30 @@ err_t process_setup(void) {
             RESOURCE_TYPE_CHANNEL_SEND,
             {.channel = framebuffer_data_channel}}};
     init_resources[2] = (ResourceListEntry){
-        resource_name("keyboard/data"), {
+        resource_name("keyboard/key"), {
             RESOURCE_TYPE_CHANNEL_RECEIVE,
-            {.channel = keyboard_channel}}};
+            {.channel = keyboard_key_channel}}};
     init_resources[3] = (ResourceListEntry){
-        resource_name("mouse/data"), {
+        resource_name("mouse/button"), {
             RESOURCE_TYPE_CHANNEL_RECEIVE,
-            {.channel = mouse_channel}}};
+            {.channel = mouse_button_channel}}};
     init_resources[4] = (ResourceListEntry){
+        resource_name("mouse/move"), {
+            RESOURCE_TYPE_CHANNEL_RECEIVE,
+            {.channel = mouse_move_channel}}};
+    init_resources[5] = (ResourceListEntry){
+        resource_name("mouse/scroll"), {
+            RESOURCE_TYPE_CHANNEL_RECEIVE,
+            {.channel = mouse_scroll_channel}}};
+    init_resources[6] = (ResourceListEntry){
         resource_name("process/spawn"), {
             RESOURCE_TYPE_CHANNEL_SEND,
             {.channel = process_spawn_channel}}};
-    err = process_create(&init_process, (ResourceList){5, init_resources});
+    err = process_create(&init_process, (ResourceList){7, init_resources});
     if (err)
         return err;
     process_set_user_stack(init_process, included_file_window, included_file_window_end - included_file_window, NULL);
     process_enqueue(framebuffer_kernel_thread);
-    process_enqueue(keyboard_kernel_thread);
-    process_enqueue(mouse_kernel_thread);
     process_enqueue(process_spawn_kernel_thread);
     process_enqueue(init_process);
     return 0;

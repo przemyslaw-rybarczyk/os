@@ -305,7 +305,7 @@ void main(void) {
     err = mqueue_create(&event_mqueue);
     if (err)
         return;
-    err = mqueue_add_channel_resource(event_mqueue, &resource_name("keyboard/data"), (MessageTag){EVENT_KEYBOARD, 0});
+    err = mqueue_add_channel_resource(event_mqueue, &resource_name("keyboard/key"), (MessageTag){EVENT_KEYBOARD, 0});
     if (err)
         return;
     err = mqueue_add_channel_resource(event_mqueue, &resource_name("video/resize"), (MessageTag){EVENT_RESIZE, 0});
