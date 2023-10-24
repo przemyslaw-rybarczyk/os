@@ -368,8 +368,8 @@ static void get_container_size(const Container *container, ScreenSize *container
 static void get_window_size(const WindowContainer *window, ScreenSize *window_size) {
     ScreenSize container_size;
     get_container_size(&window->header, &container_size);
-    window_size->width = container_size.width - 2 * BORDER_THICKNESS;
-    window_size->height = container_size.height - 2 * BORDER_THICKNESS;
+    window_size->width = container_size.width >= 2 * BORDER_THICKNESS ? container_size.width - 2 * BORDER_THICKNESS : 0;
+    window_size->height = container_size.height >= 2 * BORDER_THICKNESS ? container_size.height - 2 * BORDER_THICKNESS : 0;
 }
 
 // Get the window that the cursor is currently in
