@@ -78,7 +78,7 @@ mouse_init:
   setae [mouse_has_scroll_wheel]
   ; Set the sample rate
   call mouse_prepare_to_set_sample_rate
-  mov al, 200
+  mov al, 60
   out PS2_DATA, al
   call ps2_wait_for_read
   in al, PS2_DATA
