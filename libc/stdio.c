@@ -10,43 +10,7 @@
 #include <zr/syscalls.h>
 
 #include "float_cast.h"
-
-typedef enum FileType {
-    FILE_INVALID,
-    FILE_BUFFER,
-    FILE_CHANNEL,
-} FileType;
-
-typedef enum FileMode {
-    FILE_R,
-    FILE_W,
-    FILE_RW,
-} FileMode;
-
-#undef _IONBF
-#undef _IOLBF
-#undef _IOFBF
-
-typedef enum BufferMode {
-    _IONBF,
-    _IOLBF,
-    _IOFBF,
-} BufferMode;
-
-struct _FILE {
-    FileType type;
-    FileMode mode;
-    BufferMode buffer_mode;
-    char *restrict buffer;
-    size_t buffer_capacity;
-    size_t buffer_size;
-    size_t buffer_offset;
-    handle_t channel;
-    bool eof;
-    bool error;
-    bool ungetc_buffer_full;
-    unsigned char ungetc_buffer;
-};
+#include "file.h"
 
 static FILE stdout_file = (FILE){.type = FILE_INVALID, .mode = FILE_W};
 static FILE stderr_file = (FILE){.type = FILE_INVALID, .mode = FILE_W};
@@ -1287,16 +1251,19 @@ static bool scanf_int(FILE *file, size_t *offset, size_t *field_width, uintmax_t
     }
 }
 
-static ptrdiff_t scanf_exponent(FILE *file, size_t *offset, size_t *field_width) {
+static ptrdiff_t scanf_exponent(FILE *file, size_t *offset, size_t *field_width, size_t *extra_chars) {
     int c;
     // Read sign
+    bool got_sign = false;
     bool exponent_sign;
     c = scanf_char(file, offset, field_width);
     switch (c) {
     case '+':
+        got_sign = true;
         exponent_sign = false;
         break;
     case '-':
+        got_sign = true;
         exponent_sign = true;
         break;
     default:
@@ -1317,6 +1284,8 @@ static ptrdiff_t scanf_exponent(FILE *file, size_t *offset, size_t *field_width)
             break;
         }
     }
+    if (exponent_digits_read == 0)
+        *extra_chars += 1 + got_sign;
     // if we read more than 18 digits, consider the exponent as having overflow and clamp it to 10^18
     if (exponent_digits_read > 18)
         exponent = 1000000000000000000;
@@ -1325,8 +1294,10 @@ static ptrdiff_t scanf_exponent(FILE *file, size_t *offset, size_t *field_width)
     return exponent;
 }
 
-static bool scanf_float(FILE *file, size_t *offset, size_t *field_width, long double *f_ptr) {
+// Returns the number of characters scanned past the end of the valid representation, or SIZE_MAX on failure.
+size_t __scanf_float(FILE *file, size_t *offset, size_t *field_width, long double *f_ptr) {
     int c;
+    size_t extra_chars = 0;
     union long_double_cast f_cast;
     // Read sign
     bool sign;
@@ -1352,16 +1323,19 @@ static bool scanf_float(FILE *file, size_t *offset, size_t *field_width, long do
             c = scanf_char(file, offset, field_width);
             if (tolower(c) != *s) {
                 scanf_ungetc(file, offset, field_width, c);
-                return false;
+                return SIZE_MAX;
             }
         }
+        extra_chars = 0;
         for (const char *s = "inity"; *s != '\0'; s++) {
             c = scanf_char(file, offset, field_width);
             if (tolower(c) != *s) {
                 scanf_ungetc(file, offset, field_width, c);
                 goto return_inf;
             }
+            extra_chars++;
         }
+        extra_chars = 0;
         goto return_inf;
     } else if (tolower(c) == 'n') {
         // Parse NaN
@@ -1369,19 +1343,22 @@ static bool scanf_float(FILE *file, size_t *offset, size_t *field_width, long do
             c = scanf_char(file, offset, field_width);
             if (tolower(c) != *s) {
                 scanf_ungetc(file, offset, field_width, c);
-                return false;
+                return SIZE_MAX;
             }
         }
         c = scanf_char(file, offset, field_width);
         if (c == '(') {
+            extra_chars = 1;
             while (1) {
                 c = scanf_char(file, offset, field_width);
                 if (c == ')') {
+                    extra_chars = 0;
                     break;
                 } else if (!(isalnum(c) || c == '_')) {
                     scanf_ungetc(file, offset, field_width, c);
                     break;
                 }
+                extra_chars++;
             }
         } else {
             scanf_ungetc(file, offset, field_width, c);
@@ -1389,9 +1366,8 @@ static bool scanf_float(FILE *file, size_t *offset, size_t *field_width, long do
         f_cast.mantissa = UINT64_C(-1);
         f_cast.sign_exponent = sign ? 0xFFFF : 0x7FFF;
         *f_ptr = f_cast.f;
-        return true;
+        return extra_chars;
     } else if (c == '0') {
-        got_digit = true;
         c = scanf_char(file, offset, field_width);
         if (c == 'x' || c == 'X') {
             // Read hexadecimal floating-point number
@@ -1450,16 +1426,16 @@ static bool scanf_float(FILE *file, size_t *offset, size_t *field_width, long do
                     }
                 }
             }
+            // Fail if we didn't find any digits
+            if (!got_digit)
+                return SIZE_MAX;
             // Return zero if there are no non-zero digits
             if ((mantissa & (UINT64_C(1) << 63)) == 0)
                 goto return_zero;
-            // Fail if we didn't find any digits
-            if (!got_digit)
-                return false;
             // Read exponent
             c = scanf_char(file, offset, field_width);
             if (c == 'p' || c == 'P')
-                exponent += scanf_exponent(file, offset, field_width);
+                exponent += scanf_exponent(file, offset, field_width, &extra_chars);
             else
                 scanf_ungetc(file, offset, field_width, c);
             // Assemble value
@@ -1481,8 +1457,9 @@ static bool scanf_float(FILE *file, size_t *offset, size_t *field_width, long do
             if (sign)
                 f_cast.sign_exponent |= 0x8000;
             *f_ptr = f_cast.f;
-            return true;
+            return extra_chars;
         } else {
+            got_digit = true;
             scanf_ungetc(file, offset, field_width, c);
         }
     } else {
@@ -1548,11 +1525,11 @@ static bool scanf_float(FILE *file, size_t *offset, size_t *field_width, long do
 end_of_digits:
     // Fail if we didn't find any digits
     if (!got_digit)
-        return false;
+        return SIZE_MAX;
     // Read exponent
     c = scanf_char(file, offset, field_width);
     if (c == 'e' || c == 'E')
-        decimal_point_position += scanf_exponent(file, offset, field_width);
+        decimal_point_position += scanf_exponent(file, offset, field_width, &extra_chars);
     else
         scanf_ungetc(file, offset, field_width, c);
     // Shift digits so that decimal point is within stored digit groups
@@ -1738,7 +1715,7 @@ end:
     if (sign)
         f_cast.sign_exponent |= 0x8000;
     *f_ptr = f_cast.f;
-    return true;
+    return extra_chars;
 }
 
 static int scanf_common(FILE *file, const char *fmt, va_list args) {
@@ -1939,7 +1916,7 @@ static int scanf_common(FILE *file, const char *fmt, va_list args) {
         case 'A': {
             scanf_whitespace(file, &offset);
             long double f;
-            if (!scanf_float(file, &offset, &field_width, &f))
+            if (__scanf_float(file, &offset, &field_width, &f) == SIZE_MAX)
                 return matches;
             if (assign) {
                 switch (length_modifier) {
@@ -2007,14 +1984,19 @@ int vscanf(const char *restrict format, va_list args) {
     return vfscanf(stdin, format, args);
 }
 
-int vsscanf(const char *restrict s, const char *restrict format, va_list args) {
-    FILE file = {
+void __string_file(FILE *file, const char *s) {
+    *file = (FILE){
         .type = FILE_BUFFER,
         .mode = FILE_R,
         .buffer = (char *restrict)s,
         .buffer_size = strlen(s),
         .buffer_offset = 0,
     };
+}
+
+int vsscanf(const char *restrict s, const char *restrict format, va_list args) {
+    FILE file;
+    __string_file(&file, s);
     return vfscanf(&file, format, args);
 }
 

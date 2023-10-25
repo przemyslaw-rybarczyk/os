@@ -5,7 +5,7 @@
 
 #define EOF (-1)
 
-typedef struct _FILE FILE;
+typedef struct __FILE FILE;
 
 extern FILE *stdout;
 extern FILE *stderr;
