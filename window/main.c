@@ -114,8 +114,9 @@ typedef struct SplitContainer {
     Container *first_child;
 } SplitContainer;
 
-// Root of the container tree, covering the whole window
-static Container *root_container = NULL;
+// Each element is the root of a container tree for a given workspace, covering the whole screen
+static Container *root_container[9] = {0};
+static u32 current_workspace = 0;
 
 static ScreenPos cursor;
 
@@ -387,9 +388,9 @@ static void get_window_size(const WindowContainer *window, ScreenSize *window_si
 // Sets window_origin to the origin of the window if it's not null.
 // Returns NULL if not pointing at a window.
 static WindowContainer *get_pointed_at_window(ScreenPos *window_origin) {
-    if (root_container == NULL)
+    if (root_container[current_workspace] == NULL)
         return NULL;
-    Container *container = root_container;
+    Container *container = root_container[current_workspace];
     // The position and properties of the current container
     i32 origin_x = 0;
     i32 origin_y = 0;
@@ -433,9 +434,9 @@ static WindowContainer *get_pointed_at_window(ScreenPos *window_origin) {
 // The highest container with the edge in the hierarchy is selected.
 // If not pointing at an edge, returns NULL.
 static Container *get_pointed_at_edge(Direction *direction) {
-    if (root_container == NULL)
+    if (root_container[current_workspace] == NULL)
         return NULL;
-    Container *container = root_container;
+    Container *container = root_container[current_workspace];
     // The position and properties of the current container
     i32 origin_x = 0;
     i32 origin_y = 0;
@@ -529,9 +530,9 @@ static void set_focused_window(WindowContainer *window) {
 
 // Switch the focused window to the next one in a given direction
 static void switch_focused_window(Direction direction) {
-    if (root_container == NULL)
+    if (root_container[current_workspace] == NULL)
         return;
-    Container *forward_sibling = get_sibling_of_ancestor_in_direction(&root_container->focused_window->header, direction);
+    Container *forward_sibling = get_sibling_of_ancestor_in_direction(&root_container[current_workspace]->focused_window->header, direction);
     if (forward_sibling != NULL)
         set_focused_window(forward_sibling->focused_window);
 }
@@ -572,7 +573,7 @@ static void send_resize_messages(Container *container) {
 // Shift the given edge of the focused window by the given number of pixels
 // Positive `diff` values represent expanding the window, negative ones represent shrinking.
 static void container_resize(Container *container, Direction side, i32 diff) {
-    if (root_container == NULL)
+    if (root_container[current_workspace] == NULL)
         return;
     container = get_ancestor_with_sibling_in_direction(container, side);
     if (container == NULL)
@@ -671,7 +672,7 @@ static void container_replace(Container *container, Container *old_container) {
         if (old_container->parent->first_child == old_container)
             old_container->parent->first_child = container;
     } else {
-        root_container = container;
+        root_container[current_workspace] = container;
     }
     container->offset_in_parent = old_container->offset_in_parent;
 }
@@ -682,7 +683,7 @@ static void container_replace_with_children(SplitContainer *parent, Container *o
         parent->header.parent = NULL;
         parent->header.prev_sibling = NULL;
         parent->header.next_sibling = NULL;
-        root_container = (Container *)parent;
+        root_container[current_workspace] = (Container *)parent;
         return;
     }
     Container *last_child = NULL;
@@ -747,7 +748,7 @@ static void container_normalize(SplitContainer *split) {
 
 // Add a new window neighboring the focused window in the given direction
 static void add_new_window_next_to_focused(Direction side) {
-    if (root_container == NULL) {
+    if (root_container[current_workspace] == NULL) {
         // There are no containers, so the one we create becomes the root
         WindowContainer *window = create_window();
         if (window == NULL)
@@ -757,10 +758,10 @@ static void add_new_window_next_to_focused(Direction side) {
         window->header.next_sibling = NULL;
         window->header.focused_window = window;
         window->header.offset_in_parent = 0.0;
-        root_container = (Container *)window;
+        root_container[current_workspace] = (Container *)window;
         return;
     }
-    WindowContainer *focused_window = root_container->focused_window;
+    WindowContainer *focused_window = root_container[current_workspace]->focused_window;
     // Determine whether a new split container should be created containing the focused window and the new window,
     // or if the new window should be placed as a sibling of the focused window.
     // This depends on whether the direction along which the new window is created the same or opposite
@@ -805,10 +806,10 @@ static void add_new_window_next_to_focused(Direction side) {
 // Close a window
 static void close_window(WindowContainer *window) {
     // Ask window process to terminate
-    channel_send(root_container->focused_window->window_close_in, NULL, FLAG_NONBLOCK);
+    channel_send(root_container[current_workspace]->focused_window->window_close_in, NULL, FLAG_NONBLOCK);
     if (window->header.parent == NULL) {
         // The window is at the root
-        root_container = NULL;
+        root_container[current_workspace] = NULL;
     } else {
         container_remove((Container *)window);
         set_focused_window(window->header.next_sibling != NULL ? window->header.next_sibling->focused_window : window->header.prev_sibling->focused_window);
@@ -821,9 +822,9 @@ static void close_window(WindowContainer *window) {
 
 // Move the focused window in a given direction
 static void move_focused_window(Direction direction) {
-    if (root_container == NULL)
+    if (root_container[current_workspace] == NULL)
         return;
-    WindowContainer *window = root_container->focused_window;
+    WindowContainer *window = root_container[current_workspace]->focused_window;
     if (window->header.parent == NULL)
         return;
     if (window->header.parent->header.type == (direction_is_horizontal(direction) ? CONTAINER_SPLIT_HORIZONTAL : CONTAINER_SPLIT_VERTICAL)) {
@@ -842,7 +843,7 @@ static void move_focused_window(Direction direction) {
                     return;
                 ggparent->header.type = direction_is_horizontal(direction) ? CONTAINER_SPLIT_HORIZONTAL : CONTAINER_SPLIT_VERTICAL;
                 container_add_one_child(ggparent, (Container *)gparent);
-                root_container = (Container *)ggparent;
+                root_container[current_workspace] = (Container *)ggparent;
             }
             container_remove((Container *)window);
             set_focused_window(window->header.next_sibling != NULL ? window->header.next_sibling->focused_window : window->header.prev_sibling->focused_window);
@@ -877,7 +878,7 @@ static void move_focused_window(Direction direction) {
                 return;
             gparent->header.type = direction_is_horizontal(direction) ? CONTAINER_SPLIT_HORIZONTAL : CONTAINER_SPLIT_VERTICAL;
             container_add_one_child(gparent, (Container *)parent);
-            root_container = (Container *)gparent;
+            root_container[current_workspace] = (Container *)gparent;
         }
         container_remove((Container *)window);
         set_focused_window(window->header.next_sibling != NULL ? window->header.next_sibling->focused_window : window->header.prev_sibling->focused_window);
@@ -889,6 +890,42 @@ static void move_focused_window(Direction direction) {
         set_focused_window(window);
         send_resize_messages((Container *)window->header.parent);
     }
+}
+
+// Move the focused window to a given workspace
+static void move_focused_window_to_workspace(u32 workspace) {
+    WindowContainer *window = root_container[current_workspace]->focused_window;
+    // If the target workspace only has one window at the root, create a new container above it
+    if (root_container[workspace] != NULL && root_container[workspace]->type == CONTAINER_WINDOW) {
+        SplitContainer *parent = split_container_alloc();
+        if (parent == NULL)
+            return;
+        parent->header.type = CONTAINER_SPLIT_HORIZONTAL;
+        container_add_one_child(parent, (Container *)root_container[workspace]);
+        root_container[workspace] = (Container *)parent;
+    }
+    // Remove window from current workspace
+    if (window->header.parent == NULL) {
+        // The window is at the root
+        root_container[current_workspace] = NULL;
+    } else {
+        container_remove((Container *)window);
+        set_focused_window(window->header.next_sibling != NULL ? window->header.next_sibling->focused_window : window->header.prev_sibling->focused_window);
+        send_resize_messages((Container *)window->header.parent);
+        container_normalize(window->header.parent);
+    }
+    // Place window in new workspace
+    if (root_container[workspace] == NULL) {
+        window->header.parent = NULL;
+        window->header.prev_sibling = NULL;
+        window->header.next_sibling = NULL;
+        window->header.focused_window = window;
+        window->header.offset_in_parent = 0.0;
+        root_container[workspace] = (Container *)window;
+    } else {
+        container_insert_before((Container *)window, ((SplitContainer *)root_container[workspace])->first_child);
+    }
+    set_focused_window(window);
 }
 
 // Draw a solid rectangle
@@ -945,7 +982,7 @@ static void draw_container(Container *container, u32 origin_x, u32 origin_y, u32
     case CONTAINER_WINDOW: {
         WindowContainer *window = (WindowContainer *)container;
         // Draw window border
-        const u8 *border_color = window == root_container->focused_window ? border_color_focused : border_color_unfocused;
+        const u8 *border_color = window == root_container[current_workspace]->focused_window ? border_color_focused : border_color_unfocused;
         if (width <= 2 * BORDER_THICKNESS || height <= 2 * BORDER_THICKNESS) {
             draw_rectangle(border_color, origin_x, origin_y, width, height);
             return;
@@ -988,10 +1025,10 @@ static void draw_container(Container *container, u32 origin_x, u32 origin_y, u32
 static void draw_screen(void) {
     Rectangle resize_edge = (Rectangle){0, 0, 0, 0};
     // Draw the root container to the screen buffer if the is one, otherwise fill the screen with a gray background
-    if (root_container == NULL)
+    if (root_container[current_workspace] == NULL)
         memset(screen_buffer, 0x30, 3 * screen_size.width * screen_size.height);
     else
-        draw_container(root_container, 0, 0, screen_size.width, screen_size.height, &resize_edge);
+        draw_container(root_container[current_workspace], 0, 0, screen_size.width, screen_size.height, &resize_edge);
     // Draw edge showing resize position
     draw_rectangle(border_color_focused, resize_edge.origin_x, resize_edge.origin_y, resize_edge.width, resize_edge.height);
     // Draw the cursor
@@ -1100,6 +1137,8 @@ void main(void) {
             // Check for directional keys
             bool direction_selected = false;
             Direction direction;
+            bool workspace_selected = false;
+            u32 workspace;
             switch (key_event.keycode) {
             case KEY_LEFT:
             case KEY_H:
@@ -1122,6 +1161,10 @@ void main(void) {
                 direction = DIRECTION_RIGHT;
                 break;
             default:
+                if (KEY_1 <= key_event.keycode && key_event.keycode <= KEY_9) {
+                    workspace_selected = true;
+                    workspace = key_event.keycode - KEY_1;
+                }
                 break;
             }
             // Handle the event
@@ -1134,27 +1177,32 @@ void main(void) {
                     if (direction_selected) {
                         if (ctrl_held) {
                             if (shift_held)
-                                container_resize((Container *)root_container->focused_window, direction, - RESIZE_PIXELS);
+                                container_resize((Container *)root_container[current_workspace]->focused_window, direction, - RESIZE_PIXELS);
                             else
-                                container_resize((Container *)root_container->focused_window, direction, RESIZE_PIXELS);
+                                container_resize((Container *)root_container[current_workspace]->focused_window, direction, RESIZE_PIXELS);
                         } else if (shift_held) {
                             move_focused_window(direction);
                         } else {
                             switch_focused_window(direction);
                         }
+                    } else if (workspace_selected) {
+                        if (shift_held)
+                            move_focused_window_to_workspace(workspace);
+                        else
+                            current_workspace = workspace;
                     } else if (key_event.keycode == KEY_ENTER) {
-                        if (root_container != NULL)
+                        if (root_container[current_workspace] != NULL)
                             state = STATE_WINDOW_CREATE;
                         else
                             add_new_window_next_to_focused(DIRECTION_UP);
                     } else if (key_event.keycode == KEY_Q) {
-                        if (root_container != NULL)
-                            close_window(root_container->focused_window);
+                        if (root_container[current_workspace] != NULL)
+                            close_window(root_container[current_workspace]->focused_window);
                     }
                     draw_screen();
-                } else if (!meta_held && key_event.keycode != KEY_LEFT_META && key_event.keycode != KEY_RIGHT_META && root_container != NULL) {
+                } else if (!meta_held && key_event.keycode != KEY_LEFT_META && key_event.keycode != KEY_RIGHT_META && root_container[current_workspace] != NULL) {
                     // Send the key event to the focused window
-                    handle_t keyboard_data_in = root_container->focused_window->keyboard_key_in;
+                    handle_t keyboard_data_in = root_container[current_workspace]->focused_window->keyboard_key_in;
                     channel_send(keyboard_data_in, &(SendMessage){1, &(SendMessageData){sizeof(KeyEvent), &key_event}, 0, NULL}, FLAG_NONBLOCK);
                 }
                 break;
