@@ -929,6 +929,7 @@ static void move_focused_window_to_workspace(u32 workspace) {
     } else {
         container_insert_before((Container *)window, ((SplitContainer *)root_container[workspace])->first_child);
     }
+    send_resize_messages(root_container[workspace]);
     set_focused_window(window);
 }
 
