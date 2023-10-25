@@ -63,6 +63,9 @@ void mouse_irq_handler(void) {
             add_input_event((InputEvent){INPUT_EVENT_MOUSE_BUTTON, .mouse_button_event = {MOUSE_BUTTON_RIGHT, new_right_button_pressed}});
         if (new_middle_button_pressed != middle_button_pressed)
             add_input_event((InputEvent){INPUT_EVENT_MOUSE_BUTTON, .mouse_button_event = {MOUSE_BUTTON_MIDDLE, new_middle_button_pressed}});
+        left_button_pressed = new_left_button_pressed;
+        middle_button_pressed = new_middle_button_pressed;
+        right_button_pressed = new_right_button_pressed;
         if (mouse_has_scroll_wheel) {
             switch (mouse_packet[3] & 0x0F) {
             case 0x01:
