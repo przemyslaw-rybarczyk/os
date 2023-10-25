@@ -113,3 +113,31 @@ static const u8 font_chars[FONT_CHAR_HIGHEST - FONT_CHAR_LOWEST + 1][FONT_HEIGHT
 
 static const u8 font_char_unknown[FONT_HEIGHT] =
     {0x00, 0x00, 0xFC, 0x84, 0xB4, 0x8C, 0x94, 0x84, 0x94, 0x84, 0xFC, 0x00, 0x00};
+
+#ifndef _KERNEL
+
+static void draw_font_char(u8 c, size_t x, size_t y, const u8 *color, size_t width, size_t height, u8 *screen) {
+    // Get the font glyph for the character
+    const u8 *font_char;
+    if (FONT_CHAR_LOWEST <= c && c <= FONT_CHAR_HIGHEST)
+        font_char = font_chars[c - FONT_CHAR_LOWEST];
+    else
+        font_char = font_char_unknown;
+    // Draw the character
+    for (u32 cy = 0; cy < FONT_HEIGHT; cy++) {
+        if (y + cy >= height)
+            break;
+        for (u32 cx = 0; cx < FONT_WIDTH; cx++) {
+            if (x + cx >= width)
+                break;
+            if ((font_char[cy] << cx) & 0x80) {
+                u8 *pixel = &screen[((y + cy) * width + x + cx) * 3];
+                pixel[0] = color[0];
+                pixel[1] = color[1];
+                pixel[2] = color[2];
+            }
+        }
+    }
+}
+
+#endif
