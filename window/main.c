@@ -9,6 +9,7 @@
 #include <zr/syscalls.h>
 #include <zr/video.h>
 
+#include "font.h"
 #include "included_programs.h"
 
 #define CURSOR_WIDTH 12
@@ -124,9 +125,12 @@ static u8 *screen_buffer;
 
 static const u8 border_color_unfocused[3] = {0xB0, 0x90, 0xFF};
 static const u8 border_color_focused[3] = {0x70, 0x50, 0xFF};
+static const u8 status_bar_color[3] = {0x60, 0x40, 0xFF};
+static const u8 status_bar_text_color[3] = {0xFF, 0xFF, 0xFF};
 
 #define BORDER_THICKNESS 3
 #define RESIZE_PIXELS 5
+#define STATUS_BAR_HEIGHT (FONT_HEIGHT + 4)
 
 typedef enum Direction {
     DIRECTION_UP,
@@ -395,7 +399,7 @@ static WindowContainer *get_pointed_at_window(ScreenPos *window_origin) {
     i32 origin_x = 0;
     i32 origin_y = 0;
     i32 width = screen_size.width;
-    i32 height = screen_size.height;
+    i32 height = screen_size.height - STATUS_BAR_HEIGHT;
     // Go down the container tree based on the cursor position until finding a window
     while (1) {
         switch (container->type) {
@@ -441,7 +445,7 @@ static Container *get_pointed_at_edge(Direction *direction) {
     i32 origin_x = 0;
     i32 origin_y = 0;
     i32 width = screen_size.width;
-    i32 height = screen_size.height;
+    i32 height = screen_size.height - STATUS_BAR_HEIGHT;
     while (1) {
         // Check if cursor lies at a border and return if it does
         if (cursor.x >= origin_x && cursor.x < origin_x + BORDER_THICKNESS) {
@@ -1021,16 +1025,29 @@ static void draw_container(Container *container, u32 origin_x, u32 origin_y, u32
     }
 }
 
+#define STATUS_BAR_NUMBER_WIDTH (FONT_WIDTH + 7)
+#define STATUS_BAR_NUMBER_OFFSET 5
+
 // Draw the screen
 static void draw_screen(void) {
     Rectangle resize_edge = (Rectangle){0, 0, 0, 0};
     // Draw the root container to the screen buffer if the is one, otherwise fill the screen with a gray background
     if (root_container[current_workspace] == NULL)
-        memset(screen_buffer, 0x30, 3 * screen_size.width * screen_size.height);
+        memset(screen_buffer, 0x30, 3 * screen_size.width * screen_size.height - STATUS_BAR_HEIGHT);
     else
-        draw_container(root_container[current_workspace], 0, 0, screen_size.width, screen_size.height, &resize_edge);
+        draw_container(root_container[current_workspace], 0, 0, screen_size.width, screen_size.height - STATUS_BAR_HEIGHT, &resize_edge);
     // Draw edge showing resize position
     draw_rectangle(border_color_focused, resize_edge.origin_x, resize_edge.origin_y, resize_edge.width, resize_edge.height);
+    // Draw the status bar
+    draw_rectangle(status_bar_color, 0, screen_size.height - STATUS_BAR_HEIGHT, screen_size.width, STATUS_BAR_HEIGHT);
+    for (u32 i = 0; i < 9; i++) {
+        if (current_workspace == i) {
+            draw_rectangle(status_bar_text_color, (STATUS_BAR_NUMBER_WIDTH + 3) * i + 1, screen_size.height - STATUS_BAR_HEIGHT + 1, STATUS_BAR_NUMBER_WIDTH + 2, STATUS_BAR_HEIGHT - 2);
+            draw_rectangle(status_bar_color, (STATUS_BAR_NUMBER_WIDTH + 3) * i + 2, screen_size.height - STATUS_BAR_HEIGHT + 2, STATUS_BAR_NUMBER_WIDTH, STATUS_BAR_HEIGHT - 4);
+        }
+        if (root_container[i] != NULL || current_workspace == i)
+            draw_font_char(i + '1', (STATUS_BAR_NUMBER_WIDTH + 3) * i + 1 + STATUS_BAR_NUMBER_OFFSET, screen_size.height - (FONT_HEIGHT + 2), status_bar_text_color, screen_size.width, screen_size.height, screen_buffer);
+    }
     // Draw the cursor
     for (size_t y = 0; y < CURSOR_HEIGHT; y++) {
         for (size_t x = 0; x < CURSOR_WIDTH; x++) {
