@@ -36,6 +36,7 @@ memset:
   jnz .has_erms
   ; Otherwise, fill using quadwords and then fill the remaining bytes
   ; The value of RAX has to be adjusted to contain the value being filled with in its every byte
+  movzx rax, al
   mov r9, 0x0101010101010101
   imul rax, r9
   shr rcx, 3
