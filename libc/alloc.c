@@ -262,3 +262,17 @@ void *realloc(void *p, size_t n) {
     free(p);
     return np;
 }
+
+#ifndef _KERNEL
+
+void *calloc(size_t n, size_t size) {
+    if (__builtin_umull_overflow(n, size, &n))
+        return NULL;
+    void *p = malloc(n);
+    if (p == NULL)
+        return NULL;
+    memset(p, 0, n);
+    return p;
+}
+
+#endif
