@@ -100,12 +100,12 @@ static const u8 keycode_chars_upper[] = {
 static void send_from_input_buffer(handle_t msg, size_t bytes_requested) {
     size_t bytes_to_send = bytes_requested <= input_buffer_pending_size ? bytes_requested : input_buffer_pending_size;
     if (bytes_to_send <= input_buffer_capacity - input_buffer_offset)
-        message_reply(msg, &(SendMessage){1, &(SendMessageData){bytes_to_send, input_buffer + input_buffer_offset}, 0, NULL});
+        message_reply(msg, &(SendMessage){1, &(SendMessageData){bytes_to_send, input_buffer + input_buffer_offset}, 0, NULL}, FLAG_FREE_MESSAGE);
     else
         message_reply(msg, &(SendMessage){2, (SendMessageData[]){
             {input_buffer_capacity - input_buffer_offset, input_buffer + input_buffer_offset},
             {bytes_to_send - (input_buffer_capacity - input_buffer_offset), input_buffer}
-        }, 0, NULL});
+        }, 0, NULL}, FLAG_FREE_MESSAGE);
     input_buffer_offset = (input_buffer_offset + bytes_to_send) & (input_buffer_capacity - 1);
     input_buffer_size -= bytes_to_send;
     input_buffer_pending_size -= bytes_to_send;
@@ -332,10 +332,9 @@ void main(void) {
         switch (event_source) {
         case EVENT_KEYBOARD: {
             KeyEvent key_event;
-            err = message_read(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, 0, 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, 0, FLAG_FREE_MESSAGE);
             if (err)
                 continue;
-            handle_free(msg);
             // Handle mod keys
             ModKeys mod_key;
             switch (key_event.keycode) {
@@ -371,10 +370,9 @@ void main(void) {
         }
         case EVENT_RESIZE: {
             ScreenSize new_screen_size;
-            err = message_read(msg, &(ReceiveMessage){sizeof(ScreenSize), &new_screen_size, 0, NULL}, NULL, NULL, 0, 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(ScreenSize), &new_screen_size, 0, NULL}, NULL, NULL, 0, FLAG_FREE_MESSAGE);
             if (err)
                 continue;
-            handle_free(msg);
             // Resize text buffer
             if (text_buffer_capacity < (screen_size.width / FONT_WIDTH + 1) * (screen_size.height / FONT_HEIGHT)) {
                 size_t new_text_buffer_capacity = text_buffer_capacity;
@@ -413,12 +411,14 @@ void main(void) {
         }
         case EVENT_STDOUT:
         case EVENT_STDERR:
-            if (waiting_for_stdin)
-                message_reply_error(msg, ERR_INVALID_OPERATION);
+            if (waiting_for_stdin) {
+                message_reply_error(msg, ERR_INVALID_OPERATION, FLAG_FREE_MESSAGE);
+                continue;
+            }
             MessageLength message_length;
             message_get_length(msg, &message_length);
             if (message_length.handles != 0) {
-                message_reply_error(msg, ERR_INVALID_ARG);
+                message_reply_error(msg, ERR_INVALID_ARG, FLAG_FREE_MESSAGE);
                 continue;
             }
             for (size_t i = 0; i <= message_length.data / OUTPUT_READ_BUFFER_SIZE; i++) {
@@ -427,17 +427,19 @@ void main(void) {
                 for (size_t j = 0; j < read_size; j++)
                     print_char(output_read_buffer[j], event_source == EVENT_STDERR ? TEXT_COLOR_STDERR : TEXT_COLOR_STDOUT);
             }
-            message_reply(msg, NULL);
+            message_reply(msg, NULL, FLAG_FREE_MESSAGE);
             draw_screen();
             break;
         case EVENT_STDIN:
-            if (waiting_for_stdin)
-                message_reply_error(msg, ERR_INVALID_OPERATION);
+            if (waiting_for_stdin) {
+                message_reply_error(msg, ERR_INVALID_OPERATION, FLAG_FREE_MESSAGE);
+                continue;
+            }
             err = message_read(msg, &(ReceiveMessage){sizeof(size_t), &stdin_bytes_requested, 0, NULL}, NULL, NULL, ERR_INVALID_ARG, 0);
             if (err)
                 continue;
             if (stdin_bytes_requested == 0) {
-                message_reply(msg, NULL);
+                message_reply(msg, NULL, FLAG_FREE_MESSAGE);
             } else if (input_buffer_pending_size > 0) {
                 send_from_input_buffer(msg, stdin_bytes_requested);
             } else {

@@ -97,10 +97,9 @@ void main(void) {
         switch (tag.data[0]) {
         case 1: {
             KeyEvent key_event;
-            err = message_read(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, 0, 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, 0, FLAG_FREE_MESSAGE);
             if (err)
                 continue;
-            handle_free(msg);
             if (key_event.pressed == false)
                 color = (color + 1) % COLORS_NUM;
             draw_screen(screen, color, mouse_x, mouse_y);
@@ -108,10 +107,9 @@ void main(void) {
         }
         case 2: {
             MouseMoveEvent mouse_update;
-            err = message_read(msg, &(ReceiveMessage){sizeof(MouseMoveEvent), &mouse_update, 0, NULL}, NULL, NULL, 0, 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(MouseMoveEvent), &mouse_update, 0, NULL}, NULL, NULL, 0, FLAG_FREE_MESSAGE);
             if (err)
                 continue;
-            handle_free(msg);
             mouse_x = mouse_update.abs_x;
             mouse_y = mouse_update.abs_y;
             draw_screen(screen, color, mouse_x, mouse_y);
@@ -119,10 +117,9 @@ void main(void) {
         }
         case 3: {
             ScreenSize new_screen_size;
-            err = message_read(msg, &(ReceiveMessage){sizeof(ScreenSize), &new_screen_size, 0, NULL}, NULL, NULL, 0, 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(ScreenSize), &new_screen_size, 0, NULL}, NULL, NULL, 0, FLAG_FREE_MESSAGE);
             if (err)
                 continue;
-            handle_free(msg);
             if (new_screen_size.height * new_screen_size.width * 3 > screen_bytes) {
                 size_t new_screen_bytes = screen_bytes;
                 while (new_screen_size.height * new_screen_size.width * 3 > new_screen_bytes)

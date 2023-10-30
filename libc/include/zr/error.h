@@ -16,7 +16,7 @@ typedef enum err_t : u64 {
     ERR_KERNEL_INVALID_ARG,
     ERR_KERNEL_NO_MEMORY,
     ERR_KERNEL_INVALID_OPERATION,
-    // Specific kernel error codes - these have to analogues to general error codes
+    // Specific kernel error codes - these have no analogues to general error codes
     ERR_KERNEL_INVALID_SYSCALL_NUMBER = ERR_KERNEL_SPECIFIC_MIN,
     ERR_KERNEL_PAGE_ALREADY_MAPPED,
     ERR_KERNEL_INVALID_HANDLE,
@@ -35,6 +35,7 @@ typedef enum err_t : u64 {
     ERR_KERNEL_MQUEUE_FULL,
     ERR_KERNEL_MQUEUE_EMPTY,
     ERR_KERNEL_CHANNEL_NOT_BOUND,
+    ERR_KERNEL_MESSAGE_ALREADY_REPLIED_TO,
 } err_t;
 
 #ifdef _KERNEL

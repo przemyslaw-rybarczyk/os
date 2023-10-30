@@ -272,7 +272,12 @@ void message_free(Message *message) {
 }
 
 // Reply to a message
-void message_reply(Message *message, Message *reply) {
+err_t message_reply(Message *message, Message *reply) {
+    // Fail if message was already replied to
+    if (message->replied_to)
+        return ERR_KERNEL_MESSAGE_ALREADY_REPLIED_TO;
+    // Mark message as replied to
+    message->replied_to = true;
     // Set the reply error code to 0 (success)
     if (message->reply_error != NULL)
         *(message->reply_error) = 0;
@@ -286,10 +291,16 @@ void message_reply(Message *message, Message *reply) {
     if (message->blocked_sender != NULL)
         process_enqueue(message->blocked_sender);
     message->blocked_sender = NULL;
+    return 0;
 }
 
 // Reply to a message with an error code
-void message_reply_error(Message *message, err_t error) {
+err_t message_reply_error(Message *message, err_t error) {
+    // Fail if message was already replied to
+    if (message->replied_to)
+        return ERR_KERNEL_MESSAGE_ALREADY_REPLIED_TO;
+    // Mark message as replied to
+    message->replied_to = true;
     // Set the reply error code if one is wanted
     if (message->reply_error != NULL)
         *(message->reply_error) = error;
@@ -297,6 +308,7 @@ void message_reply_error(Message *message, err_t error) {
     if (message->blocked_sender != NULL)
         process_enqueue(message->blocked_sender);
     message->blocked_sender = NULL;
+    return 0;
 }
 
 // Create a message queue
@@ -561,7 +573,7 @@ err_t syscall_message_read(handle_t i, ReceiveMessage *user_message, const Messa
     err_t err;
     Handle handle;
     // Verify flags are valid
-    if (flags & ~(FLAG_ALLOW_PARTIAL_DATA_READ | FLAG_ALLOW_PARTIAL_HANDLES_READ))
+    if (flags & ~(FLAG_ALLOW_PARTIAL_DATA_READ | FLAG_ALLOW_PARTIAL_HANDLES_READ | FLAG_FREE_MESSAGE))
         return ERR_KERNEL_INVALID_ARG;
     // Get the message from handle
     err = handle_get(&cpu_local->current_process->handles, i, &handle);
@@ -605,10 +617,15 @@ err_t syscall_message_read(handle_t i, ReceiveMessage *user_message, const Messa
         if (reply_error != 0)
             message_reply_error(handle.message, reply_error);
         handle_clear(&cpu_local->current_process->handles, i, true);
-        return range_err;
+        err = range_err;
+    } else {
+        // Copy the message data if bounds check passed
+        err = message_read_user(handle.message, user_message, offset, true);
     }
-    // Copy the message data
-    return message_read_user(handle.message, user_message, offset, true);
+    // Free message and handle if requested
+    if (flags & FLAG_FREE_MESSAGE)
+        handle_clear(&cpu_local->current_process->handles, i, true);
+    return err;
 }
 
 // Send a message on a channel
@@ -714,9 +731,12 @@ err_t syscall_mqueue_receive(handle_t mqueue_i, MessageTag *tag_ptr, handle_t *m
     return 0;
 }
 
-err_t syscall_message_reply(handle_t message_i, const SendMessage *user_reply) {
+err_t syscall_message_reply(handle_t message_i, const SendMessage *user_reply, u64 flags) {
     err_t err;
     Handle message_handle;
+    // Verify flags are valid
+    if (flags & ~FLAG_FREE_MESSAGE)
+        return ERR_KERNEL_INVALID_ARG;
     // Verify buffer is valid
     err = verify_user_send_message(user_reply);
     if (err)
@@ -730,18 +750,21 @@ err_t syscall_message_reply(handle_t message_i, const SendMessage *user_reply) {
     // Create a reply
     Message *reply;
     err = message_alloc_user(user_reply, &reply);
-    if (err)
-        return err;
-    // Send the reply
-    message_reply(message_handle.message, reply);
-    // Free message and handle
-    handle_clear(&cpu_local->current_process->handles, message_i, true);
-    return 0;
+    if (!err)
+        // Send the reply
+        err = message_reply(message_handle.message, reply);
+    // Free message and handle if requested
+    if (flags & FLAG_FREE_MESSAGE)
+        handle_clear(&cpu_local->current_process->handles, message_i, true);
+    return err;
 }
 
-err_t syscall_message_reply_error(handle_t message_i, err_t error) {
+err_t syscall_message_reply_error(handle_t message_i, err_t error, u64 flags) {
     err_t err;
     Handle message_handle;
+    // Verify flags are valid
+    if (flags & ~FLAG_FREE_MESSAGE)
+        return ERR_KERNEL_INVALID_ARG;
     // Check error code is not reserved by the kernel or zero
     if (error >= ERR_KERNEL_MIN || error == 0)
         return ERR_KERNEL_INVALID_ARG;
@@ -752,10 +775,11 @@ err_t syscall_message_reply_error(handle_t message_i, err_t error) {
     if (message_handle.type != HANDLE_TYPE_MESSAGE)
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Send the error
-    message_reply_error(message_handle.message, error);
-    // Free message and handle
-    handle_clear(&cpu_local->current_process->handles, message_i, true);
-    return 0;
+    err = message_reply_error(message_handle.message, error);
+    // Free message and handle if requested
+    if (flags & FLAG_FREE_MESSAGE)
+        handle_clear(&cpu_local->current_process->handles, message_i, true);
+    return err;
 }
 
 // Send a message on a channel, wait for a reply and check its size against the given bounds

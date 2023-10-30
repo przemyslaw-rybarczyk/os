@@ -1119,10 +1119,9 @@ void main(void) {
         case EVENT_KEYBOARD_KEY: {
             // Read key event
             KeyEvent key_event;
-            err = message_read(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, 0, 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(KeyEvent), &key_event, 0, NULL}, NULL, NULL, 0, FLAG_FREE_MESSAGE);
             if (err)
                 continue;
-            handle_free(msg);
             // Update mod key states
             ModKeys mod_key;
             switch (key_event.keycode) {
@@ -1241,10 +1240,9 @@ void main(void) {
         case EVENT_MOUSE_BUTTON: {
             // Read event
             MouseButtonEvent button_event;
-            err = message_read(msg, &(ReceiveMessage){sizeof(MouseButtonEvent), &button_event, 0, NULL}, NULL, NULL, 0, 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(MouseButtonEvent), &button_event, 0, NULL}, NULL, NULL, 0, FLAG_FREE_MESSAGE);
             if (err)
                 continue;
-            handle_free(msg);
             WindowContainer *pointed_at_window = get_pointed_at_window(NULL);
             if (pointed_at_window != NULL) {
                 channel_send(pointed_at_window->mouse_button_in, &(SendMessage){1, &(SendMessageData){sizeof(MouseButtonEvent), &button_event}, 0, NULL}, FLAG_NONBLOCK);
@@ -1280,10 +1278,9 @@ void main(void) {
         case EVENT_MOUSE_MOVE: {
             // Read event
             MouseMoveEvent move_event;
-            err = message_read(msg, &(ReceiveMessage){sizeof(MouseMoveEvent), &move_event, 0, NULL}, NULL, NULL, 0, 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(MouseMoveEvent), &move_event, 0, NULL}, NULL, NULL, 0, FLAG_FREE_MESSAGE);
             if (err)
                 continue;
-            handle_free(msg);
             // Get the window pointed at before updating the cursor
             WindowContainer *old_pointed_at_window = get_pointed_at_window(NULL);
             // Update the cursor position
@@ -1323,10 +1320,9 @@ void main(void) {
         case EVENT_MOUSE_SCROLL: {
             // Read event
             MouseScrollEvent scroll_event;
-            err = message_read(msg, &(ReceiveMessage){sizeof(MouseScrollEvent), &scroll_event, 0, NULL}, NULL, NULL, 0, 0);
+            err = message_read(msg, &(ReceiveMessage){sizeof(MouseScrollEvent), &scroll_event, 0, NULL}, NULL, NULL, 0, FLAG_FREE_MESSAGE);
             if (err)
                 continue;
-            handle_free(msg);
             WindowContainer *pointed_at_window = get_pointed_at_window(NULL);
             if (pointed_at_window != NULL)
                 channel_send(pointed_at_window->mouse_scroll_in, &(SendMessage){1, &(SendMessageData){sizeof(MouseScrollEvent), &scroll_event}, 0, NULL}, FLAG_NONBLOCK);
@@ -1338,7 +1334,7 @@ void main(void) {
             err = message_read(msg, &(ReceiveMessage){0, NULL, 0, NULL}, NULL, NULL, ERR_INVALID_ARG, 0);
             if (err)
                 continue;
-            message_reply(msg, &(SendMessage){1, &(SendMessageData){sizeof(ScreenSize), &window_size}, 0, NULL});
+            message_reply(msg, &(SendMessage){1, &(SendMessageData){sizeof(ScreenSize), &window_size}, 0, NULL}, FLAG_FREE_MESSAGE);
             break;
         }
         case EVENT_VIDEO_DATA: {
@@ -1366,10 +1362,9 @@ void main(void) {
             }
             window->video_buffer_size = video_buffer_size;
             // Read the video data
-            err = message_read(msg, &(ReceiveMessage){window_data_size, window->video_buffer, 0, NULL}, &(MessageLength){sizeof(ScreenSize), 0}, NULL, 0, 0);
+            err = message_read(msg, &(ReceiveMessage){window_data_size, window->video_buffer, 0, NULL}, &(MessageLength){sizeof(ScreenSize), 0}, NULL, 0, FLAG_FREE_MESSAGE);
             if (err)
                 continue;
-            handle_free(msg);
             draw_screen();
             break;
         }
