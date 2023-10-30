@@ -1,5 +1,5 @@
 global pit_init
-global pit_wait_before_sipi
+global pit_wait
 
 PIT_CHANNEL_0_DATA equ 0x40
 PIT_MODE_COMMAND equ 0x43
@@ -12,28 +12,25 @@ PIT_MODE_2 equ 2 << 1
 ; We use a value that makes the period closest to 20 ms.
 PIT_TIMER_RELOAD_VALUE equ 23864
 
-; Number of PIT cycles in 10 ms
-PIT_TIMER_WAIT_BEFORE_SIPI_RELOAD_VALUE equ 11932
-
-; This is called during SMP initialization to wait between sending the INIT and SIPI
-pit_wait_before_sipi:
+; Wait a given number of PIT cycles
+; Should only be called during initialization.
+pit_wait:
   ; Set the mode to mode 0 - interrupt on terminal count
   mov al, PIT_ACCESS_LO_HI | PIT_MODE_0
   out PIT_MODE_COMMAND, al
   ; Set the reload value
-  mov al, PIT_TIMER_WAIT_BEFORE_SIPI_RELOAD_VALUE & 0xFF
+  mov ax, di
   out PIT_CHANNEL_0_DATA, al
-  mov al, PIT_TIMER_WAIT_BEFORE_SIPI_RELOAD_VALUE >> 8
+  shr ax, 8
   out PIT_CHANNEL_0_DATA, al
   ; Wait for the timer to underflow after counting down to zero
 .wait:
-  xor eax, eax
   in al, PIT_CHANNEL_0_DATA
-  mov edx, eax
+  movzx dx, al
   in al, PIT_CHANNEL_0_DATA
-  shl eax, 8
-  or edx, eax
-  cmp edx, PIT_TIMER_WAIT_BEFORE_SIPI_RELOAD_VALUE
+  shl ax, 8
+  or dx, ax
+  cmp dx, di
   jbe .wait
   ret
 

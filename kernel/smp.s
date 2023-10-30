@@ -13,7 +13,7 @@ extern cpus
 extern cpu_num
 extern lapic
 
-extern pit_wait_before_sipi
+extern pit_wait
 
 LAPIC_ID_REGISTER equ 0x020
 LAPIC_EOI_REGISTER equ 0x0B0
@@ -73,6 +73,9 @@ apic_init:
   mov dword [rax + LAPIC_SPURIOUS_INTERRUPT_VECTOR_REGISTER], LAPIC_ENABLE | SPURIOUS_INTERRUPT_VECTOR
   ret
 
+; Number of PIT cycles in 10 ms
+WAIT_BEFORE_SIPI_PIT_CYCLES equ 11932
+
 smp_init:
   mov rax, [lapic]
   ; Send INIT IPI to every AP
@@ -80,7 +83,8 @@ smp_init:
   mov dword [rax + LAPIC_INTERRUPT_COMMAND_REGISTER_LOW], ICR_ALL_EXCLUDING_SELF | ICR_ASSERT | ICR_INIT
   ; Wait before sending SIPI
   push rax
-  call pit_wait_before_sipi
+  mov di, WAIT_BEFORE_SIPI_PIT_CYCLES
+  call pit_wait
   pop rax
   ; Send SIPI to every AP
   mov dword [rax + LAPIC_INTERRUPT_COMMAND_REGISTER_HIGH], 0

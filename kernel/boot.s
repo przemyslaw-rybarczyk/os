@@ -78,6 +78,8 @@ CPUID_NX equ 1 << 20
 CPUID_LONG_MODE equ 1 << 29
 CPUID_SSE equ 1 << 25
 CPUID_FXSR equ 1 << 24
+CPUID_TSC equ 1 << 4
+CPUID_INVARIANT_TSC equ 1 << 8
 CR0_PE equ 1 << 0
 CR0_MP equ 1 << 1
 CR0_EM equ 1 << 2
@@ -137,6 +139,7 @@ section .boot
 ; 9 - No NX bit
 ; A - No SSE support
 ; B - No FXSAVE/FSRSTOR support
+; C - No invariant TSC
 
 bits 16
 
@@ -161,6 +164,9 @@ test_cpuid:
   cpuid
   cmp eax, 0x80000001
   jb .no_long_mode
+  ; If CPUID EAX=80000007h can't be called, invariant TSC is not available.
+  cmp eax, 0x80000007
+  jb .no_tsc
   ; CPUID EAX=80000001h - Extended Processor Info and Feature Bits
   ; Each feature has a corresponding bit set if it's available.
   mov eax, 0x80000001
@@ -176,6 +182,13 @@ test_cpuid:
   jz .no_sse
   test edx, CPUID_FXSR
   jz .no_fxsr
+  test edx, CPUID_TSC
+  jz .no_tsc
+  ; CPUID extended level EAX=80000007h
+  mov eax, 0x80000007
+  cpuid
+  test edx, CPUID_INVARIANT_TSC
+  jz .no_tsc
   jmp .end
 .no_long_mode:
   mov dl, '0'
@@ -188,6 +201,9 @@ test_cpuid:
   jmp error
 .no_fxsr:
   mov dl, 'B'
+  jmp error
+.no_tsc:
+  mov dl, 'C'
   jmp error
 .end:
 
