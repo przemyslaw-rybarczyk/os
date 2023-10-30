@@ -215,3 +215,48 @@ long atol(const char *str) {
 long long atoll(const char *str) {
     return strtoll(str, NULL, 10);
 }
+
+void qsort(void *base_, size_t n, size_t size, int (*comp)(const void *, const void *)) {
+    // Insertion sort
+    u8 *base = base_;
+    for (size_t i = 0; i < n; i++) {
+        for (size_t j = i; j > 0; j--) {
+            void *p1 = base + (j - 1) * size;
+            void *p2 = base + j * size;
+            if (comp(p1, p2) > 0) {
+                // Swap elements at (j - 1) and j
+                for (size_t si = 0; si < size / 8; si++) {
+                    u64 t = ((u64 *)p1)[si];
+                    ((u64 *)p1)[si] = ((u64 *)p2)[si];
+                    ((u64 *)p2)[si] = t;
+                }
+                for (size_t si = (size / 8) * 8; si < size; si++) {
+                    u8 t = ((u8 *)p1)[si];
+                    ((u8 *)p1)[si] = ((u8 *)p2)[si];
+                    ((u8 *)p2)[si] = t;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+}
+
+void *bsearch(const void *key, const void *base_, size_t n, size_t size, int (*comp)(const void *, const void *)) {
+    const u8 *base = base_;
+    if (n == 0)
+        return NULL;
+    i64 lo = 0;
+    i64 hi = n - 1;
+    while (lo <= hi) {
+        i64 i = (lo + hi) / 2;
+        int cmp = comp(key, base + i * size);
+        if (cmp > 0)
+            lo = i + 1;
+        else if (cmp < 0)
+            hi = i - 1;
+        else
+            return (void *)(base + i * size);
+    }
+    return NULL;
+}
