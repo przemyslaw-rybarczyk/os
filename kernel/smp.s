@@ -41,6 +41,8 @@ INT_VECTOR_WAKEUP_IPI equ 0x2D
 INT_VECTOR_HALT_IPI equ 0x2E
 SPURIOUS_INTERRUPT_VECTOR equ 0xFF
 
+MSR_TSC equ 0x10
+
 section .bss
 
 ; Number of initialized CPUs
@@ -96,9 +98,13 @@ smp_init_sync:
   lock add qword [cpu_initialized_num], 1
   mov rax, [cpu_num]
 .wait:
-  pause
   cmp [cpu_initialized_num], rax
   jne .wait
+  ; Synchronize TSC across cores
+  xor eax, eax
+  xor edx, edx
+  mov ecx, MSR_TSC
+  wrmsr
   ret
 
 ; Signify an EOI to the LAPIC
