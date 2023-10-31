@@ -4,7 +4,7 @@
 
 void apic_init(bool bsp);
 void smp_init(void);
-void smp_init_sync(void);
+void smp_init_sync(bool bsp);
 void apic_eoi(void);
 void send_wakeup_ipi(u32);
 void send_halt_ipi(void);

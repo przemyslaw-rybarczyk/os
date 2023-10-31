@@ -2,5 +2,5 @@
 
 #include "types.h"
 
-u64 get_time(void);
-void tsc_calibrate(void);
+u64 time_get(void);
+void time_init(void);

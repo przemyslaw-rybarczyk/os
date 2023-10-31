@@ -14,6 +14,7 @@
 #include "segment.h"
 #include "smp.h"
 #include "stack.h"
+#include "time.h"
 
 void _string_init(void);
 
@@ -51,10 +52,11 @@ void kernel_start(void *stack) {
         print_string("Failed to initialize kernel stack manager\n");
         goto halt;
     }
+    time_init();
     apic_init(true);
     smp_init();
     pit_init();
-    smp_init_sync();
+    smp_init_sync(true);
     if (set_double_fault_stack() != 0) {
         framebuffer_lock();
         print_string("Failed to initialize double fault stack\n");
@@ -91,7 +93,7 @@ void kernel_start_ap(void *stack) {
     }
     userspace_init();
     apic_init(false);
-    smp_init_sync();
+    smp_init_sync(false);
     if (set_double_fault_stack() != 0) {
         framebuffer_lock();
         print_string("Failed to initialize double fault stack\n");

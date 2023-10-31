@@ -14,6 +14,7 @@ extern cpu_num
 extern lapic
 
 extern pit_wait
+extern time_adjust_offset
 
 LAPIC_ID_REGISTER equ 0x020
 LAPIC_EOI_REGISTER equ 0x0B0
@@ -64,7 +65,7 @@ apic_init:
   and edx, 0xFF000000
   mov gs:[PerCPU.lapic_id], edx
   ; Set logical APIC ID to 1 for APs and 3 for BSP
-  test rdi, rdi
+  test dil, dil
   jnz .cpu_is_bsp
   mov dword [rax + LAPIC_LOGICAL_DESTINATION_REGISTER], 1 << LAPIC_LOGICAL_ID_OFFSET
   jmp .logical_destination_set
@@ -94,12 +95,17 @@ smp_init:
   ret
 
 ; Synchronize all CPUs after initialization
+; The argument is true if the current processor is the BSP and false otherwise.
 smp_init_sync:
   lock add qword [cpu_initialized_num], 1
   mov rax, [cpu_num]
 .wait:
   cmp [cpu_initialized_num], rax
   jne .wait
+  test dil, dil
+  jz .not_bsp
+  call time_adjust_offset
+.not_bsp:
   ; Synchronize TSC across cores
   xor eax, eax
   xor edx, edx
