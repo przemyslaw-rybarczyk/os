@@ -1,5 +1,4 @@
 global map_pages
-global print_char
 global process_exit
 global process_yield
 global message_get_length
@@ -16,6 +15,7 @@ global mqueue_add_channel
 global mqueue_add_channel_resource
 global channel_create
 global channel_send
+global time_get
 
 ; This file implements the C interface for system calls
 
@@ -105,5 +105,10 @@ channel_create:
 
 channel_send:
   mov rax, 16
+  syscall
+  ret
+
+time_get:
+  mov rax, 17
   syscall
   ret

@@ -7,6 +7,7 @@
 #include "page.h"
 #include "percpu.h"
 #include "process.h"
+#include "time.h"
 
 #define MAP_PAGES_WRITE (UINT64_C(1) << 0)
 #define MAP_PAGES_EXECUTE (UINT64_C(1) << 1)
@@ -31,6 +32,15 @@ err_t syscall_handle_free(handle_t i) {
     return 0;
 }
 
+err_t syscall_time_get(i64 *time_ptr) {
+    err_t err;
+    err = verify_user_buffer(time_ptr, sizeof(i64), true);
+    if (err)
+        return err;
+    *time_ptr = time_get();
+    return 0;
+}
+
 const void * const syscalls[] = {
     syscall_map_pages,
     syscall_process_exit,
@@ -49,4 +59,5 @@ const void * const syscalls[] = {
     syscall_mqueue_add_channel_resource,
     syscall_channel_create,
     syscall_channel_send,
+    syscall_time_get,
 };
