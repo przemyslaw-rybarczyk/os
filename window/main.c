@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <zr/error.h>
 #include <zr/keyboard.h>
@@ -1029,6 +1030,8 @@ static void draw_container(Container *container, u32 origin_x, u32 origin_y, u32
 #define STATUS_BAR_NUMBER_WIDTH (FONT_WIDTH + 7)
 #define STATUS_BAR_NUMBER_OFFSET 5
 
+static char time_fmt_buf[32];
+
 // Draw the screen
 static void draw_screen(void) {
     Rectangle resize_edge = (Rectangle){0, 0, 0, 0};
@@ -1039,8 +1042,9 @@ static void draw_screen(void) {
         draw_container(root_container[current_workspace], 0, 0, screen_size.width, screen_size.height - STATUS_BAR_HEIGHT, &resize_edge);
     // Draw edge showing resize position
     draw_rectangle(border_color_focused, resize_edge.origin_x, resize_edge.origin_y, resize_edge.width, resize_edge.height);
-    // Draw the status bar
+    // Draw the status bar background
     draw_rectangle(status_bar_color, 0, screen_size.height - STATUS_BAR_HEIGHT, screen_size.width, STATUS_BAR_HEIGHT);
+    // Draw the workspace indicators
     for (u32 i = 0; i < 9; i++) {
         if (current_workspace == i) {
             draw_rectangle(status_bar_text_color, (STATUS_BAR_NUMBER_WIDTH + 3) * i + 1, screen_size.height - STATUS_BAR_HEIGHT + 1, STATUS_BAR_NUMBER_WIDTH + 2, STATUS_BAR_HEIGHT - 2);
@@ -1049,6 +1053,17 @@ static void draw_screen(void) {
         if (root_container[i] != NULL || current_workspace == i)
             draw_font_char(i + '1', (STATUS_BAR_NUMBER_WIDTH + 3) * i + 1 + STATUS_BAR_NUMBER_OFFSET, screen_size.height - (FONT_HEIGHT + 2), status_bar_text_color, screen_size.width, screen_size.height, screen_buffer);
     }
+    // Print the time
+    time_t time_ = time(NULL);
+    struct tm time_tm;
+    if (!gmtime_r(&time_, &time_tm))
+        goto time_print_fail;
+    size_t time_fmt_len = strftime(time_fmt_buf, sizeof(time_fmt_buf), "%F %T", &time_tm);
+    if (time_fmt_len == 0)
+        goto time_print_fail;
+    for (size_t i = 0; i < time_fmt_len; i++)
+        draw_font_char(time_fmt_buf[i], screen_size.width - FONT_WIDTH * (time_fmt_len - i) - 2, screen_size.height - (FONT_HEIGHT + 2), status_bar_text_color, screen_size.width, screen_size.height, screen_buffer);
+time_print_fail:
     // Draw the cursor
     for (size_t y = 0; y < CURSOR_HEIGHT; y++) {
         for (size_t x = 0; x < CURSOR_WIDTH; x++) {
