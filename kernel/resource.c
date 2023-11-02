@@ -20,6 +20,9 @@ static void resource_free(Resource resource) {
         channel_close(resource.channel);
         channel_del_ref(resource.channel);
         break;
+    case RESOURCE_TYPE_MESSAGE:
+        message_free(resource.message);
+        break;
     }
 }
 
@@ -70,6 +73,11 @@ err_t syscall_resource_get(ResourceName *name, ResourceType type, handle_t *hand
         break;
     case RESOURCE_TYPE_CHANNEL_RECEIVE:
         err = handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_CHANNEL_RECEIVE, {.channel = channel_resource->channel}}, handle_i_ptr);
+        if (err)
+            return err;
+        break;
+    case RESOURCE_TYPE_MESSAGE:
+        err = handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_MESSAGE, {.message = channel_resource->message}}, handle_i_ptr);
         if (err)
             return err;
         break;

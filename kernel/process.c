@@ -313,49 +313,97 @@ Process *process_spawn_kernel_thread;
 Channel *process_spawn_channel;
 MessageQueue *process_spawn_mqueue;
 
+// Expected format for process spawn message:
+// Data:
+//   size_t resource_message_count
+//   ResourceName message_resource_names[resource_message_count]
+//   ResourceName handle_resource_names[handle_count]
+//   {
+//       size_t message_length
+//       u8 message[message_length]
+//   }[resource_message_count]
+//   u8 elf_file[]
+// Handles:
+//   <handle> resource_handle_count[handle_count]
+
 _Noreturn void process_spawn_kernel_thread_main(void) {
     err_t err;
     while (1) {
         Message *message;
         // Get message from user process
         mqueue_receive(process_spawn_mqueue, &message, false);
-        if (message->data_size < message->handles_size * sizeof(ResourceName)) {
-            message_reply_error(message, ERR_INVALID_ARG);
-            message_free(message);
-            continue;
+        size_t message_offset = 0;
+        if (message->data_size < sizeof(size_t)) {
+            err = ERR_INVALID_ARG;
+            goto fail;
+        }
+        size_t resource_message_count = *(size_t *)(message->data + message_offset);
+        message_offset += sizeof(size_t);
+        size_t resources_size = resource_message_count + message->handles_size;
+        if (message->data_size < message_offset + resources_size * sizeof(ResourceName)) {
+            err = ERR_INVALID_ARG;
+            goto fail;
         }
         // Create resource list
-        ResourceListEntry *resources = malloc(message->handles_size * sizeof(ResourceListEntry));
-        if (message->handles_size != 0 && resources == NULL) {
-            message_reply_error(message, ERR_NO_MEMORY);
-            message_free(message);
+        ResourceListEntry *resources = malloc(resources_size * sizeof(ResourceListEntry));
+        if (resources_size != 0 && resources == NULL) {
+            err = ERR_NO_MEMORY;
+            goto fail;
+        }
+        ResourceName *resource_names = (ResourceName *)(message->data + message_offset);
+        message_offset += resources_size * sizeof(ResourceName);
+        for (size_t i = 0; i < resource_message_count; i++) {
+            if (message->data_size < message_offset + sizeof(size_t)) {
+                err = ERR_INVALID_ARG;
+                goto fail_resource_message;
+            }
+            size_t resource_message_length = *(size_t *)(message->data + message_offset);
+            message_offset += sizeof(size_t);
+            if (message->data_size < message_offset + resource_message_length) {
+                err = ERR_INVALID_ARG;
+                goto fail_resource_message;
+            }
+            Message *resource_message = message_alloc_copy(resource_message_length, message->data + message_offset);
+            if (resource_message == NULL) {
+                err = ERR_NO_MEMORY;
+                goto fail_resource_message;
+            }
+            message_offset += resource_message_length;
+            resources[i].name = resource_names[i];
+            resources[i].resource = (Resource){RESOURCE_TYPE_MESSAGE, .message = resource_message};
             continue;
+fail_resource_message:
+            for (size_t j = 0; j < i; j++)
+                message_free(resources[j].resource.message);
+            goto fail;
         }
         for (size_t i = 0; i < message->handles_size; i++) {
-            resources[i].name = ((ResourceName *)message->data)[i];
+            resources[resource_message_count + i].name = resource_names[resource_message_count + i];
             switch (message->handles[i].type) {
             case ATTACHED_HANDLE_TYPE_CHANNEL_SEND:
                 channel_add_ref(message->handles[i].channel);
-                resources[i].resource = (Resource){RESOURCE_TYPE_CHANNEL_SEND, .channel = message->handles[i].channel};
+                resources[resource_message_count + i].resource = (Resource){RESOURCE_TYPE_CHANNEL_SEND, .channel = message->handles[i].channel};
                 break;
             case ATTACHED_HANDLE_TYPE_CHANNEL_RECEIVE:
                 channel_add_ref(message->handles[i].channel);
-                resources[i].resource = (Resource){RESOURCE_TYPE_CHANNEL_RECEIVE, .channel = message->handles[i].channel};
+                resources[resource_message_count + i].resource = (Resource){RESOURCE_TYPE_CHANNEL_RECEIVE, .channel = message->handles[i].channel};
                 break;
             }
         }
         // Create the process
         Process *process;
-        err = process_create(&process, (ResourceList){message->handles_size, resources});
+        err = process_create(&process, (ResourceList){resources_size, resources});
         if (err) {
-            message_reply_error(message, user_error_code(err));
-            message_free(message);
-            resource_list_free(&(ResourceList){message->handles_size, resources});
-            continue;
+            resource_list_free(&(ResourceList){resources_size, resources});
+            err = user_error_code(err);
+            goto fail;
         }
         // Set up the process stack to load provided ELF file and free the message upon starting
-        size_t file_offset = message->handles_size * sizeof(ResourceName);
-        process_set_user_stack(process, message->data + file_offset, message->data_size - file_offset, message);
+        process_set_user_stack(process, message->data + message_offset, message->data_size - message_offset, message);
         process_enqueue(process);
+        continue;
+fail:
+        message_reply_error(message, err);
+        message_free(message);
     }
 }

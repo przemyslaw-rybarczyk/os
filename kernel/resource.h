@@ -11,6 +11,7 @@ typedef struct Resource {
     ResourceType type;
     union {
         Channel *channel;
+        Message *message;
     };
 } Resource;
 

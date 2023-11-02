@@ -23,6 +23,7 @@ typedef enum ResourceType : uintptr_t {
     RESOURCE_TYPE_EMPTY,
     RESOURCE_TYPE_CHANNEL_SEND,
     RESOURCE_TYPE_CHANNEL_RECEIVE,
+    RESOURCE_TYPE_MESSAGE,
 } ResourceType;
 
 typedef struct MessageLength {
