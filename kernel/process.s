@@ -23,6 +23,7 @@ extern free
 extern stack_free
 extern idle_page_map
 extern message_reply
+extern message_reply_error
 extern message_free
 
 struc Process
@@ -277,11 +278,11 @@ process_start:
   call load_elf_file
   test rax, rax
   jnz .fail
-  ; Free the message
+  ; Send empty reply to message and free it
   mov rdi, [rsp + 8]
   test rdi, rdi
   jz .no_message
-  mov rsi, 0
+  xor rsi, rsi
   call message_reply
   mov rdi, [rsp + 8]
   call message_free
@@ -310,4 +311,13 @@ process_start:
   ; Jump to the process using an IRET
   iretq
 .fail:
+  ; Send empty reply to message and free it
+  mov rdi, [rsp + 8]
+  test rdi, rdi
+  jz .fail_no_message
+  mov rsi, rax
+  call message_reply_error
+  mov rdi, [rsp + 8]
+  call message_free
+.fail_no_message:
   call process_exit
