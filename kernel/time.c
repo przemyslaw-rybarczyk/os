@@ -18,7 +18,7 @@ static u8 convert_from_bcd(u8 n) {
 }
 
 // Number of days in year before start of month
-u16 month_offset[12] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
+static u16 month_offset[12] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
 
 // Convert time in the RTC format to a timestamp
 i64 convert_time_from_rtc(struct rtc_time rtc_time, u8 status_b) {
