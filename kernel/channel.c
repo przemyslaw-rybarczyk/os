@@ -215,7 +215,7 @@ fail:
 }
 
 // Read a message into user-provided buffers
-static err_t message_read_user(const Message *message, ReceiveMessage *user_message, const MessageLength *offset, bool check_types) {
+err_t message_read_user(const Message *message, ReceiveMessage *user_message, const MessageLength *offset, bool check_types) {
     err_t err;
     if (message->data_size >= offset->data) {
         if (user_message->data_length > message->data_size - offset->data)

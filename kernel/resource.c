@@ -33,7 +33,7 @@ void resource_list_free(ResourceList *list) {
 }
 
 // Get an element of a resource list by its name
-static err_t resource_list_get(ResourceList *list, ResourceName *name, size_t *i_ptr) {
+static err_t resource_list_get(ResourceList *list, const ResourceName *name, size_t *i_ptr) {
     for (size_t i = 0; i < list->length; i++) {
         if (memcmp(list->entries[i].name.bytes, name->bytes, RESOURCE_NAME_MAX) == 0) {
             *i_ptr = i;
@@ -44,7 +44,7 @@ static err_t resource_list_get(ResourceList *list, ResourceName *name, size_t *i
 }
 
 // Get a sending channel resource and bind it to a handle
-err_t syscall_resource_get(ResourceName *name, ResourceType type, handle_t *handle_i_ptr) {
+err_t syscall_resource_get(const ResourceName *name, ResourceType type, handle_t *handle_i_ptr) {
     err_t err;
     // Verify buffers are valid
     err = verify_user_buffer(handle_i_ptr, sizeof(handle_t), true);
@@ -88,7 +88,7 @@ err_t syscall_resource_get(ResourceName *name, ResourceType type, handle_t *hand
 }
 
 // Get a receiving channel resource and add it to a message queue
-err_t syscall_mqueue_add_channel_resource(handle_t mqueue_i, ResourceName *channel_name, MessageTag tag) {
+err_t syscall_mqueue_add_channel_resource(handle_t mqueue_i, const ResourceName *channel_name, MessageTag tag) {
     err_t err;
     // Verify buffers are valid
     err = verify_user_buffer(channel_name, sizeof(ResourceName), false);
@@ -117,4 +117,44 @@ err_t syscall_mqueue_add_channel_resource(handle_t mqueue_i, ResourceName *chann
     // Remove the resource
     channel_resource->type = RESOURCE_TYPE_EMPTY;
     return 0;
+}
+
+// Read the contents of a message resource
+err_t syscall_message_resource_read(const ResourceName *message_name, size_t data_length, void *data, size_t min_data_length, u64 flags) {
+    err_t err;
+    // Verify flags are valid
+    if (flags & ~(FLAG_ALLOW_PARTIAL_DATA_READ | FLAG_ALLOW_PARTIAL_HANDLES_READ | FLAG_FREE_MESSAGE))
+        return ERR_KERNEL_INVALID_ARG;
+    // Verify buffers are valid
+    err = verify_user_buffer(message_name, sizeof(ResourceName), false);
+    if (err)
+        return err;
+    err = verify_user_buffer(data, data_length, true);
+    if (err)
+        return err;
+    // Get message from the resource
+    ResourceList *resources = &cpu_local->current_process->resources;
+    size_t message_i;
+    err = resource_list_get(resources, message_name, &message_i);
+    if (err)
+        return err;
+    Resource *message_resource = &resources->entries[message_i].resource;
+    if (message_resource->type != RESOURCE_TYPE_MESSAGE)
+        return ERR_KERNEL_WRONG_RESOURCE_TYPE;
+    Message *message = message_resource->message;
+    // Perform bounds check
+    if (min_data_length == SIZE_MAX)
+        min_data_length = data_length;
+    if (message->data_size < min_data_length)
+        return ERR_KERNEL_MESSAGE_DATA_TOO_SHORT;
+    if (message->data_size > data_length && !(flags & FLAG_ALLOW_PARTIAL_DATA_READ))
+        return ERR_KERNEL_MESSAGE_DATA_TOO_LONG;
+    // Copy the message data
+    err = message_read_user(message, &(ReceiveMessage){data_length, data, 0, NULL}, &(MessageLength){0, 0}, true);
+    // Remove the resource if requested
+    if (flags & FLAG_FREE_MESSAGE) {
+        message_free(message);
+        message_resource->type = RESOURCE_TYPE_EMPTY;
+    }
+    return err;
 }

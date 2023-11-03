@@ -26,5 +26,6 @@ typedef struct ResourceList {
 } ResourceList;
 
 void resource_list_free(ResourceList *list);
-err_t syscall_resource_get(ResourceName *name, ResourceType type, handle_t *handle_i_ptr);
-err_t syscall_mqueue_add_channel_resource(handle_t mqueue_i, ResourceName *channel_name, MessageTag tag);
+err_t syscall_resource_get(const ResourceName *name, ResourceType type, handle_t *handle_i_ptr);
+err_t syscall_mqueue_add_channel_resource(handle_t mqueue_i, const ResourceName *channel_name, MessageTag tag);
+err_t syscall_message_resource_read(const ResourceName *message_name, size_t data_length, void *data, size_t min_data_length, u64 flags);

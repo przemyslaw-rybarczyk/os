@@ -60,4 +60,5 @@ const void * const syscalls[] = {
     syscall_channel_create,
     syscall_channel_send,
     syscall_time_get,
+    syscall_message_resource_read,
 };

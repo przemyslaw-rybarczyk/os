@@ -107,5 +107,6 @@ err_t mqueue_add_channel_resource(handle_t mqueue_i, const ResourceName *channel
 err_t channel_create(handle_t *channel_send_i, handle_t *channel_receive_i);
 err_t channel_send(handle_t channel_i, const SendMessage *message, u64 flags);
 void time_get(i64 *time_ptr);
+err_t message_resource_read(const ResourceName *name, size_t data_length, void *data, size_t min_data_length, u64 flags);
 
 #endif

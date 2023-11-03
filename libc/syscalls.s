@@ -16,6 +16,7 @@ global mqueue_add_channel_resource
 global channel_create
 global channel_send
 global time_get
+global message_resource_read
 
 ; This file implements the C interface for system calls
 
@@ -110,5 +111,11 @@ channel_send:
 
 time_get:
   mov rax, 17
+  syscall
+  ret
+
+message_resource_read:
+  mov rax, 18
+  mov r10, rcx
   syscall
   ret
