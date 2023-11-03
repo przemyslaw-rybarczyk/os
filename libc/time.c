@@ -1,37 +1,66 @@
 #include <time.h>
 
+#include <stdlib.h>
 #include <stdio.h>
+
+#include <zr/error.h>
 #include <zr/syscalls.h>
+#include <zr/timezone.h>
 
 #define TICKS_PER_SEC 10000000
 #define NSEC_PER_TICK 100
 
+static Timezone timezone = {0, DST_NONE};
+
+Timezone timezone_get(void) {
+    return timezone;
+}
+
+err_t timezone_set(Timezone timezone_) {
+    if (timezone_.utc_offset < -95 || timezone_.utc_offset > 95)
+        return ERR_INVALID_ARG;
+    else if (timezone_.dst_type > DST_NA)
+        return ERR_INVALID_ARG;
+    timezone = timezone_;
+    return 0;
+}
+
+void _time_init(void) {
+    err_t err;
+    // Try to read the timezone
+    // On failure the default value of UTC is kept.
+    Timezone new_timezone;
+    err = message_resource_read(&resource_name("locale/timezone"), sizeof(Timezone), &new_timezone, -1, 0);
+    if (!err)
+        timezone_set(new_timezone);
+}
+
 // Division and modulo of 64-bit number, rounding down instead of towards zero
 
-static i64 div(i64 t, i64 d) {
+static i64 idiv(i64 t, i64 d) {
     if (t >= 0 || t % d == 0)
         return t / d;
     else
         return t / d - 1;
 }
 
-static i64 mod(i64 t, i64 d) {
+static i64 imod(i64 t, i64 d) {
     if (t >= 0 || t % d == 0)
         return t % d;
     else
         return t % d + d;
 }
 
-static void divmod(i64 t, i64 d, i64 *quot, i64 *rem) {
-    *quot = div(t, d);
-    *rem = mod(t, d);
+static void idivmod(i64 t, i64 d, i64 *quot, i64 *rem) {
+    *quot = idiv(t, d);
+    *rem = imod(t, d);
 }
 
 time_t time(time_t *t_ptr) {
     i64 t;
     time_get(&t);
     i64 sec;
-    sec = div(t, TICKS_PER_SEC);
+    sec = idiv(t, TICKS_PER_SEC);
     if (t_ptr != NULL)
         *t_ptr = sec;
     return sec;
@@ -43,7 +72,7 @@ int timespec_get(struct timespec *ts, int base) {
     i64 t;
     time_get(&t);
     i64 sec, tick;
-    divmod(t, TICKS_PER_SEC, &sec, &tick);
+    idivmod(t, TICKS_PER_SEC, &sec, &tick);
     ts->tv_sec = sec;
     ts->tv_nsec = tick * NSEC_PER_TICK;
     return base;
@@ -59,25 +88,25 @@ struct tm *gmtime_r(const time_t *t_ptr, struct tm *tm) {
     i64 t = *t_ptr;
     // Calculate second, minute, and hour
     i64 sec, min, hour, day;
-    divmod(t, 60, &min, &sec);
+    idivmod(t, 60, &min, &sec);
     tm->tm_sec = sec;
-    divmod(min, 60, &hour, &min);
+    idivmod(min, 60, &hour, &min);
     tm->tm_min = min;
-    divmod(hour, 24, &day, &hour);
+    idivmod(hour, 24, &day, &hour);
     tm->tm_hour = hour;
     // Calculate weekday
-    tm->tm_wday = mod(day + 4, 7);
+    tm->tm_wday = imod(day + 4, 7);
     // Now `day` contains the number of days since epoch.
     // Calculate the 400-, 100-, and 4-year leap year cycle number and the days' position within the year
     i64 year_400, year_100, year_4, year_1;
-    divmod(day + (369 * 365 + 89), 400 * 365 + 97, &year_400, &day);
-    divmod(day, 100 * 365 + 24, &year_100, &day);
+    idivmod(day + (369 * 365 + 89), 400 * 365 + 97, &year_400, &day);
+    idivmod(day, 100 * 365 + 24, &year_100, &day);
     if (year_100 > 3)
         year_100 = 3;
-    divmod(day, 4 * 365 + 1, &year_4, &day);
+    idivmod(day, 4 * 365 + 1, &year_4, &day);
     if (year_4 > 24)
         year_4 = 24;
-    divmod(day, 365, &year_1, &day);
+    idivmod(day, 365, &year_1, &day);
     if (year_1 > 3)
         year_1 = 3;
     // Combine all cycles to get the year number (offset from 1601)
@@ -100,7 +129,145 @@ struct tm *gmtime_r(const time_t *t_ptr, struct tm *tm) {
     return tm;
 }
 
+static bool year_is_leap(int tm_year) {
+    // Years since 1600 (start of leap year cycle)
+    i64 cyear = tm_year + 300;
+    return (cyear % 4 == 0 && (cyear % 100 != 0 || cyear % 400 == 0));
+}
+
+// Shift the time by a given number of 15-minute intervals
+// The shift value must be between -95 and 95.
+// The date provided must be correctly formatted, or the behavior is undefined.
+static void timezone_shift(struct tm *tm, int shift) {
+    if (shift == 0)
+        return;
+    if (shift > 0) {
+        // Add minutes
+        tm->tm_min += 15 * (shift % 4);
+        if (tm->tm_min >= 60) {
+            tm->tm_min -= 60;
+            tm->tm_hour++;
+        }
+        // Add hours
+        tm->tm_hour += shift / 4;
+        if (tm->tm_hour >= 24) {
+            tm->tm_hour -= 24;
+            tm->tm_mday++;
+            tm->tm_yday++;
+            tm->tm_wday = (tm->tm_wday + 1) % 7;
+        }
+        // Handle month and year overflow
+        if (tm->tm_mday > month_lengths[tm->tm_mon]) {
+            tm->tm_mday = 0;
+            tm->tm_mon++;
+            if (tm->tm_mon == 12) {
+                tm->tm_yday = 0;
+                tm->tm_year++;
+            }
+        }
+    } else {
+        // Add minutes
+        tm->tm_min += 15 * (shift % 4);
+        if (tm->tm_min < 0) {
+            tm->tm_min += 60;
+            tm->tm_hour--;
+        }
+        // Add hours
+        tm->tm_hour += shift / 4;
+        if (tm->tm_hour < 0) {
+            tm->tm_hour += 24;
+            tm->tm_mday--;
+            tm->tm_yday--;
+            tm->tm_wday = (tm->tm_wday + 6) % 7;
+        }
+        // Handle month and year overflow
+        if (tm->tm_yday < 0) {
+            tm->tm_year--;
+            tm->tm_yday = 364 + year_is_leap(tm->tm_year);
+            tm->tm_mon = 11;
+            tm->tm_mday = 31;
+        } else if (tm->tm_mday < 1) {
+            tm->tm_mon--;
+            tm->tm_mday = month_lengths[tm->tm_mon];
+        }
+    }
+}
+
+// Determines if European DST applies based on UTC time
+static bool is_dst_eu(const struct tm *tm) {
+    if (tm->tm_mon == 2) {
+        // Mar - DST from last Sun at 01:00
+        int next_sun = tm->tm_mday - tm->tm_wday + 7;
+        if (next_sun > 31 && tm->tm_wday == 0)
+            return tm->tm_hour >= 1;
+        else if (next_sun > 31)
+            return true;
+        else
+            return false;
+    } else if (tm->tm_mon >= 3 && tm->tm_mon <= 8) {
+        // Apr-Sep - DST
+        return true;
+    } else if (tm->tm_mon == 9) {
+        // Oct - DST until last Sun at 01:00
+        int next_sun = tm->tm_mday - tm->tm_wday + 7;
+        if (next_sun > 31 && tm->tm_wday == 0)
+            return tm->tm_hour < 1;
+        else if (next_sun > 31)
+            return false;
+        else
+            return true;
+    } else {
+        // Nov-Feb - no DST
+        return false;
+    }
+}
+
+// Determines if North American DST applies based on local time
+static bool is_dst_na(const struct tm *tm) {
+    if (tm->tm_mon == 2) {
+        // Mar - DST from second Sun at 02:00
+        int last_2_sun = tm->tm_mday - tm->tm_wday - 7;
+        if (tm->tm_mday > 7 && tm->tm_mday <= 14 && tm->tm_wday == 0)
+            return tm->tm_hour >= 2;
+        else if (last_2_sun < 1)
+            return false;
+        else
+            return true;
+    } else if (tm->tm_mon >= 3 && tm->tm_mon <= 9) {
+        // Apr-Oct - DST
+        return true;
+    } else if (tm->tm_mon == 10) {
+        // Nov - DST until first Sun at 02:00
+        int last_sun = tm->tm_mday - tm->tm_wday;
+        if (tm->tm_mday <= 7 && tm->tm_wday == 0)
+            return tm->tm_hour < 2;
+        else if (last_sun < 1)
+            return true;
+        else
+            return false;
+    } else {
+        // Dec-Feb - no DST
+        return false;
+    }
+}
+
+struct tm *localtime_r(const time_t *t_ptr, struct tm *tm) {
+    if (!gmtime_r(t_ptr, tm))
+        return NULL;
+    if (timezone.dst_type == DST_EU && is_dst_eu(tm)) {
+        timezone_shift(tm, 4);
+        tm->tm_isdst = 1;
+    }
+    timezone_shift(tm, timezone.utc_offset);
+    if (timezone.dst_type == DST_NA && is_dst_na(tm)) {
+        timezone_shift(tm, 4);
+        tm->tm_isdst = 1;
+    }
+    return tm;
+}
+
 time_t mktime(struct tm *tm) {
+    int tm_isdst = tm->tm_isdst;
     // Years since epoch
     i64 year = tm->tm_year - 70;
     // Years since 1600 (start of leap year cycle)
@@ -108,7 +275,7 @@ time_t mktime(struct tm *tm) {
     // True is year is leap
     bool is_leap_year = (cyear % 4 == 0 && (cyear % 100 != 0 || cyear % 400 == 0));
     // Leap years since epoch
-    i64 leap_years = div(cyear, 4) - div(cyear, 100) + div(cyear, 400) - 89;
+    i64 leap_years = idiv(cyear, 4) - idiv(cyear, 100) + idiv(cyear, 400) - 89;
     // Days since epoch
     i64 day =
         year * 365 + leap_years
@@ -119,21 +286,36 @@ time_t mktime(struct tm *tm) {
     time_t t = tm->tm_sec + 60 * (tm->tm_min + 60 * (tm->tm_hour + 24 * day));
     // Adjust all fields in tm struct
     gmtime_r(&t, tm);
+    // Apply reverse timezone shift
+    tm->tm_isdst = tm_isdst;
+    t -= 15 * 60 * timezone.utc_offset;
+    if (tm->tm_isdst < 0) {
+        switch (timezone.dst_type) {
+        case DST_NONE:
+            tm->tm_isdst = 0;
+            break;
+        case DST_EU: {
+            struct tm utc_tm = *tm;
+            timezone_shift(&utc_tm, -timezone.utc_offset);
+            tm->tm_isdst = is_dst_eu(&utc_tm);
+            break;
+        }
+        case DST_NA:
+            tm->tm_isdst = is_dst_na(tm);
+            break;
+        }
+    }
+    if (tm->tm_isdst > 0)
+        t -= 60 * 60;
     return t;
 }
 
 static const char *month_name[12] = {"January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"};
 static const char *wday_name[7] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
 
-static bool year_is_leap(int tm_year) {
-    // Years since 1600 (start of leap year cycle)
-    i64 cyear = tm_year + 300;
-    return (cyear % 4 == 0 && (cyear % 100 != 0 || cyear % 400 == 0));
-}
-
 static int iso_week_of_the_year(const struct tm *tm) {
-    i64 week = (tm->tm_yday - mod(tm->tm_wday - 1, 7) + 3 + 7) / 7;
-    i64 this_year_starting_wday = mod(tm->tm_wday - tm->tm_yday, 7);
+    i64 week = (tm->tm_yday - imod(tm->tm_wday - 1, 7) + 3 + 7) / 7;
+    i64 this_year_starting_wday = imod(tm->tm_wday - tm->tm_yday, 7);
     bool this_year_has_leap_week = this_year_starting_wday == 4 || (this_year_starting_wday == 3 && year_is_leap(tm->tm_year));
     bool last_year_has_leap_week = this_year_starting_wday == 5 || (this_year_starting_wday == 6 && year_is_leap(tm->tm_year - 1));
     if (week < 1)
@@ -145,8 +327,8 @@ static int iso_week_of_the_year(const struct tm *tm) {
 }
 
 static int iso_week_based_year(const struct tm *tm) {
-    i64 week = (tm->tm_yday - mod(tm->tm_wday - 1, 7) + 3 + 7) / 7;
-    i64 this_year_starting_wday = mod(tm->tm_wday - tm->tm_yday, 7);
+    i64 week = (tm->tm_yday - imod(tm->tm_wday - 1, 7) + 3 + 7) / 7;
+    i64 this_year_starting_wday = imod(tm->tm_wday - tm->tm_yday, 7);
     bool this_year_has_leap_week = this_year_starting_wday == 4 || (this_year_starting_wday == 3 && year_is_leap(tm->tm_year));
     if (week < 1)
         return tm->tm_year - 1;
@@ -212,7 +394,7 @@ size_t strftime(char *restrict s, size_t s_size, const char *restrict fmt, const
             offset += snprintf(pstr, psize, "%02d", (tm->tm_yday - tm->tm_wday + 7) / 7);
             break;
         case 'W':
-            offset += snprintf(pstr, psize, "%02d", (tm->tm_yday - mod(tm->tm_wday - 1, 7) + 7) / 7);
+            offset += snprintf(pstr, psize, "%02d", (tm->tm_yday - imod(tm->tm_wday - 1, 7) + 7) / 7);
             break;
         case 'V':
             offset += snprintf(pstr, psize, "%02d", iso_week_of_the_year(tm));
@@ -279,6 +461,12 @@ size_t strftime(char *restrict s, size_t s_size, const char *restrict fmt, const
         case 'p':
             offset += snprintf(pstr, psize, "%s", tm->tm_hour < 12 ? "AM" : "PM");
             break;
+        case 'z':
+        case 'Z': {
+            int utc_offset = timezone.utc_offset + (tm->tm_isdst ? 4 : 0);
+            offset += snprintf(pstr, psize, "%+03d%02d", utc_offset / 4, 15 * abs(utc_offset % 4));
+            break;
+        }
         default:
             break;
         }

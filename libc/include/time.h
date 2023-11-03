@@ -26,5 +26,6 @@ struct tm {
 time_t time(time_t *t_ptr);
 int timespec_get(struct timespec *ts, int base);
 struct tm *gmtime_r(const time_t *t_ptr, struct tm *tm);
+struct tm *localtime_r(const time_t *t_ptr, struct tm *tm);
 time_t mktime(struct tm *tm);
 size_t strftime(char *restrict s, size_t s_size, const char *restrict fmt, const struct tm *restrict tm);

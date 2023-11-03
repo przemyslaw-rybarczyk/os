@@ -8,6 +8,7 @@
 #include <zr/keyboard.h>
 #include <zr/mouse.h>
 #include <zr/syscalls.h>
+#include <zr/timezone.h>
 #include <zr/video.h>
 
 #include "font.h"
@@ -262,7 +263,9 @@ static WindowContainer *create_window(void) {
     if (err)
         goto fail_process_spawn;
     // Spawn process running in terminal
+    Timezone timezone = timezone_get();
     ResourceName program2_resource_names[] = {
+        resource_name("locale/timezone"),
         resource_name("text/stdout"),
         resource_name("text/stderr"),
         resource_name("text/stdin"),
@@ -273,9 +276,11 @@ static WindowContainer *create_window(void) {
         {ATTACHED_HANDLE_FLAG_MOVE, text_stdin_in},
     };
     err = channel_call(process_spawn_channel, &(SendMessage){
-        3, (SendMessageData[]){
-            {sizeof(size_t), &(size_t){0}},
+        5, (SendMessageData[]){
+            {sizeof(size_t), &(size_t){1}},
             {sizeof(program2_resource_names), program2_resource_names},
+            {sizeof(size_t), &(size_t){sizeof(Timezone)}},
+            {sizeof(Timezone), &timezone},
             {included_file_program2_end - included_file_program2, included_file_program2}},
         1, &(SendMessageHandles){sizeof(program2_resource_handles) / sizeof(program2_resource_handles[0]), program2_resource_handles}
     }, NULL);
@@ -1058,7 +1063,7 @@ static void draw_screen(void) {
     // Print the time
     time_t time_ = time(NULL);
     struct tm time_tm;
-    if (!gmtime_r(&time_, &time_tm))
+    if (!localtime_r(&time_, &time_tm))
         goto time_print_fail;
     size_t time_fmt_len = strftime(time_fmt_buf, sizeof(time_fmt_buf), "%F %T", &time_tm);
     if (time_fmt_len == 0)
@@ -1090,6 +1095,7 @@ typedef enum ModKeys : u32 {
 } ModKeys;
 
 void main(void) {
+    timezone_set((Timezone){4, DST_EU});
     err_t err;
     handle_t video_size_channel;
     err = resource_get(&resource_name("video/size"), RESOURCE_TYPE_CHANNEL_SEND, &video_size_channel);
