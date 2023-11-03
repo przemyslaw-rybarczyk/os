@@ -268,6 +268,11 @@ struct tm *localtime_r(const time_t *t_ptr, struct tm *tm) {
 
 time_t mktime(struct tm *tm) {
     int tm_isdst = tm->tm_isdst;
+    // Handle month overflow
+    i64 year_diff, month;
+    idivmod(tm->tm_mon, 12, &year_diff, &month);
+    tm->tm_mon = month;
+    tm->tm_year += year_diff;
     // Years since epoch
     i64 year = tm->tm_year - 70;
     // Years since 1600 (start of leap year cycle)
@@ -279,7 +284,7 @@ time_t mktime(struct tm *tm) {
     // Days since epoch
     i64 day =
         year * 365 + leap_years
-        + (tm->tm_mon >= 0 && tm->tm_mon < 12 ? month_offsets[tm->tm_mon] : 0)
+        + month_offsets[tm->tm_mon]
         + (is_leap_year && tm->tm_mon > 1)
         + tm->tm_mday - 1;
     // Seconds since epoch
