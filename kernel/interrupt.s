@@ -19,8 +19,9 @@ IDT_KEYBOARD_IRQ equ 0x21
 IDT_MOUSE_IRQ equ 0x22
 IDT_WAKEUP_IPI equ 0x2D
 IDT_HALT_IPI equ 0x2E
+IDT_SPURIOUS_INT equ 0x2F
 
-%define interrupt_has_handler(i) ((i) < IDT_EXCEPTIONS_NUM || (i) == IDT_PIT_IRQ || (i) == IDT_KEYBOARD_IRQ || (i) == IDT_MOUSE_IRQ || (i) == IDT_WAKEUP_IPI || (i) == IDT_HALT_IPI)
+%define interrupt_has_handler(i) ((i) < IDT_EXCEPTIONS_NUM || (i) == IDT_PIT_IRQ || (i) == IDT_KEYBOARD_IRQ || (i) == IDT_MOUSE_IRQ || (i) == IDT_WAKEUP_IPI || (i) == IDT_HALT_IPI || (i) == IDT_SPURIOUS_INT)
 %define interrupt_pushes_error_code(i) ((i) == 0x08 || (i) == 0x0A || (i) == 0x0B || (i) == 0x0C || (i) == 0x0D || (i) == 0x0E || (i) == 0x11 || (i) == 0x15 || (i) == 0x1D || (i) == 0x1E)
 
 ; Define a wrapper handler for each interrupt that has a handler function
