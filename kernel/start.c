@@ -8,7 +8,6 @@
 #include "page.h"
 #include "percpu.h"
 #include "pic.h"
-#include "pit.h"
 #include "process.h"
 #include "ps2.h"
 #include "segment.h"
@@ -55,7 +54,6 @@ void kernel_start(void *stack) {
     time_init();
     apic_init(true);
     smp_init();
-    pit_init();
     smp_init_sync(true);
     if (set_double_fault_stack() != 0) {
         framebuffer_lock();

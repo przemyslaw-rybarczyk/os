@@ -1,13 +1,20 @@
 global time_get
 global time_init
 global time_adjust_offset
+global start_interrupt_timer
+global disable_interrupt_timer
+global tsc_past_deadline
 
 extern pit_wait
 extern convert_time_from_rtc
+extern timeslice_length
 
 ; We wait for around 10 ms to calibrate the TSC
 TSC_CALIBRATE_PIT_CYCLES equ 11932
 TICKS_PER_TSC_CALIBRATION equ 100002
+
+; Set the timeslice length to 20ms
+TICKS_PER_TIMESLICE equ 200000
 
 CMOS_ADDR equ 0x70
 CMOS_DATA equ 0x71
@@ -19,6 +26,8 @@ CMOS_HOUR equ 0x04
 CMOS_MINUTE equ 0x02
 CMOS_SECOND equ 0x00
 CMOS_STATUS_B equ 0x0B
+
+MSR_TSC_DEADLINE equ 0x6E0
 
 section .bss
 
@@ -61,6 +70,12 @@ time_init:
   ; The difference between the two readings is the frequency
   sub rax, rcx
   mov [tsc_frequency], rax
+  ; Set timeslice length for scheduler to tsc_frequency * TICKS_PER_TIMESLICE / TICKS_PER_TSC_CALIBRATION
+  mov rax, TICKS_PER_TIMESLICE
+  mul qword [tsc_frequency]
+  mov rcx, TICKS_PER_TSC_CALIBRATION
+  div rcx
+  mov [timeslice_length], rax
   ; Calculate the offset
   xor rdx, rdx
 .loop:
@@ -121,4 +136,39 @@ time_adjust_offset:
   shl rdx, 32
   or rax, rdx
   add [tsc_offset], rax
+  ret
+
+; Arm the local APIC timer with a given TSC deadline
+start_interrupt_timer:
+  mov eax, edi
+  shr rdi, 32
+  mov edx, edi
+  mov ecx, MSR_TSC_DEADLINE
+  wrmsr
+  ret
+
+; Disarm the local APIC timer
+disable_interrupt_timer:
+  xor eax, eax
+  xor edx, edx
+  mov ecx, MSR_TSC_DEADLINE
+  wrmsr
+  ret
+
+; Check if TSC is past the TSC deadline
+tsc_past_deadline:
+  ; Read the TSC
+  rdtsc
+  mov edi, eax
+  shl rdx, 32
+  or rdi, rdx
+  ; Read the TSC deadline
+  mov ecx, MSR_TSC_DEADLINE
+  rdmsr
+  mov esi, eax
+  shl rdx, 32
+  or rsi, rdx
+  ; Compare them
+  cmp rdi, rsi
+  setge al
   ret

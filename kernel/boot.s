@@ -80,6 +80,7 @@ CPUID_SSE equ 1 << 25
 CPUID_FXSR equ 1 << 24
 CPUID_TSC equ 1 << 4
 CPUID_INVARIANT_TSC equ 1 << 8
+CPUID_TSC_DEADLINE equ 1 << 24
 CR0_PE equ 1 << 0
 CR0_MP equ 1 << 1
 CR0_EM equ 1 << 2
@@ -140,6 +141,7 @@ section .boot
 ; A - No SSE support
 ; B - No FXSAVE/FSRSTOR support
 ; C - No invariant TSC
+; D - No TSC-Deadline mode
 
 bits 16
 
@@ -184,6 +186,8 @@ test_cpuid:
   jz .no_fxsr
   test edx, CPUID_TSC
   jz .no_tsc
+  test ecx, CPUID_TSC_DEADLINE
+  jz .no_tsc_deadline
   ; CPUID extended level EAX=80000007h
   mov eax, 0x80000007
   cpuid
@@ -204,6 +208,9 @@ test_cpuid:
   jmp error
 .no_tsc:
   mov dl, 'C'
+  jmp error
+.no_tsc_deadline:
+  mov dl, 'D'
   jmp error
 .end:
 

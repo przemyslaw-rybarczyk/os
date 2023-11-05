@@ -1,5 +1,6 @@
 %include "kernel/percpu.inc"
 
+global timeslice_length
 global tss
 global tss_end
 global userspace_init
@@ -25,6 +26,8 @@ extern idle_page_map
 extern message_reply
 extern message_reply_error
 extern message_free
+extern start_interrupt_timer
+extern disable_interrupt_timer
 
 struc Process
   .rsp: resq 1
@@ -60,6 +63,12 @@ PAGE_NX equ 1 << 63
 SYSCALLS_NUM equ 19
 
 ERR_INVALID_SYSCALL_NUMBER equ 0xFFFFFFFFFFFF0001
+
+section .bss
+
+; Length of timeslice in TSC ticks
+; Set by time_init().
+timeslice_length: resq 1
 
 section .text
 
@@ -159,6 +168,8 @@ sched_start:
 process_block:
   ; Disable interrupts
   call interrupt_disable
+  ; Disable interrupt timer
+  call disable_interrupt_timer
   mov rax, gs:[PerCPU.current_process]
   ; Save process state
   push rbx
@@ -195,6 +206,8 @@ process_exit:
   ; From this point on, interrupts must be disabled.
   ; If a context switch occurred while the process is being freed, it wouldn't be possible to come back to it.
   call interrupt_disable
+  ; Disable interrupt timer
+  call disable_interrupt_timer
   ; Switch to the idle stack and page map
   mov rsp, gs:[PerCPU.idle_stack]
   mov rdx, idle_page_map
@@ -259,6 +272,13 @@ process_switch:
   mov cr3, rdx
   ; Ignore any delayed preemptions
   mov qword gs:[PerCPU.preempt_delayed], 0
+  ; Start local APIC timer
+  rdtsc
+  mov edi, eax
+  shl rdx, 32
+  or rdi, rdx
+  add rdi, [timeslice_length]
+  call start_interrupt_timer
   ; Re-enable interrupts
   call interrupt_enable
   ; Return to the process

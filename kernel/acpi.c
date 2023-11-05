@@ -32,7 +32,6 @@
 #define IOREDTBL_DELIVERY_FIXED (0ul << 8)
 #define IOREDTBL_DELIVERY_LOWEST_PRIORITY (1ul << 8)
 
-#define ISA_INT_PIT 0
 #define ISA_INT_KEYBOARD 1
 #define ISA_INT_MOUSE 12
 
@@ -210,7 +209,6 @@ static err_t parse_madt(const ACPIEntry *madt) {
     u64 lapic_phys = madt_data->lapic_address;
     // Set the default interrupt assignments
     // These will be changed by the presence I/O APIC source override.
-    InterruptAssignment interrupt_assignment_pit = (InterruptAssignment){ISA_INT_PIT, false, false};
     InterruptAssignment interrupt_assignment_keyboard = (InterruptAssignment){ISA_INT_KEYBOARD, false, false};
     InterruptAssignment interrupt_assignment_mouse = (InterruptAssignment){ISA_INT_MOUSE, false, false};
     // Iterate through the MADT records to get the interrupt source override information
@@ -224,9 +222,6 @@ static err_t parse_madt(const ACPIEntry *madt) {
             InterruptAssignment *interrupt_assignment = NULL;
             // If the override is for one of the interrupts we use, save the override information
             switch (madt_record->interrupt_override.source) {
-            case ISA_INT_PIT:
-                interrupt_assignment = &interrupt_assignment_pit;
-                break;
             case ISA_INT_KEYBOARD:
                 interrupt_assignment = &interrupt_assignment_keyboard;
                 break;
@@ -264,9 +259,7 @@ static err_t parse_madt(const ACPIEntry *madt) {
             u32 int_base = madt_record->io_apic.int_base;
             u32 max_redir = (io_apic_read(io_apic, IOAPICVER) & IOAPICVER_MAX_REDIR_MASK) >> IOAPICVER_MAX_REDIR_OFFSET;
             for (u32 i = int_base; i <= int_base + max_redir; i++) {
-                if (i == interrupt_assignment_pit.gsi)
-                    io_apic_set_redirection(io_apic, interrupt_assignment_pit, true, int_base, INT_VECTOR_PIT);
-                else if (i == interrupt_assignment_keyboard.gsi)
+                if (i == interrupt_assignment_keyboard.gsi)
                     io_apic_set_redirection(io_apic, interrupt_assignment_keyboard, false, int_base, INT_VECTOR_KEYBOARD);
                 else if (i == interrupt_assignment_mouse.gsi)
                     io_apic_set_redirection(io_apic, interrupt_assignment_mouse, false, int_base, INT_VECTOR_MOUSE);
