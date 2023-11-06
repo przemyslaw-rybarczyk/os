@@ -45,3 +45,8 @@ long long atoll(const char *str);
 
 void qsort(void *base, size_t n, size_t size, int (*comp)(const void *, const void *));
 void *bsearch(const void *key, const void *base, size_t n, size_t size, int (*comp)(const void *, const void *));
+
+#define RAND_MAX 2147483647
+
+int rand(void);
+void srand(unsigned int seed);

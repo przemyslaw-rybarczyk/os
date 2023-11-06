@@ -260,3 +260,14 @@ void *bsearch(const void *key, const void *base_, size_t n, size_t size, int (*c
     }
     return NULL;
 }
+
+static u64 rand_seed = 1;
+
+int rand(void) {
+    rand_seed = UINT64_C(6364136223846793005) * rand_seed + 1;
+    return rand_seed >> 33;
+}
+
+void srand(unsigned int seed) {
+    rand_seed = seed;
+}
