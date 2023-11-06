@@ -76,10 +76,10 @@ apic_init:
 .cpu_is_bsp:
   mov dword [rax + LAPIC_LOGICAL_DESTINATION_REGISTER], 3 << LAPIC_LOGICAL_ID_OFFSET
 .logical_destination_set:
-  ; Set the timer register
-  mov dword [rax + LAPIC_TIMER_REGISTER], LAPIC_TIMER_TSC_DEADLINE | LAPIC_TIMER_VECTOR
   ; Enable the LAPIC and set the spurious interrupt vector
   mov dword [rax + LAPIC_SPURIOUS_INTERRUPT_VECTOR_REGISTER], LAPIC_ENABLE | SPURIOUS_INTERRUPT_VECTOR
+  ; Set the timer register
+  mov dword [rax + LAPIC_TIMER_REGISTER], LAPIC_TIMER_TSC_DEADLINE | LAPIC_TIMER_VECTOR
   ret
 
 ; Number of PIT cycles in 10 ms
