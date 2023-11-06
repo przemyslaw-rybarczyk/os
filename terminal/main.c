@@ -150,6 +150,19 @@ static void remove_last_input_char(void) {
     if (input_buffer_pending_size < input_buffer_size) {
         input_buffer_size--;
         text_buffer_size--;
+        // Move cursor back
+        if (cursor_x == 0) {
+            cursor_y--;
+            cursor_x = 0;
+            for (size_t i = text_buffer_size; i-- > 0; ) {
+                u8 c = text_buffer[(text_buffer_offset + i) & (text_buffer_capacity - 1)].ch;
+                cursor_x++;
+                if (c == '\n' || cursor_x >= screen_size.width / FONT_WIDTH)
+                    cursor_x = 0;
+            }
+        } else {
+            cursor_x--;
+        }
     }
 }
 
