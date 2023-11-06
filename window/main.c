@@ -368,7 +368,8 @@ static u32 get_child_length(const Container *child, u32 parent_length) {
 static void get_container_size(const Container *container, ScreenSize *container_size) {
     // If the parent is NULL, this is the root container covering the whole screen
     if (container->parent == NULL) {
-        *container_size = screen_size;
+        container_size->width = screen_size.width;
+        container_size->height = screen_size.height - STATUS_BAR_HEIGHT;
         return;
     }
     // Otherwise, return the appropriate portion of the parent's size
