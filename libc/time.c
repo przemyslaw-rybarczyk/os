@@ -66,6 +66,10 @@ time_t time(time_t *t_ptr) {
     return sec;
 }
 
+double difftime(time_t end, time_t start) {
+    return (double)(end - start);
+}
+
 clock_t clock(void) {
     i64 t;
     process_time_get(&t);
