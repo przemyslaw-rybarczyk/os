@@ -9,6 +9,7 @@ global sched_start
 global process_block
 global process_exit
 global process_start
+global process_time_get
 
 extern interrupt_disable
 extern interrupt_enable
@@ -28,12 +29,14 @@ extern message_reply_error
 extern message_free
 extern start_interrupt_timer
 extern disable_interrupt_timer
+extern time_from_tsc
 
 struc Process
   .rsp: resq 1
   .kernel_stack: resq 1
   .page_map: resq 1
   .fxsave_area: resq 1
+  .running_time: resq 1
 endstruc
 
 SEGMENT_KERNEL_CODE equ 0x08
@@ -60,7 +63,7 @@ PAGE_WRITE equ 1 << 1
 PAGE_GLOBAL equ 1 << 8
 PAGE_NX equ 1 << 63
 
-SYSCALLS_NUM equ 19
+SYSCALLS_NUM equ 20
 
 ERR_INVALID_SYSCALL_NUMBER equ 0xFFFFFFFFFFFF0001
 
@@ -152,6 +155,50 @@ userspace_init:
   wrmsr
   ret
 
+; Called at the start of every timeslice
+timeslice_start:
+  ; Get TSC value
+  rdtsc
+  mov edi, eax
+  shl rdx, 32
+  or rdi, rdx
+  ; Set start of timeslice
+  mov gs:[PerCPU.timeslice_start], rdi
+  ; Set interrupt timer to go off after timeslice ends
+  add rdi, [timeslice_length]
+  call start_interrupt_timer
+  ret
+
+; Called at the end of every timeslice
+timeslice_end:
+  ; Disable interrupt timer
+  call disable_interrupt_timer
+  ; Get TSC value
+  rdtsc
+  mov edi, eax
+  shl rdx, 32
+  or rdi, rdx
+  ; Add time spent in timeslice to process time
+  sub rdi, gs:[PerCPU.timeslice_start]
+  mov rax, gs:[PerCPU.current_process]
+  add [rax + Process.running_time], rdi
+  ret
+
+; Return the time spent running the current process up to this point
+process_time_get:
+  ; Get TSC value
+  rdtsc
+  mov edi, eax
+  shl rdx, 32
+  or rdi, rdx
+  ; Subtract start of timeslice
+  sub rdi, gs:[PerCPU.timeslice_start]
+  ; Add running time up to start of current timeslice
+  mov rax, gs:[PerCPU.current_process]
+  add rdi, [rax + Process.running_time]
+  call time_from_tsc
+  ret
+
 ; Start the scheduler
 ; This function is called at the end of kernel initialization.
 sched_start:
@@ -166,10 +213,12 @@ sched_start:
 ; Must be called with no locks held other than the one passed as argument.
 ; The argument may be NULL, in which case no lock is released.
 process_block:
+  push rdi
   ; Disable interrupts
   call interrupt_disable
-  ; Disable interrupt timer
-  call disable_interrupt_timer
+  ; End the timeslice
+  call timeslice_end
+  pop rdi
   mov rax, gs:[PerCPU.current_process]
   ; Save process state
   push rbx
@@ -206,8 +255,8 @@ process_exit:
   ; From this point on, interrupts must be disabled.
   ; If a context switch occurred while the process is being freed, it wouldn't be possible to come back to it.
   call interrupt_disable
-  ; Disable interrupt timer
-  call disable_interrupt_timer
+  ; End the timeslice
+  call timeslice_end
   ; Switch to the idle stack and page map
   mov rsp, gs:[PerCPU.idle_stack]
   mov rdx, idle_page_map
@@ -231,6 +280,8 @@ process_exit:
 process_switch:
   ; Disable interrupts
   call interrupt_disable
+  ; End the timeslice
+  call timeslice_end
   mov rax, gs:[PerCPU.current_process]
   ; Save process state on the stack
   ; Since this function will only be called from kernel code, we only need to save the non-scratch registers.
@@ -270,15 +321,10 @@ process_switch:
   ; Load process page map
   mov rdx, [rax + Process.page_map]
   mov cr3, rdx
+  ; Start timeslice
+  call timeslice_start
   ; Ignore any delayed preemptions
   mov qword gs:[PerCPU.preempt_delayed], 0
-  ; Start local APIC timer
-  rdtsc
-  mov edi, eax
-  shl rdx, 32
-  or rdi, rdx
-  add rdi, [timeslice_length]
-  call start_interrupt_timer
   ; Re-enable interrupts
   call interrupt_enable
   ; Return to the process

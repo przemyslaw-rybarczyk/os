@@ -17,6 +17,7 @@ global channel_create
 global channel_send
 global time_get
 global message_resource_read
+global process_time_get
 
 ; This file implements the C interface for system calls
 
@@ -117,5 +118,10 @@ time_get:
 message_resource_read:
   mov rax, 18
   mov r10, rcx
+  syscall
+  ret
+
+process_time_get:
+  mov rax, 19
   syscall
   ret

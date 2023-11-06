@@ -17,6 +17,7 @@ typedef struct Process {
     void *kernel_stack;
     u64 page_map; // physical address of the PML4
     FXSAVEArea *fxsave_area;
+    u64 running_time;
     HandleList handles;
     ResourceList resources;
     struct Process *next_process;
@@ -42,4 +43,5 @@ _Noreturn void process_exit(void);
 void process_switch(void);
 void sched_start(void);
 void process_block(spinlock_t *spinlock);
+u64 process_time_get(void);
 _Noreturn void process_spawn_kernel_thread_main(void);

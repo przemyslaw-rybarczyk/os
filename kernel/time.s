@@ -1,5 +1,7 @@
-global time_get
 global time_init
+global time_from_tsc
+global time_to_tsc
+global time_get
 global time_adjust_offset
 global start_interrupt_timer
 global disable_interrupt_timer
@@ -39,19 +41,6 @@ tsc_offset: resq 1
 
 section .text
 
-; Return current time
-time_get:
-  ; Read TSC
-  rdtsc
-  shl rdx, 32
-  or rax, rdx
-  ; Multiply by TICKS_PER_TSC_CALIBRATION / tsc_frequency to get time in ticks
-  mov rcx, TICKS_PER_TSC_CALIBRATION
-  mul rcx
-  div qword [tsc_frequency]
-  add rax, [tsc_offset]
-  ret
-
 ; Calibrate the TSC's frequency and offset
 time_init:
   ; Calculate the frequency
@@ -70,11 +59,9 @@ time_init:
   ; The difference between the two readings is the frequency
   sub rax, rcx
   mov [tsc_frequency], rax
-  ; Set timeslice length for scheduler to tsc_frequency * TICKS_PER_TIMESLICE / TICKS_PER_TSC_CALIBRATION
-  mov rax, TICKS_PER_TIMESLICE
-  mul qword [tsc_frequency]
-  mov rcx, TICKS_PER_TSC_CALIBRATION
-  div rcx
+  ; Set timeslice length for scheduler
+  mov rdi, TICKS_PER_TIMESLICE
+  call time_to_tsc
   mov [timeslice_length], rax
   ; Calculate the offset
   xor rdx, rdx
@@ -127,6 +114,37 @@ time_init:
   or rax, rdx
   sub rcx, rax
   mov [tsc_offset], rcx
+  ret
+
+; Convert time from TSC tick count
+time_from_tsc:
+  ; Multiply by TICKS_PER_TSC_CALIBRATION / tsc_frequency
+  mov rax, rdi
+  mov rcx, TICKS_PER_TSC_CALIBRATION
+  mul rcx
+  div qword [tsc_frequency]
+  ret
+
+; Convert time to TSC tick count
+time_to_tsc:
+  ; Multiply by tsc_frequency / TICKS_PER_TSC_CALIBRATION
+  mov rax, rdi
+  mul qword [tsc_frequency]
+  mov rcx, TICKS_PER_TSC_CALIBRATION
+  div rcx
+  ret
+
+; Return current time
+time_get:
+  ; Read TSC
+  rdtsc
+  mov edi, eax
+  shl rdx, 32
+  or rdi, rdx
+  ; Convert to ticks
+  call time_from_tsc
+  ; Add offset
+  add rax, [tsc_offset]
   ret
 
 ; Add current TSC value to TSC offset

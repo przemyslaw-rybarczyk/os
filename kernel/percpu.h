@@ -24,6 +24,8 @@ typedef struct PerCPU {
     u64 interrupt_disable;
     // Number of times preemption has been disabled
     u64 preempt_disable;
+    // TSC value at start of currently running timeslice
+    u64 timeslice_start;
     // The ID of the CPU's LAPIC
     // Used for sending IPIs.
     u32 lapic_id;

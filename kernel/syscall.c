@@ -41,6 +41,15 @@ err_t syscall_time_get(i64 *time_ptr) {
     return 0;
 }
 
+err_t syscall_process_time_get(i64 *time_ptr) {
+    err_t err;
+    err = verify_user_buffer(time_ptr, sizeof(i64), true);
+    if (err)
+        return err;
+    *time_ptr = process_time_get();
+    return 0;
+}
+
 const void * const syscalls[] = {
     syscall_map_pages,
     syscall_process_exit,
@@ -61,4 +70,5 @@ const void * const syscalls[] = {
     syscall_channel_send,
     syscall_time_get,
     syscall_message_resource_read,
+    syscall_process_time_get,
 };

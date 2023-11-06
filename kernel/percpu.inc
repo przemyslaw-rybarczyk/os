@@ -6,6 +6,7 @@ struc PerCPU
   .idle_stack: resq 1
   .interrupt_disable: resq 1
   .preempt_disable: resq 1
+  .timeslice_start: resq 1
   .lapic_id: resd 1
   .preempt_delayed: resb 1
   .idle: resb 1

@@ -66,6 +66,12 @@ time_t time(time_t *t_ptr) {
     return sec;
 }
 
+clock_t clock(void) {
+    i64 t;
+    process_time_get(&t);
+    return t;
+}
+
 int timespec_get(struct timespec *ts, int base) {
     if (base != TIME_UTC)
         return 0;

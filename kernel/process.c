@@ -101,6 +101,8 @@ err_t process_create(Process **process_ptr, ResourceList resources) {
     err = handle_list_init(&process->handles);
     if (err)
         goto fail_handle_list_init;
+    // Intialize remaining fields
+    process->running_time = 0;
     process->resources = resources;
     *process_ptr = process;
     return 0;
