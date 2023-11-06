@@ -790,14 +790,13 @@ flags_end:
         bool got_precision = false;
         int precision = 0;
         if (fmt[i] == '.') {
+            got_precision = true;
             i++;
             if (fmt[i] == '*') {
-                got_precision = true;
                 precision = va_arg(args, int);
                 i++;
             } else {
                 while ('0' <= fmt[i] && fmt[i] <= '9') {
-                    got_precision = true;
                     precision = 10 * precision + (fmt[i] - '0');
                     i++;
                 }
