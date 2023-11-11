@@ -20,6 +20,9 @@ typedef struct Process {
     u64 running_time;
     HandleList handles;
     ResourceList resources;
+    i64 timeout;
+    bool timeout_scheduled;
+    struct Process *prev_process;
     struct Process *next_process;
 } Process;
 

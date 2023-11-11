@@ -29,13 +29,23 @@ typedef struct PerCPU {
     // The ID of the CPU's LAPIC
     // Used for sending IPIs.
     u32 lapic_id;
-    // Indicates whether there is a pending delayed preemption
-    // Set by the timer interrupt handler if a preemption should occur, but preemption is blocked.
+    // Indicates whether there is a pending delayed timer interrupt
+    // Set by the timer interrupt handler if there are locks held or preemption is blocked.
     // Will be performed at the next available opportunity.
-    bool preempt_delayed;
+    bool timer_interrupt_delayed;
     // Is set if the CPU is currently idle and waiting for a process to execute.
     // Cleared by the wakeup IPI handler.
     bool idle;
+    // True if interrupt is set to occur at the end of timeslice
+    // If false, the value of timeslice_timeout is invalid.
+    bool timeslice_interrupt_enabled;
+    // TSC timestamp at which interrupt indicating end of timeslice should occur
+    u64 timeslice_timeout;
+    // Waiting process that the next timer interrupt is set to wake up
+    // Is NULL if there is no such process.
+    Process *waiting_process;
+    // Last value the TSC deadline MSR was set to
+    u64 tsc_deadline;
     // Used to form the list of idle CPU cores
     struct PerCPU *next_cpu;
 } PerCPU;

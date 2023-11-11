@@ -1,6 +1,11 @@
 #include "types.h"
 #include "time.h"
 
+#include "percpu.h"
+#include "process.h"
+#include "smp.h"
+#include "spinlock.h"
+
 #define STATUS_B_24_HOUR 2
 #define STATUS_B_BINARY 4
 
@@ -53,4 +58,145 @@ i64 convert_time_from_rtc(struct rtc_time rtc_time, u8 status_b) {
     // Seconds since epoch
     i64 second = rtc_time.second + 60 * (rtc_time.minute + 60 * (rtc_time.hour + 24 * day));
     return 10000000 * second;
+}
+
+void start_interrupt_timer(u64 tsc_deadline);
+void disable_interrupt_timer(void);
+
+static spinlock_t wait_queue_lock;
+
+// Doubly linked list of all waiting processes, ordered by timeout
+static Process *wait_queue_start = NULL;
+static Process *wait_queue_end = NULL;
+
+// Update the interrupt timer after updating the wait queue
+// Must be called with wait queue lock held.
+static void update_interrupt_timer(void) {
+    // Find first process that hasn't been scheduled yet on a different CPU
+    Process *first_unscheduled_process = NULL;
+    for (Process *p = wait_queue_start; p != NULL; p = p->next_process) {
+        if (!p->timeout_scheduled) {
+            first_unscheduled_process = p;
+            break;
+        }
+    }
+    // Schedule first unscheduled process, timeslice timeout, or keep current process, wichever comes first
+    if (first_unscheduled_process != NULL
+            && (!cpu_local->timeslice_interrupt_enabled || timestamp_to_tsc(first_unscheduled_process->timeout) < cpu_local->timeslice_timeout)
+            && (cpu_local->waiting_process == NULL || cpu_local->waiting_process->timeout > first_unscheduled_process->timeout)) {
+        if (cpu_local->waiting_process != NULL)
+            cpu_local->waiting_process->timeout_scheduled = false;
+        first_unscheduled_process->timeout_scheduled = true;
+        cpu_local->waiting_process = first_unscheduled_process;
+        start_interrupt_timer(timestamp_to_tsc(first_unscheduled_process->timeout));
+    } else if (cpu_local->timeslice_interrupt_enabled
+            && (cpu_local->waiting_process == NULL || timestamp_to_tsc(cpu_local->waiting_process->timeout) > cpu_local->timeslice_timeout)) {
+        if (cpu_local->waiting_process != NULL)
+            cpu_local->waiting_process->timeout_scheduled = false;
+        cpu_local->waiting_process = NULL;
+        start_interrupt_timer(cpu_local->timeslice_timeout);
+    } else if (cpu_local->waiting_process == NULL) {
+        disable_interrupt_timer();
+    }
+}
+
+void schedule_timeslice_interrupt(u64 time) {
+    spinlock_acquire(&wait_queue_lock);
+    cpu_local->timeslice_interrupt_enabled = true;
+    cpu_local->timeslice_timeout = time;
+    update_interrupt_timer();
+    spinlock_release(&wait_queue_lock);
+}
+
+void cancel_timeslice_interrupt(void) {
+    spinlock_acquire(&wait_queue_lock);
+    cpu_local->timeslice_interrupt_enabled = false;
+    update_interrupt_timer();
+    spinlock_release(&wait_queue_lock);
+}
+
+err_t syscall_process_wait(i64 time) {
+    // Early return if we're already past timeout
+    if (timestamp_to_tsc(time) <= time_get_tsc())
+        return 0;
+    spinlock_acquire(&wait_queue_lock);
+    // Insert process into wait queue
+    Process *p = wait_queue_start;
+    for (; p != NULL && p->timeout <= time; p = p->next_process)
+        ;
+    if (p == NULL) {
+        // All processes in queue have larger timeout, so we insert at the end.
+        cpu_local->current_process->prev_process = wait_queue_end;
+        cpu_local->current_process->next_process = NULL;
+        if (wait_queue_end == NULL)
+            wait_queue_start = cpu_local->current_process;
+        else
+            wait_queue_end->next_process = cpu_local->current_process;
+        wait_queue_end = cpu_local->current_process;
+    } else {
+        // p is first process with greater timeout, so we insert before it.
+        cpu_local->current_process->next_process = p;
+        cpu_local->current_process->prev_process = p->prev_process;
+        if (p->prev_process == NULL)
+            wait_queue_start = cpu_local->current_process;
+        else
+            p->prev_process->next_process = cpu_local->current_process;
+        p->prev_process = cpu_local->current_process;
+    }
+    cpu_local->current_process->timeout_scheduled = false;
+    cpu_local->current_process->timeout = time;
+    // Update interrupt timer and block until timeout
+    update_interrupt_timer();
+    process_block(&wait_queue_lock);
+    return 0;
+}
+
+// Unblock any timed out processes from the wait queue
+static void wait_queue_unblock(void) {
+    spinlock_acquire(&wait_queue_lock);
+    // Get current time
+    u64 time = time_get_tsc();
+    // Remove and unblock all processes with timeout less than current time
+    while (wait_queue_start != NULL && timestamp_to_tsc(wait_queue_start->timeout) <= time) {
+        Process *next_process = wait_queue_start->next_process;
+        process_enqueue(wait_queue_start);
+        wait_queue_start = next_process;
+    }
+    if (wait_queue_start == NULL)
+        wait_queue_end = NULL;
+    // Update interrupt timer
+    update_interrupt_timer();
+    spinlock_release(&wait_queue_lock);
+}
+
+void apic_timer_irq_handler(void) {
+    apic_eoi();
+    // Check that the TSC is actually past the deadline.
+    // If it's not, this interrupt is a result of a race condition and we ignore it.
+    if (!tsc_past_deadline())
+        return;
+    if (cpu_local->waiting_process == NULL) {
+        // Try to preempt the current process
+        // If preemption is disabled, mark the preemption as delayed
+        if (cpu_local->preempt_disable == 0)
+            process_switch();
+        else
+            cpu_local->timer_interrupt_delayed = true;
+    } else {
+        // Try to unblock processes from the wait queue
+        // If locks are held, mark the unblocking as delayed
+        if (cpu_local->idle || cpu_local->preempt_disable == 0)
+            wait_queue_unblock();
+        else
+            cpu_local->timer_interrupt_delayed = true;
+    }
+}
+
+void delayed_timer_interrupt_handle(void) {
+    if (!tsc_past_deadline())
+        return;
+    if (cpu_local->waiting_process == NULL)
+        process_switch();
+    else
+        wait_queue_unblock();
 }

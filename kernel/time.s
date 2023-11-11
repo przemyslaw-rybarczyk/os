@@ -1,6 +1,9 @@
+%include "kernel/percpu.inc"
+
 global time_init
+global time_get_tsc
 global time_from_tsc
-global time_to_tsc
+global timestamp_to_tsc
 global time_get
 global time_adjust_offset
 global start_interrupt_timer
@@ -45,17 +48,15 @@ section .text
 time_init:
   ; Calculate the frequency
   ; Get first TSC reading
-  rdtsc
+  call time_get_tsc
   mov rcx, rax
-  shl rdx, 32
-  or rcx, rdx
   ; Wait
   mov di, TSC_CALIBRATE_PIT_CYCLES
   call pit_wait
   ; Get second TSC reading
-  rdtsc
-  shl rdx, 32
-  or rax, rdx
+  push rcx
+  call time_get_tsc
+  pop rcx
   ; The difference between the two readings is the frequency
   sub rax, rcx
   mov [tsc_frequency], rax
@@ -109,11 +110,16 @@ time_init:
   call convert_time_from_rtc
   ; Finally, subtract the current TSC value from the clock time to get the offset
   mov rcx, rax
+  call time_get_tsc
+  sub rcx, rax
+  mov [tsc_offset], rcx
+  ret
+
+; Return current TSC counter value
+time_get_tsc:
   rdtsc
   shl rdx, 32
   or rax, rdx
-  sub rcx, rax
-  mov [tsc_offset], rcx
   ret
 
 ; Convert time from TSC tick count
@@ -134,13 +140,34 @@ time_to_tsc:
   div rcx
   ret
 
+; Convert timestamp to TSC tick count
+; Out of range values are clamped to unsigned 64-bit range.
+timestamp_to_tsc:
+  ; Subtract offset
+  sub rdi, [tsc_offset]
+  ; Return 0 if result is negative
+  jl .negative
+  ; Multiply by tsc_frequency / TICKS_PER_TSC_CALIBRATION
+  mov rax, rdi
+  mul qword [tsc_frequency]
+  mov rcx, TICKS_PER_TSC_CALIBRATION
+  ; Return maximum 64-bit value if division would overflow
+  cmp rdx, rcx
+  jae .too_large
+  div rcx
+  ret
+.negative:
+  xor rax, rax
+  ret
+.too_large:
+  mov rax, -1
+  ret
+
 ; Return current time
 time_get:
   ; Read TSC
-  rdtsc
-  mov edi, eax
-  shl rdx, 32
-  or rdi, rdx
+  call time_get_tsc
+  mov rdi, rax
   ; Convert to ticks
   call time_from_tsc
   ; Add offset
@@ -150,14 +177,13 @@ time_get:
 ; Add current TSC value to TSC offset
 ; Called before resetting TSC to zero.
 time_adjust_offset:
-  rdtsc
-  shl rdx, 32
-  or rax, rdx
+  call time_get_tsc
   add [tsc_offset], rax
   ret
 
 ; Arm the local APIC timer with a given TSC deadline
 start_interrupt_timer:
+  mov gs:[PerCPU.tsc_deadline], rdi
   mov eax, edi
   shr rdi, 32
   mov edx, edi
@@ -167,6 +193,7 @@ start_interrupt_timer:
 
 ; Disarm the local APIC timer
 disable_interrupt_timer:
+  mov qword gs:[PerCPU.tsc_deadline], 0
   xor eax, eax
   xor edx, edx
   mov ecx, MSR_TSC_DEADLINE
@@ -176,17 +203,16 @@ disable_interrupt_timer:
 ; Check if TSC is past the TSC deadline
 tsc_past_deadline:
   ; Read the TSC
-  rdtsc
-  mov edi, eax
-  shl rdx, 32
-  or rdi, rdx
-  ; Read the TSC deadline
-  mov ecx, MSR_TSC_DEADLINE
-  rdmsr
-  mov esi, eax
-  shl rdx, 32
-  or rsi, rdx
+  call time_get_tsc
+  ; Get the TSC deadline
+  mov rsi, gs:[PerCPU.tsc_deadline]
+  ; If the deadline is zero, return false since the timer is disarmed
+  test rsi, rsi
+  jnz .timer_armed
+  xor al, al
+  ret
+.timer_armed:
   ; Compare them
-  cmp rdi, rsi
+  cmp rax, rsi
   setge al
   ret

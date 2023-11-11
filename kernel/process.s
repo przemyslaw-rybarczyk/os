@@ -27,9 +27,9 @@ extern idle_page_map
 extern message_reply
 extern message_reply_error
 extern message_free
-extern start_interrupt_timer
-extern disable_interrupt_timer
 extern time_from_tsc
+extern schedule_timeslice_interrupt
+extern cancel_timeslice_interrupt
 
 struc Process
   .rsp: resq 1
@@ -63,7 +63,7 @@ PAGE_WRITE equ 1 << 1
 PAGE_GLOBAL equ 1 << 8
 PAGE_NX equ 1 << 63
 
-SYSCALLS_NUM equ 20
+SYSCALLS_NUM equ 21
 
 ERR_INVALID_SYSCALL_NUMBER equ 0xFFFFFFFFFFFF0001
 
@@ -166,13 +166,13 @@ timeslice_start:
   mov gs:[PerCPU.timeslice_start], rdi
   ; Set interrupt timer to go off after timeslice ends
   add rdi, [timeslice_length]
-  call start_interrupt_timer
+  call schedule_timeslice_interrupt
   ret
 
 ; Called at the end of every timeslice
 timeslice_end:
   ; Disable interrupt timer
-  call disable_interrupt_timer
+  call cancel_timeslice_interrupt
   ; Get TSC value
   rdtsc
   mov edi, eax
@@ -216,8 +216,6 @@ process_block:
   push rdi
   ; Disable interrupts
   call interrupt_disable
-  ; End the timeslice
-  call timeslice_end
   pop rdi
   mov rax, gs:[PerCPU.current_process]
   ; Save process state
@@ -240,6 +238,8 @@ process_block:
   jz .no_spinlock
   call spinlock_release
 .no_spinlock:
+  ; End the timeslice
+  call timeslice_end
   ; Get the next process to run and jump to the appropriate part of process_switch
   call sched_replace_process
   jmp process_switch.from_no_process
@@ -323,8 +323,6 @@ process_switch:
   mov cr3, rdx
   ; Start timeslice
   call timeslice_start
-  ; Ignore any delayed preemptions
-  mov qword gs:[PerCPU.preempt_delayed], 0
   ; Re-enable interrupts
   call interrupt_enable
   ; Return to the process

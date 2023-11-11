@@ -5,7 +5,7 @@ global preempt_enable
 global spinlock_acquire
 global spinlock_release
 
-extern process_switch
+extern delayed_timer_interrupt_handle
 extern interrupt_disable
 extern send_input_events
 extern send_input_delayed
@@ -27,10 +27,10 @@ preempt_enable:
   call send_input_events
 .no_input:
   ; If there's a pending preemption, preempt the current thread
-  cmp byte gs:[PerCPU.preempt_delayed], 0
+  cmp byte gs:[PerCPU.timer_interrupt_delayed], 0
   je .no_preempt
   sub qword gs:[PerCPU.preempt_disable], 1
-  call process_switch
+  call delayed_timer_interrupt_handle
   ret
   ; Otherwise just decrement the preempt disable counter
 .no_preempt:

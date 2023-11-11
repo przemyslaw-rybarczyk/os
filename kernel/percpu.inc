@@ -8,8 +8,12 @@ struc PerCPU
   .preempt_disable: resq 1
   .timeslice_start: resq 1
   .lapic_id: resd 1
-  .preempt_delayed: resb 1
+  .timer_interrupt_delayed: resb 1
   .idle: resb 1
-    resb 2
+  .timeslice_interrupt_enabled: resb 1
+    resb 1
+  .timeslice_timeout: resq 1
+  .waiting_process: resq 1
+  .tsc_deadline: resq 1
   .next_cpu: resq 1
 endstruc

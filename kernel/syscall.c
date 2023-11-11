@@ -71,4 +71,5 @@ const void * const syscalls[] = {
     syscall_time_get,
     syscall_message_resource_read,
     syscall_process_time_get,
+    syscall_process_wait,
 };
