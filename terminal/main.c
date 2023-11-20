@@ -338,7 +338,7 @@ void main(void) {
     while (1) {
         MessageTag tag;
         handle_t msg;
-        err = mqueue_receive(event_mqueue, &tag, &msg, 0);
+        err = mqueue_receive(event_mqueue, &tag, &msg, TIMEOUT_NONE, 0);
         if (err)
             continue;
         EventSource event_source = (EventSource)tag.data[0];

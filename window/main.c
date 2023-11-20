@@ -1136,9 +1136,14 @@ void main(void) {
     while (1) {
         handle_t msg;
         MessageTag tag;
-        err = mqueue_receive(event_queue, &tag, &msg, 0);
-        if (err)
+        i64 t;
+        time_get(&t);
+        err = mqueue_receive(event_queue, &tag, &msg, (t / 10000000 + 1) * 10000000, 0);
+        if (err) {
+            if (err == ERR_KERNEL_TIMEOUT)
+                draw_screen();
             continue;
+        }
         switch ((EventSource)tag.data[0]) {
         case EVENT_KEYBOARD_KEY: {
             // Read key event

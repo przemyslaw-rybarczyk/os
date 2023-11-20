@@ -63,7 +63,7 @@ i64 convert_time_from_rtc(struct rtc_time rtc_time, u8 status_b) {
 void start_interrupt_timer(u64 tsc_deadline);
 void disable_interrupt_timer(void);
 
-static spinlock_t wait_queue_lock;
+spinlock_t wait_queue_lock;
 
 // Doubly linked list of all waiting processes, ordered by timeout
 static Process *wait_queue_start = NULL;
@@ -115,12 +115,9 @@ void cancel_timeslice_interrupt(void) {
     spinlock_release(&wait_queue_lock);
 }
 
-err_t syscall_process_wait(i64 time) {
-    // Early return if we're already past timeout
-    if (timestamp_to_tsc(time) <= time_get_tsc())
-        return 0;
-    spinlock_acquire(&wait_queue_lock);
-    // Insert process into wait queue
+// Insert current process into wait queue
+// Must be called with wait queue lock held.
+void wait_queue_insert_current_process(i64 time) {
     Process *p = wait_queue_start;
     for (; p != NULL && p->timeout <= time; p = p->next_process)
         ;
@@ -143,8 +140,38 @@ err_t syscall_process_wait(i64 time) {
             p->prev_process->next_process = cpu_local->current_process;
         p->prev_process = cpu_local->current_process;
     }
+    cpu_local->current_process->in_timeout_queue = true;
     cpu_local->current_process->timeout_scheduled = false;
     cpu_local->current_process->timeout = time;
+}
+
+// Remove process from wait queue
+// Returns true if process was in the queue.
+// Must be called with wait queue lock held.
+bool wait_queue_remove_process(Process *process) {
+    if (process->in_timeout_queue) {
+        if (process->prev_process == NULL)
+            wait_queue_start = process->next_process;
+        else
+            process->prev_process->next_process = process->next_process;
+        if (process->next_process == NULL)
+            wait_queue_end = process->prev_process;
+        else
+            process->next_process->prev_process = process->prev_process;
+        process->in_timeout_queue = false;
+        return true;
+    } else {
+        return false;
+    }
+}
+
+err_t syscall_process_wait(i64 time) {
+    // Early return if we're already past timeout
+    if (timestamp_to_tsc(time) <= time_get_tsc())
+        return 0;
+    spinlock_acquire(&wait_queue_lock);
+    // Insert into wait queue
+    wait_queue_insert_current_process(time);
     // Update interrupt timer and block until timeout
     update_interrupt_timer();
     process_block(&wait_queue_lock);
@@ -159,11 +186,15 @@ static void wait_queue_unblock(void) {
     // Remove and unblock all processes with timeout less than current time
     while (wait_queue_start != NULL && timestamp_to_tsc(wait_queue_start->timeout) <= time) {
         Process *next_process = wait_queue_start->next_process;
+        wait_queue_start->timed_out = true;
+        wait_queue_start->in_timeout_queue = false;
         process_enqueue(wait_queue_start);
         wait_queue_start = next_process;
+        if (next_process == NULL)
+            wait_queue_end = NULL;
+        else
+            next_process->prev_process = NULL;
     }
-    if (wait_queue_start == NULL)
-        wait_queue_end = NULL;
     // Update interrupt timer
     update_interrupt_timer();
     spinlock_release(&wait_queue_lock);

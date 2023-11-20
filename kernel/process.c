@@ -104,6 +104,7 @@ err_t process_create(Process **process_ptr, ResourceList resources) {
     // Intialize remaining fields
     process->running_time = 0;
     process->resources = resources;
+    process->in_timeout_queue = false;
     *process_ptr = process;
     return 0;
 fail_handle_list_init:
@@ -333,7 +334,7 @@ _Noreturn void process_spawn_kernel_thread_main(void) {
     while (1) {
         Message *message;
         // Get message from user process
-        mqueue_receive(process_spawn_mqueue, &message, false);
+        mqueue_receive(process_spawn_mqueue, &message, false, false, TIMEOUT_NONE);
         size_t message_offset = 0;
         if (message->data_size < sizeof(size_t)) {
             err = ERR_INVALID_ARG;

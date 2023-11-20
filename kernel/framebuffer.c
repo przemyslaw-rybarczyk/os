@@ -226,7 +226,7 @@ _Noreturn void framebuffer_kernel_thread_main(void) {
     while (1) {
         Message *message;
         // Get message from framebuffer meessage queue
-        mqueue_receive(framebuffer_mqueue, &message, false);
+        mqueue_receive(framebuffer_mqueue, &message, false, false, TIMEOUT_NONE);
         switch (message->tag.data[0]) {
         case FB_MQ_TAG_DATA: {
             // Check message size

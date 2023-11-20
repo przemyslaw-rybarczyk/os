@@ -22,6 +22,8 @@ typedef struct Process {
     ResourceList resources;
     i64 timeout;
     bool timeout_scheduled;
+    bool timed_out;
+    bool in_timeout_queue;
     struct Process *prev_process;
     struct Process *next_process;
 } Process;

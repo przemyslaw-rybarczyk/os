@@ -9,6 +9,7 @@
 #include "process.h"
 #include "spinlock.h"
 #include "string.h"
+#include "time.h"
 
 #define MESSAGE_QUEUE_MAX_LENGTH 16
 
@@ -16,6 +17,7 @@ typedef struct MessageQueue {
     spinlock_t lock;
     size_t refcount;
     bool closed;
+    bool waiting_for_timeout;
     Process *blocked_receiver;
     ProcessQueue blocked_senders;
     size_t length;
@@ -379,8 +381,22 @@ static err_t mqueue_send_(MessageQueue *queue, Message *message, bool nonblock) 
     }
     queue->length += 1;
     // If there is a receiver blocked waiting for a message, unblock it
-    if (queue->blocked_receiver != NULL)
-        process_enqueue(queue->blocked_receiver);
+    // Don't unblock if the process has already been unblocked by a timeout
+    if (queue->blocked_receiver != NULL) {
+        bool unblock;
+        if (queue->waiting_for_timeout) {
+            spinlock_acquire(&wait_queue_lock);
+            unblock = wait_queue_remove_process(queue->blocked_receiver);
+            spinlock_release(&wait_queue_lock);
+            queue->waiting_for_timeout = false;
+        } else {
+            unblock = true;
+        }
+        if (unblock) {
+            queue->blocked_receiver->timed_out = false;
+            process_enqueue(queue->blocked_receiver);
+        }
+    }
     queue->blocked_receiver = NULL;
     return 0;
 }
@@ -419,17 +435,45 @@ static err_t mqueue_call(MessageQueue *queue, Message *message, Message **reply)
 }
 
 // Receive a message from a queue
-err_t mqueue_receive(MessageQueue *queue, Message **message_ptr, bool nonblock) {
+err_t mqueue_receive(MessageQueue *queue, Message **message_ptr, bool nonblock, bool prioritize_timeout, i64 timeout) {
+    // If timeouts are prioritized, check for timeout first
+    if (prioritize_timeout && timeout != TIMEOUT_NONE && time_get() >= timeout)
+        return ERR_KERNEL_TIMEOUT;
     spinlock_acquire(&queue->lock);
-    // If there are no messages in the queue, block until a message arrives
+    // If there are no messages in the queue, block until either a message arrives or timeout occurs
     while (queue->start == NULL) {
         if (nonblock) {
+            // If nonblock flag is set, return early
             spinlock_release(&queue->lock);
             return ERR_KERNEL_MQUEUE_EMPTY;
         }
-        queue->blocked_receiver = cpu_local->current_process;
-        process_block(&queue->lock);
-        spinlock_acquire(&queue->lock);
+        if (timeout == TIMEOUT_NONE) {
+            // If there is no timeout, block until message is received
+            queue->blocked_receiver = cpu_local->current_process;
+            queue->waiting_for_timeout = false;
+            process_block(&queue->lock);
+            spinlock_acquire(&queue->lock);
+        } else {
+            // If there is a timeout and we're past it, return a timeout error
+            if (time_get() >= timeout) {
+                spinlock_release(&queue->lock);
+                return ERR_KERNEL_TIMEOUT;
+            }
+            // Add to timeout queue and wait for message at the same time
+            queue->blocked_receiver = cpu_local->current_process;
+            queue->waiting_for_timeout = true;
+            spinlock_acquire(&wait_queue_lock);
+            wait_queue_insert_current_process(timeout);
+            spinlock_release(&queue->lock);
+            process_block(&wait_queue_lock);
+            // After unblocking, check if the cause was a timeout and return an error if it was
+            spinlock_acquire(&queue->lock);
+            queue->waiting_for_timeout = false;
+            if (cpu_local->current_process->timed_out || (prioritize_timeout && time_get() >= timeout)) {
+                spinlock_release(&queue->lock);
+                return ERR_KERNEL_TIMEOUT;
+            }
+        }
     }
     // Remove a message from the queue
     *message_ptr = queue->start;
@@ -696,11 +740,11 @@ err_t syscall_channel_call(handle_t channel_i, const SendMessage *user_message, 
 }
 
 // Get a message from a channel
-err_t syscall_mqueue_receive(handle_t mqueue_i, MessageTag *tag_ptr, handle_t *message_i_ptr, u64 flags) {
+err_t syscall_mqueue_receive(handle_t mqueue_i, MessageTag *tag_ptr, handle_t *message_i_ptr, i64 timeout, u64 flags) {
     err_t err;
     Handle mqueue_handle;
     // Verify flags are valid
-    if (flags & ~FLAG_NONBLOCK)
+    if (flags & ~(FLAG_NONBLOCK | FLAG_PRIORITIZE_TIMEOUT))
         return ERR_KERNEL_INVALID_ARG;
     // Verify buffer is valid
     if (tag_ptr != NULL) {
@@ -719,7 +763,9 @@ err_t syscall_mqueue_receive(handle_t mqueue_i, MessageTag *tag_ptr, handle_t *m
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Receive a message
     Message *message;
-    mqueue_receive(mqueue_handle.mqueue, &message, (bool)(flags & FLAG_NONBLOCK));
+    err = mqueue_receive(mqueue_handle.mqueue, &message, (bool)(flags & FLAG_NONBLOCK), (bool)(flags & FLAG_PRIORITIZE_TIMEOUT), timeout);
+    if (err)
+        return err;
     // Return the tag
     if (tag_ptr != NULL)
         *tag_ptr = message->tag;
