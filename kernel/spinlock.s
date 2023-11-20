@@ -30,6 +30,7 @@ preempt_enable:
   cmp byte gs:[PerCPU.timer_interrupt_delayed], 0
   je .no_preempt
   sub qword gs:[PerCPU.preempt_disable], 1
+  mov byte gs:[PerCPU.timer_interrupt_delayed], 0
   call delayed_timer_interrupt_handle
   ret
   ; Otherwise just decrement the preempt disable counter
