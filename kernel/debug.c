@@ -1,5 +1,7 @@
 #include "debug.h"
 
+spinlock_t debug_print_lock;
+
 // Send byte to serial port COM1
 static void byte_to_com1(char c) {
     asm ("mov dx, 0x3F8; out dx, al" : : "a"(c) : "dx");

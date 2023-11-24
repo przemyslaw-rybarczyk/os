@@ -2,6 +2,10 @@
 
 #include "types.h"
 
+#include "spinlock.h"
+
+extern spinlock_t debug_print_lock;
+
 void debug_print_char(char c);
 void debug_print_string(const char *str);
 void debug_print_hex_u64(u64 n);
