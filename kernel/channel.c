@@ -469,6 +469,7 @@ err_t mqueue_receive(MessageQueue *queue, Message **message_ptr, bool nonblock, 
             // After unblocking, check if the cause was a timeout and return an error if it was
             spinlock_acquire(&queue->lock);
             queue->waiting_for_timeout = false;
+            queue->blocked_receiver = NULL;
             if (cpu_local->current_process->timed_out || (prioritize_timeout && time_get() >= timeout)) {
                 spinlock_release(&queue->lock);
                 return ERR_KERNEL_TIMEOUT;
