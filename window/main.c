@@ -409,6 +409,9 @@ static WindowContainer *get_pointed_at_window(ScreenPos *window_origin) {
     i32 origin_y = 0;
     i32 width = screen_size.width;
     i32 height = screen_size.height - STATUS_BAR_HEIGHT;
+    // Return NULL if cursor is outside of screen area
+    if (cursor.x < 0 || cursor.x >= width || cursor.y < 0 || cursor.y >= height)
+        return NULL;
     // Go down the container tree based on the cursor position until finding a window
     while (1) {
         switch (container->type) {
