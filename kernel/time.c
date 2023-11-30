@@ -179,8 +179,8 @@ err_t syscall_process_wait(i64 time) {
 }
 
 // Unblock any timed out processes from the wait queue
+// Must be called with wait queue lock held.
 static void wait_queue_unblock(void) {
-    spinlock_acquire(&wait_queue_lock);
     // Get current time
     u64 time = time_get_tsc();
     // Remove and unblock all processes with timeout less than current time
@@ -197,7 +197,6 @@ static void wait_queue_unblock(void) {
     }
     // Update interrupt timer
     update_interrupt_timer();
-    spinlock_release(&wait_queue_lock);
 }
 
 void apic_timer_irq_handler(void) {
@@ -206,28 +205,34 @@ void apic_timer_irq_handler(void) {
     // If it's not, this interrupt is a result of a race condition and we ignore it.
     if (!tsc_past_deadline())
         return;
+    // Reset TSC deadline to zero so that later timer interrupts are ignored until the deadline is reset
+    cpu_local->tsc_deadline = 0;
+    // Delay interrupt if locks are held
+    if (cpu_local->preempt_disable != 0 && !cpu_local->idle) {
+        cpu_local->timer_interrupt_delayed = true;
+        return;
+    }
+    spinlock_acquire(&wait_queue_lock);
     if (cpu_local->waiting_process == NULL) {
-        // Try to preempt the current process
-        // If preemption is disabled, mark the preemption as delayed
-        if (cpu_local->preempt_disable == 0)
+        spinlock_release(&wait_queue_lock);
+        // Preempt the current process if there is one
+        if (!cpu_local->idle)
             process_switch();
-        else
-            cpu_local->timer_interrupt_delayed = true;
     } else {
-        // Try to unblock processes from the wait queue
-        // If locks are held, mark the unblocking as delayed
-        if (cpu_local->idle || cpu_local->preempt_disable == 0)
-            wait_queue_unblock();
-        else
-            cpu_local->timer_interrupt_delayed = true;
+        // Unblock timed out processes from the wait queue
+        wait_queue_unblock();
+        spinlock_release(&wait_queue_lock);
     }
 }
 
 void delayed_timer_interrupt_handle(void) {
-    if (!tsc_past_deadline())
-        return;
-    if (cpu_local->waiting_process == NULL)
-        process_switch();
-    else
+    spinlock_acquire(&wait_queue_lock);
+    if (cpu_local->waiting_process == NULL) {
+        spinlock_release(&wait_queue_lock);
+        if (!cpu_local->idle)
+            process_switch();
+    } else {
         wait_queue_unblock();
+        spinlock_release(&wait_queue_lock);
+    }
 }
