@@ -46,6 +46,8 @@ typedef struct PerCPU {
     Process *waiting_process;
     // Last value the TSC deadline MSR was set to
     u64 tsc_deadline;
+    // The clock time at TSC equal to zero
+    u64 tsc_offset;
     // Used to form the list of idle CPU cores
     struct PerCPU *next_cpu;
 } PerCPU;

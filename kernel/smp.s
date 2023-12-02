@@ -14,7 +14,7 @@ extern cpu_num
 extern lapic
 
 extern pit_wait
-extern time_adjust_offset
+extern time_from_tsc
 
 LAPIC_ID_REGISTER equ 0x020
 LAPIC_EOI_REGISTER equ 0x0B0
@@ -55,6 +55,16 @@ cpu_initialized_num: resq 1
 
 ; Number of CPUs that have received the halt IPI
 cpu_halted_num: resq 1
+
+; Variables written to by the TSC during TSC synchronization
+; BSP's TSC offset
+sync_bsp_tsc_offset: resq 1
+; BSP's TSC value during synchronization
+sync_bsp_tsc_value: resq 1
+; Set to 1 after writing TSC offset and value
+sync_bsp_tsc_written: resb 1
+
+resb 3
 
 halt_ipi_lock: resd 1
 
@@ -100,7 +110,7 @@ smp_init:
   mov dword [rax + LAPIC_INTERRUPT_COMMAND_REGISTER_LOW], ICR_ALL_EXCLUDING_SELF | ICR_ASSERT | ICR_SIPI | SIPI_VECTOR
   ret
 
-; Synchronize all CPUs after initialization
+; Synchronize all CPUs after initialization and set their TSC offsets
 ; The argument is true if the current processor is the BSP and false otherwise.
 smp_init_sync:
   lock add qword [cpu_initialized_num], 1
@@ -108,15 +118,38 @@ smp_init_sync:
 .wait:
   cmp [cpu_initialized_num], rax
   jne .wait
+  ; Get TSC immediately after wait loop exits
+  ; It will be used to synchronize TSC timers between cores.
+  rdtsc
+  shl rdx, 32
+  or rax, rdx
   test dil, dil
   jz .not_bsp
-  call time_adjust_offset
+  ; The CPU is the BSP - the TSC offset is already known, so we write it along with the TSC value to the synchronization variables
+  mov rdx, gs:[PerCPU.tsc_offset]
+  mov [sync_bsp_tsc_offset], rdx
+  mov [sync_bsp_tsc_value], rax
+  mov byte [sync_bsp_tsc_written], 1
+  ret
 .not_bsp:
-  ; Synchronize TSC across cores
-  xor eax, eax
-  xor edx, edx
-  mov ecx, MSR_TSC
-  wrmsr
+  ; The CPU is an AP - wait for the BSP to write its TSC offset and value to the synchronization variables
+.wait_for_bsp_tsc_sync:
+  cmp byte [sync_bsp_tsc_written], 0
+  jz .wait_for_bsp_tsc_sync
+  ; Calculate the TSC offset as sync_bsp_tsc_offset + time_from_tsc(sync_bsp_tsc_value - [tsc value])
+  mov rdi, [sync_bsp_tsc_value]
+  sub rdi, rax
+  ; If difference is negative, negate before and after calling time_from_tsc(), since it takes unsigned values
+  js .sub_neg
+  call time_from_tsc
+  jmp .after_sub
+.sub_neg:
+  neg rdi
+  call time_from_tsc
+  neg rax
+.after_sub:
+  add rax, [sync_bsp_tsc_offset]
+  mov gs:[PerCPU.tsc_offset], rax
   ret
 
 ; Signify an EOI to the LAPIC

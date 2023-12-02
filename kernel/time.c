@@ -167,7 +167,10 @@ bool wait_queue_remove_process(Process *process) {
 
 err_t syscall_process_wait(i64 time) {
     // Early return if we're already past timeout
-    if (timestamp_to_tsc(time) <= time_get_tsc())
+    preempt_disable();
+    bool past_timeout = timestamp_to_tsc(time) <= time_get_tsc();
+    preempt_enable();
+    if (past_timeout)
         return 0;
     spinlock_acquire(&wait_queue_lock);
     // Insert into wait queue

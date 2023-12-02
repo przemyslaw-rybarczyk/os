@@ -15,5 +15,6 @@ struc PerCPU
   .timeslice_timeout: resq 1
   .waiting_process: resq 1
   .tsc_deadline: resq 1
+  .tsc_offset: resq 1
   .next_cpu: resq 1
 endstruc

@@ -5,7 +5,6 @@ global time_get_tsc
 global time_from_tsc
 global timestamp_to_tsc
 global time_get
-global time_adjust_offset
 global start_interrupt_timer
 global disable_interrupt_timer
 global tsc_past_deadline
@@ -13,6 +12,8 @@ global tsc_past_deadline
 extern pit_wait
 extern convert_time_from_rtc
 extern timeslice_length
+extern preempt_disable
+extern preempt_enable
 
 ; We wait for around 10 ms to calibrate the TSC
 TSC_CALIBRATE_PIT_CYCLES equ 11932
@@ -38,9 +39,6 @@ section .bss
 
 ; The number of TSC cycles in a calibration period
 tsc_frequency: resq 1
-
-; The clock time at TSC equal to zero
-tsc_offset: resq 1
 
 section .text
 
@@ -109,10 +107,13 @@ time_init:
   mov sil, al
   call convert_time_from_rtc
   ; Finally, subtract the current TSC value from the clock time to get the offset
-  mov rcx, rax
+  push rax
   call time_get_tsc
+  mov rdi, rax
+  call time_from_tsc
+  pop rcx
   sub rcx, rax
-  mov [tsc_offset], rcx
+  mov gs:[PerCPU.tsc_offset], rcx
   ret
 
 ; Return current TSC counter value
@@ -142,9 +143,10 @@ time_to_tsc:
 
 ; Convert timestamp to TSC tick count
 ; Out of range values are clamped to unsigned 64-bit range.
+; Must be called with preemption disabled to work correctly.
 timestamp_to_tsc:
   ; Subtract offset
-  sub rdi, [tsc_offset]
+  sub rdi, gs:[PerCPU.tsc_offset]
   ; Return 0 if result is negative
   jl .negative
   ; Multiply by tsc_frequency / TICKS_PER_TSC_CALIBRATION
@@ -165,20 +167,17 @@ timestamp_to_tsc:
 
 ; Return current time
 time_get:
+  call preempt_disable
   ; Read TSC
   call time_get_tsc
   mov rdi, rax
   ; Convert to ticks
   call time_from_tsc
   ; Add offset
-  add rax, [tsc_offset]
-  ret
-
-; Add current TSC value to TSC offset
-; Called before resetting TSC to zero.
-time_adjust_offset:
-  call time_get_tsc
-  add [tsc_offset], rax
+  push rax
+  call preempt_enable
+  pop rax
+  add rax, gs:[PerCPU.tsc_offset]
   ret
 
 ; Arm the local APIC timer with a given TSC deadline
