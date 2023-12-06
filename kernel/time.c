@@ -223,6 +223,7 @@ void apic_timer_irq_handler(void) {
             process_switch();
     } else {
         // Unblock timed out processes from the wait queue
+        cpu_local->waiting_process = NULL;
         wait_queue_unblock();
         spinlock_release(&wait_queue_lock);
     }
@@ -235,6 +236,7 @@ void delayed_timer_interrupt_handle(void) {
         if (!cpu_local->idle)
             process_switch();
     } else {
+        cpu_local->waiting_process = NULL;
         wait_queue_unblock();
         spinlock_release(&wait_queue_lock);
     }
