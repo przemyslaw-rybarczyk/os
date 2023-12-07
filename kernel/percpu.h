@@ -3,6 +3,8 @@
 #include "types.h"
 #include "error.h"
 
+#include "spinlock.h"
+
 typedef struct Process Process;
 typedef struct TSS TSS;
 
@@ -36,11 +38,15 @@ typedef struct PerCPU {
     // Is set if the CPU is currently idle and waiting for a process to execute.
     // Cleared by the wakeup IPI handler.
     bool idle;
-    // True if interrupt is set to occur at the end of timeslice
+    // True if interrupt will be set to occur at the end of timeslice
     // If false, the value of timeslice_timeout is invalid.
     bool timeslice_interrupt_enabled;
+    // True if next interrupt will signal timeout rather than end of timeslice
+    bool waiting_for_timeout;
     // TSC timestamp at which interrupt indicating end of timeslice should occur
     u64 timeslice_timeout;
+    // Lock for access to `waiting_process`
+    spinlock_t waiting_process_lock;
     // Waiting process that the next timer interrupt is set to wake up
     // Is NULL if there is no such process.
     Process *waiting_process;

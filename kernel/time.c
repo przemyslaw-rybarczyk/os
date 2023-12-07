@@ -75,29 +75,35 @@ static void update_interrupt_timer(void) {
     // Find first process that hasn't been scheduled yet on a different CPU
     Process *first_unscheduled_process = NULL;
     for (Process *p = wait_queue_start; p != NULL; p = p->next_process) {
-        if (!p->timeout_scheduled) {
+        if (p->timeout_cpu == NULL) {
             first_unscheduled_process = p;
             break;
         }
     }
     // Schedule first unscheduled process, timeslice timeout, or keep current process, wichever comes first
+    spinlock_acquire(&cpu_local->self->waiting_process_lock);
     if (first_unscheduled_process != NULL
             && (!cpu_local->timeslice_interrupt_enabled || timestamp_to_tsc(first_unscheduled_process->timeout) < cpu_local->timeslice_timeout)
             && (cpu_local->waiting_process == NULL || cpu_local->waiting_process->timeout > first_unscheduled_process->timeout)) {
         if (cpu_local->waiting_process != NULL)
-            cpu_local->waiting_process->timeout_scheduled = false;
-        first_unscheduled_process->timeout_scheduled = true;
+            cpu_local->waiting_process->timeout_cpu = NULL;
+        first_unscheduled_process->timeout_cpu = cpu_local->self;
         cpu_local->waiting_process = first_unscheduled_process;
+        cpu_local->waiting_for_timeout = true;
         start_interrupt_timer(timestamp_to_tsc(first_unscheduled_process->timeout));
     } else if (cpu_local->timeslice_interrupt_enabled
             && (cpu_local->waiting_process == NULL || timestamp_to_tsc(cpu_local->waiting_process->timeout) > cpu_local->timeslice_timeout)) {
         if (cpu_local->waiting_process != NULL)
-            cpu_local->waiting_process->timeout_scheduled = false;
+            cpu_local->waiting_process->timeout_cpu = NULL;
         cpu_local->waiting_process = NULL;
+        cpu_local->waiting_for_timeout = false;
         start_interrupt_timer(cpu_local->timeslice_timeout);
     } else if (cpu_local->waiting_process == NULL) {
+        cpu_local->waiting_process = NULL;
+        cpu_local->waiting_for_timeout = true;
         disable_interrupt_timer();
     }
+    spinlock_release(&cpu_local->self->waiting_process_lock);
 }
 
 void schedule_timeslice_interrupt(u64 time) {
@@ -141,7 +147,7 @@ void wait_queue_insert_current_process(i64 time) {
         p->prev_process = cpu_local->current_process;
     }
     cpu_local->current_process->in_timeout_queue = true;
-    cpu_local->current_process->timeout_scheduled = false;
+    cpu_local->current_process->timeout_cpu = NULL;
     cpu_local->current_process->timeout = time;
 }
 
@@ -159,6 +165,13 @@ bool wait_queue_remove_process(Process *process) {
         else
             process->next_process->prev_process = process->prev_process;
         process->in_timeout_queue = false;
+        if (process->timeout_cpu != NULL) {
+            spinlock_acquire(&process->timeout_cpu->waiting_process_lock);
+            process->timeout_cpu->waiting_process = NULL;
+            process->timeout_cpu->tsc_deadline = 0;
+            spinlock_release(&process->timeout_cpu->waiting_process_lock);
+            process->timeout_cpu = NULL;
+        }
         return true;
     } else {
         return false;
@@ -216,28 +229,41 @@ void apic_timer_irq_handler(void) {
         return;
     }
     spinlock_acquire(&wait_queue_lock);
-    if (cpu_local->waiting_process == NULL) {
+    spinlock_acquire(&cpu_local->self->waiting_process_lock);
+    if (!cpu_local->waiting_for_timeout) {
+        spinlock_release(&cpu_local->self->waiting_process_lock);
         spinlock_release(&wait_queue_lock);
         // Preempt the current process if there is one
         if (!cpu_local->idle)
             process_switch();
-    } else {
+    } else if (cpu_local->waiting_process != NULL) {
+        cpu_local->waiting_process = NULL;
+        spinlock_release(&cpu_local->self->waiting_process_lock);
         // Unblock timed out processes from the wait queue
         cpu_local->waiting_process = NULL;
         wait_queue_unblock();
+        spinlock_release(&wait_queue_lock);
+    } else {
+        spinlock_release(&cpu_local->self->waiting_process_lock);
         spinlock_release(&wait_queue_lock);
     }
 }
 
 void delayed_timer_interrupt_handle(void) {
     spinlock_acquire(&wait_queue_lock);
-    if (cpu_local->waiting_process == NULL) {
+    spinlock_acquire(&cpu_local->self->waiting_process_lock);
+    if (!cpu_local->waiting_for_timeout) {
+        spinlock_release(&cpu_local->self->waiting_process_lock);
         spinlock_release(&wait_queue_lock);
         if (!cpu_local->idle)
             process_switch();
-    } else {
+    } else if (cpu_local->waiting_process != NULL) {
         cpu_local->waiting_process = NULL;
+        spinlock_release(&cpu_local->self->waiting_process_lock);
         wait_queue_unblock();
+        spinlock_release(&wait_queue_lock);
+    } else {
+        spinlock_release(&cpu_local->self->waiting_process_lock);
         spinlock_release(&wait_queue_lock);
     }
 }

@@ -105,6 +105,7 @@ err_t process_create(Process **process_ptr, ResourceList resources) {
     process->running_time = 0;
     process->resources = resources;
     process->in_timeout_queue = false;
+    process->timeout_cpu = NULL;
     *process_ptr = process;
     return 0;
 fail_handle_list_init:

@@ -4,6 +4,7 @@
 #include "error.h"
 
 #include "handle.h"
+#include "percpu.h"
 #include "spinlock.h"
 #include "resource.h"
 
@@ -21,7 +22,7 @@ typedef struct Process {
     HandleList handles;
     ResourceList resources;
     i64 timeout;
-    bool timeout_scheduled;
+    PerCPU *timeout_cpu;
     bool timed_out;
     bool in_timeout_queue;
     struct Process *prev_process;

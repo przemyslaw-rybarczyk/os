@@ -11,8 +11,10 @@ struc PerCPU
   .timer_interrupt_delayed: resb 1
   .idle: resb 1
   .timeslice_interrupt_enabled: resb 1
-    resb 1
+  .waiting_for_timeout: resb 1
   .timeslice_timeout: resq 1
+  .waiting_process_lock: resd 1
+    resd 1
   .waiting_process: resq 1
   .tsc_deadline: resq 1
   .tsc_offset: resq 1
