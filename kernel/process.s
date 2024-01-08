@@ -24,6 +24,7 @@ extern page_free
 extern free
 extern stack_free
 extern idle_page_map
+extern message_alloc_copy
 extern message_reply
 extern message_reply_error
 extern message_free
@@ -343,10 +344,15 @@ process_start:
   test rax, rax
   jnz .fail
   ; Send empty reply to message and free it
-  mov rdi, [rsp + 8]
-  test rdi, rdi
+  cmp qword [rsp + 8], 0
   jz .no_message
+  xor rdi, rdi
   xor rsi, rsi
+  call message_alloc_copy
+  test rax, rax
+  jz .fail
+  mov rsi, rax
+  mov rdi, [rsp + 8]
   call message_reply
   mov rdi, [rsp + 8]
   call message_free
