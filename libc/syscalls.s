@@ -19,6 +19,7 @@ global time_get
 global message_resource_read
 global process_time_get
 global process_wait
+global channel_call_async
 
 ; This file implements the C interface for system calls
 
@@ -129,5 +130,11 @@ process_time_get:
 
 process_wait:
   mov rax, 20
+  syscall
+  ret
+
+channel_call_async:
+  mov rax, 21
+  mov r10, rcx
   syscall
   ret

@@ -104,13 +104,15 @@ Message *message_alloc_copy(size_t data_size, const void *data) {
 }
 
 // Create a message from a user-provided message specification
-static err_t message_alloc_user(const SendMessage *user_message, Message **message_ptr) {
+static err_t message_alloc_user(const SendMessage *user_message, Message **message_ptr, Message *message) {
     err_t err;
     // If the user message is NULL, allocate an empty message
     if (user_message == NULL) {
-        Message *message = malloc(sizeof(Message));
-        if (message == NULL)
-            return ERR_KERNEL_NO_MEMORY;
+        if (message == NULL) {
+            message = malloc(sizeof(Message));
+            if (message == NULL)
+                return ERR_KERNEL_NO_MEMORY;
+        }
         memset(message, 0, sizeof(Message));
         *message_ptr = message;
         return 0;
@@ -133,11 +135,15 @@ static err_t message_alloc_user(const SendMessage *user_message, Message **messa
         return ERR_KERNEL_NO_MEMORY;
     }
     // Allocate the message
-    Message *message = malloc(sizeof(Message));
+    bool message_allocated = false;
     if (message == NULL) {
-        free(handles);
-        free(data);
-        return ERR_KERNEL_NO_MEMORY;
+        message_allocated = true;
+        message = malloc(sizeof(Message));
+        if (message == NULL) {
+            free(handles);
+            free(data);
+            return ERR_KERNEL_NO_MEMORY;
+        }
     }
     memset(message, 0, sizeof(Message));
     message->data_size = data_length;
@@ -167,7 +173,8 @@ static err_t message_alloc_user(const SendMessage *user_message, Message **messa
             }
             continue;
 fail:
-            free(message);
+            if (message_allocated)
+                free(message);
             free(handles);
             free(data);
             return err;
@@ -270,8 +277,14 @@ void message_free(Message *message) {
     free(message->data);
     for (size_t i = 0; i < message->handles_size; i++)
         attached_handle_free(message->handles[i]);
+    if (message->async_reply) {
+        mqueue_del_ref(message->mqueue);
+        free(message->reply_template);
+    }
     free(message);
 }
+
+static err_t mqueue_send(MessageQueue *queue, Message *message, bool nonblock);
 
 // Reply to a message
 err_t message_reply(Message *message, Message *reply) {
@@ -280,19 +293,31 @@ err_t message_reply(Message *message, Message *reply) {
         return ERR_KERNEL_MESSAGE_ALREADY_REPLIED_TO;
     // Mark message as replied to
     message->replied_to = true;
-    // Set the reply error code to 0 (success)
-    if (message->reply_error != NULL)
-        *(message->reply_error) = 0;
-    // Set the reply if one is wanted
-    // Otherwise, free the reply since it's no longer needed
-    if (message->reply != NULL)
-        *(message->reply) = reply;
-    else
-        message_free(reply);
-    // If there is a sender blocked waiting for a reply, unblock it
-    if (message->blocked_sender != NULL)
-        process_enqueue(message->blocked_sender);
-    message->blocked_sender = NULL;
+    // Branch depending on whether message is bound to a queue
+    if (message->async_reply) {
+        // Set reply fields
+        reply->tag = message->reply_tag;
+        reply->is_reply = true;
+        // Send message to queue
+        mqueue_send(message->mqueue, reply, false);
+        // Remove queue reference
+        message->async_reply = false;
+        mqueue_del_ref(message->mqueue);
+    } else {
+        // Set the reply error code to 0 (success)
+        if (message->reply_error != NULL)
+            *(message->reply_error) = 0;
+        // Set the reply if one is wanted
+        // Otherwise, free the reply since it's no longer needed
+        if (message->reply != NULL)
+            *(message->reply) = reply;
+        else
+            message_free(reply);
+        // If there is a sender blocked waiting for a reply, unblock it
+        if (message->blocked_sender != NULL)
+            process_enqueue(message->blocked_sender);
+        message->blocked_sender = NULL;
+    }
     return 0;
 }
 
@@ -303,13 +328,28 @@ err_t message_reply_error(Message *message, err_t error) {
         return ERR_KERNEL_MESSAGE_ALREADY_REPLIED_TO;
     // Mark message as replied to
     message->replied_to = true;
-    // Set the reply error code if one is wanted
-    if (message->reply_error != NULL)
-        *(message->reply_error) = error;
-    // If there is a sender blocked waiting for a reply, unblock it
-    if (message->blocked_sender != NULL)
-        process_enqueue(message->blocked_sender);
-    message->blocked_sender = NULL;
+    if (message->async_reply) {
+        // Create reply
+        Message *reply = message->reply_template;
+        memset(reply, 0, sizeof(Message));
+        // Set tag and error code
+        reply->tag = message->reply_tag;
+        reply->error_code = error;
+        reply->is_reply = true;
+        // Send message to queue
+        mqueue_send(message->mqueue, reply, false);
+        // Remove queue reference
+        message->async_reply = false;
+        mqueue_del_ref(message->mqueue);
+    } else {
+        // Set the reply error code if one is wanted
+        if (message->reply_error != NULL)
+            *(message->reply_error) = error;
+        // If there is a sender blocked waiting for a reply, unblock it
+        if (message->blocked_sender != NULL)
+            process_enqueue(message->blocked_sender);
+        message->blocked_sender = NULL;
+    }
     return 0;
 }
 
@@ -360,12 +400,16 @@ void mqueue_close(MessageQueue *queue) {
 // Send a message to a message queue - assumes the queue lock is already held
 static err_t mqueue_send_(MessageQueue *queue, Message *message, bool nonblock) {
     // Fail if queue is closed
-    if (queue->closed)
+    if (queue->closed) {
+        message_free(message);
         return ERR_KERNEL_CHANNEL_CLOSED;
+    }
     // If the queue is full, block until there is space
-    while (queue->length >= MESSAGE_QUEUE_MAX_LENGTH) {
-        if (nonblock)
+    while (!message->is_reply && queue->length >= MESSAGE_QUEUE_MAX_LENGTH) {
+        if (nonblock) {
+            message_free(message);
             return ERR_KERNEL_MQUEUE_FULL;
+        }
         process_queue_add(&queue->blocked_senders, cpu_local->current_process);
         process_block(&queue->lock);
         spinlock_acquire(&queue->lock);
@@ -379,7 +423,8 @@ static err_t mqueue_send_(MessageQueue *queue, Message *message, bool nonblock) 
         queue->end->next_message = message;
         queue->end = message;
     }
-    queue->length += 1;
+    if (!message->is_reply)
+        queue->length += 1;
     // If there is a receiver blocked waiting for a message, unblock it
     // Don't unblock if the process has already been unblocked by a timeout
     if (queue->blocked_receiver != NULL) {
@@ -477,9 +522,13 @@ err_t mqueue_receive(MessageQueue *queue, Message **message_ptr, bool nonblock, 
         }
     }
     // Remove a message from the queue
-    *message_ptr = queue->start;
+    Message *message = queue->start;
     queue->start = queue->start->next_message;
-    queue->length -= 1;
+    if (message->error_code)
+        return message->error_code;
+    *message_ptr = message;
+    if (!message->is_reply)
+        queue->length -= 1;
     // If there is a blocked sender, unblock it
     Process *blocked_sender = process_queue_remove(&queue->blocked_senders);
     if (blocked_sender != NULL)
@@ -573,8 +622,10 @@ err_t channel_send(Channel *channel, Message *message, bool nonblock) {
     err_t err;
     MessageQueue *queue;
     err = channel_prepare_for_send(channel, message, &queue, nonblock);
-    if (err)
+    if (err) {
+        message_free(message);
         return err;
+    }
     return mqueue_send(queue, message, nonblock);
 }
 
@@ -583,9 +634,32 @@ err_t channel_call(Channel *channel, Message *message, Message **reply) {
     err_t err;
     MessageQueue *queue;
     err = channel_prepare_for_send(channel, message, &queue, false);
-    if (err)
+    if (err) {
+        message_free(message);
         return err;
+    }
     return mqueue_call(queue, message, reply);
+}
+
+// Set message to expect an async reply and send it on a channel
+err_t channel_call_async(Channel *channel, Message *message, MessageQueue *mqueue, MessageTag tag) {
+    err_t err;
+    MessageQueue *queue;
+    err = channel_prepare_for_send(channel, message, &queue, false);
+    if (err) {
+        message_free(message);
+        return err;
+    }
+    message->reply_template = malloc(sizeof(Message));
+    if (message->reply_template == NULL) {
+        message_free(message);
+        return ERR_KERNEL_NO_MEMORY;
+    }
+    message->async_reply = true;
+    message->reply_tag = tag;
+    mqueue_add_ref(mqueue);
+    message->mqueue = mqueue;
+    return mqueue_send(queue, message, false);
 }
 
 // Returns the length of the message
@@ -692,7 +766,7 @@ err_t syscall_channel_send(handle_t channel_i, const SendMessage *user_message, 
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Create a message
     Message *message;
-    err = message_alloc_user(user_message, &message);
+    err = message_alloc_user(user_message, &message, NULL);
     if (err)
         return err;
     // Send the message
@@ -723,7 +797,7 @@ err_t syscall_channel_call(handle_t channel_i, const SendMessage *user_message, 
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Create a message
     Message *message;
-    err = message_alloc_user(user_message, &message);
+    err = message_alloc_user(user_message, &message, NULL);
     if (err)
         return err;
     // Send the message
@@ -796,7 +870,10 @@ err_t syscall_message_reply(handle_t message_i, const SendMessage *user_reply, u
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Create a reply
     Message *reply;
-    err = message_alloc_user(user_reply, &reply);
+    if (message_handle.message->async_reply)
+        err = message_alloc_user(user_reply, &reply, message_handle.message->reply_template);
+    else
+        err = message_alloc_user(user_reply, &reply, NULL);
     if (!err)
         // Send the reply
         err = message_reply(message_handle.message, reply);
@@ -854,7 +931,7 @@ err_t syscall_channel_call_read(handle_t channel_i, const SendMessage *user_mess
         return ERR_KERNEL_WRONG_HANDLE_TYPE;
     // Create a message
     Message *message;
-    err = message_alloc_user(user_message, &message);
+    err = message_alloc_user(user_message, &message, NULL);
     if (err)
         return err;
     // Send the message
@@ -958,5 +1035,37 @@ err_t syscall_channel_create(handle_t *channel_send_i_ptr, handle_t *channel_rec
     }
     handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_CHANNEL_SEND, {.channel = channel}}, channel_send_i_ptr);
     handle_add(&cpu_local->current_process->handles, (Handle){HANDLE_TYPE_CHANNEL_RECEIVE, {.channel = channel}}, channel_receive_i_ptr);
+    return 0;
+}
+
+err_t syscall_channel_call_async(handle_t channel_i, const SendMessage *user_message, handle_t mqueue_i, MessageTag tag) {
+    err_t err;
+    // Verify buffers are valid
+    err = verify_user_send_message(user_message);
+    if (err)
+        return err;
+    // Get the handles
+    Handle channel_handle;
+    Handle mqueue_handle;
+    err = handle_get(&cpu_local->current_process->handles, channel_i, &channel_handle);
+    if (err)
+        return err;
+    err = handle_get(&cpu_local->current_process->handles, mqueue_i, &mqueue_handle);
+    if (err)
+        return err;
+    // Check handle types
+    if (channel_handle.type != HANDLE_TYPE_CHANNEL_SEND)
+        return ERR_KERNEL_WRONG_HANDLE_TYPE;
+    if (mqueue_handle.type != HANDLE_TYPE_MESSAGE_QUEUE)
+        return ERR_KERNEL_WRONG_HANDLE_TYPE;
+    // Create a message
+    Message *message;
+    err = message_alloc_user(user_message, &message, NULL);
+    if (err)
+        return err;
+    // Send the message
+    err = channel_call_async(channel_handle.channel, message, mqueue_handle.mqueue, tag);
+    if (err)
+        return err;
     return 0;
 }

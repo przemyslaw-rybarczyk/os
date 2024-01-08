@@ -113,5 +113,6 @@ void time_get(i64 *time_ptr);
 err_t message_resource_read(const ResourceName *name, size_t data_length, void *data, size_t min_data_length, u64 flags);
 void process_time_get(i64 *time_ptr);
 void process_wait(i64 time);
+err_t channel_call_async(handle_t channel_i, const SendMessage *message, handle_t mqueue_i, MessageTag tag);
 
 #endif

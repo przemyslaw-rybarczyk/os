@@ -18,14 +18,26 @@ typedef struct AttachedHandle {
 
 typedef struct Message {
     MessageTag tag;
+    err_t error_code;
     size_t data_size;
     void *data;
     size_t handles_size;
     AttachedHandle *handles;
-    err_t *reply_error;
-    struct Message **reply;
-    Process *blocked_sender;
     bool replied_to;
+    bool is_reply;
+    bool async_reply;
+    union {
+        struct {
+            MessageQueue *mqueue;
+            MessageTag reply_tag;
+            struct Message *reply_template;
+        };
+        struct {
+            err_t *reply_error;
+            struct Message **reply;
+            Process *blocked_sender;
+        };
+    };
     struct Message *next_message;
 } Message;
 
@@ -48,6 +60,7 @@ void channel_close(Channel *channel);
 err_t channel_set_mqueue(Channel *channel, MessageQueue *mqueue, MessageTag tag);
 err_t channel_send(Channel *channel, Message *message, bool nonblock);
 err_t channel_call(Channel *channel, Message *message, Message **reply);
+err_t channel_call_async(Channel *channel, Message *message, MessageQueue *mqueue, MessageTag tag);
 
 err_t syscall_message_get_length(handle_t i, MessageLength *length);
 err_t syscall_message_read(handle_t i, ReceiveMessage *user_message, const MessageLength *offset, const MessageLength *min_length, err_t reply_error, u64 flags);
@@ -61,3 +74,4 @@ err_t syscall_channel_call_read(handle_t channel_i, const SendMessage *user_mess
 err_t syscall_mqueue_create(handle_t *handle_i_ptr);
 err_t syscall_mqueue_add_channel(handle_t mqueue_i, handle_t channel_i, MessageTag tag);
 err_t syscall_channel_create(handle_t *channel_send_i_ptr, handle_t *channel_receive_i_ptr);
+err_t syscall_channel_call_async(handle_t channel_i, const SendMessage *user_message, handle_t mqueue_i, MessageTag tag);
