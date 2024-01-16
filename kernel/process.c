@@ -172,17 +172,11 @@ void process_enqueue(Process *process) {
 // Set up the initial processes
 err_t process_setup(void) {
     err_t err;
-    framebuffer_mqueue = mqueue_alloc();
-    if (framebuffer_mqueue == NULL)
-        return ERR_KERNEL_NO_MEMORY;
     process_spawn_mqueue = mqueue_alloc();
     if (process_spawn_mqueue == NULL)
         return ERR_KERNEL_NO_MEMORY;
-    framebuffer_data_channel = channel_alloc();
-    if (framebuffer_data_channel == NULL)
-        return ERR_KERNEL_NO_MEMORY;
-    framebuffer_size_channel = channel_alloc();
-    if (framebuffer_size_channel == NULL)
+    framebuffer_redraw_channel = channel_alloc();
+    if (framebuffer_redraw_channel == NULL)
         return ERR_KERNEL_NO_MEMORY;
     keyboard_key_channel = channel_alloc();
     if (keyboard_key_channel == NULL)
@@ -199,8 +193,6 @@ err_t process_setup(void) {
     process_spawn_channel = channel_alloc();
     if (process_spawn_channel == NULL)
         return ERR_KERNEL_NO_MEMORY;
-    channel_set_mqueue(framebuffer_data_channel, framebuffer_mqueue, (MessageTag){FB_MQ_TAG_DATA, 0});
-    channel_set_mqueue(framebuffer_size_channel, framebuffer_mqueue, (MessageTag){FB_MQ_TAG_SIZE, 0});
     channel_set_mqueue(process_spawn_channel, process_spawn_mqueue, (MessageTag){0, 0});
     Process *framebuffer_kernel_thread;
     err = process_create(&framebuffer_kernel_thread, (ResourceList){0, NULL});
@@ -211,8 +203,7 @@ err_t process_setup(void) {
         return err;
     process_set_kernel_stack(framebuffer_kernel_thread, framebuffer_kernel_thread_main);
     process_set_kernel_stack(process_spawn_kernel_thread, process_spawn_kernel_thread_main);
-    channel_add_ref(framebuffer_size_channel);
-    channel_add_ref(framebuffer_data_channel);
+    channel_add_ref(framebuffer_redraw_channel);
     channel_add_ref(keyboard_key_channel);
     channel_add_ref(mouse_button_channel);
     channel_add_ref(mouse_move_channel);
@@ -223,34 +214,30 @@ err_t process_setup(void) {
     if (init_resources == NULL)
         return ERR_KERNEL_NO_MEMORY;
     init_resources[0] = (ResourceListEntry){
-        resource_name("video/size"), {
-            RESOURCE_TYPE_CHANNEL_SEND,
-            {.channel = framebuffer_size_channel}}};
+        resource_name("video/redraw"), {
+            RESOURCE_TYPE_CHANNEL_RECEIVE,
+            {.channel = framebuffer_redraw_channel}}};
     init_resources[1] = (ResourceListEntry){
-        resource_name("video/data"), {
-            RESOURCE_TYPE_CHANNEL_SEND,
-            {.channel = framebuffer_data_channel}}};
-    init_resources[2] = (ResourceListEntry){
         resource_name("keyboard/key"), {
             RESOURCE_TYPE_CHANNEL_RECEIVE,
             {.channel = keyboard_key_channel}}};
-    init_resources[3] = (ResourceListEntry){
+    init_resources[2] = (ResourceListEntry){
         resource_name("mouse/button"), {
             RESOURCE_TYPE_CHANNEL_RECEIVE,
             {.channel = mouse_button_channel}}};
-    init_resources[4] = (ResourceListEntry){
+    init_resources[3] = (ResourceListEntry){
         resource_name("mouse/move"), {
             RESOURCE_TYPE_CHANNEL_RECEIVE,
             {.channel = mouse_move_channel}}};
-    init_resources[5] = (ResourceListEntry){
+    init_resources[4] = (ResourceListEntry){
         resource_name("mouse/scroll"), {
             RESOURCE_TYPE_CHANNEL_RECEIVE,
             {.channel = mouse_scroll_channel}}};
-    init_resources[6] = (ResourceListEntry){
+    init_resources[5] = (ResourceListEntry){
         resource_name("process/spawn"), {
             RESOURCE_TYPE_CHANNEL_SEND,
             {.channel = process_spawn_channel}}};
-    err = process_create(&init_process, (ResourceList){7, init_resources});
+    err = process_create(&init_process, (ResourceList){6, init_resources});
     if (err)
         return err;
     process_set_user_stack(init_process, included_file_window, included_file_window_end - included_file_window, NULL);

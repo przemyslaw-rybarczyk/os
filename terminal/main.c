@@ -17,7 +17,7 @@
 
 typedef enum EventSource : uintptr_t {
     EVENT_KEYBOARD,
-    EVENT_RESIZE,
+    EVENT_REDRAW,
     EVENT_STDOUT,
     EVENT_STDERR,
     EVENT_STDIN,
@@ -26,7 +26,7 @@ typedef enum EventSource : uintptr_t {
 // Screen buffer
 static u8 *screen;
 static size_t screen_capacity;
-static ScreenSize screen_size;
+static ScreenSize screen_size = {0, 0};
 
 typedef enum TextColor : u8 {
     TEXT_COLOR_STDOUT,
@@ -63,8 +63,6 @@ u8 output_read_buffer[OUTPUT_READ_BUFFER_SIZE];
 // Current cursor position
 static u32 cursor_x = 0;
 static u32 cursor_y = 0;
-
-static handle_t video_data_channel;
 
 // Tells whether the program in currently awaiting input
 bool waiting_for_stdin = false;
@@ -223,7 +221,14 @@ static void reshape_text(void) {
     }
 }
 
-static void draw_screen(void) {
+static bool screen_changed = true;
+
+static void redraw_screen(handle_t msg) {
+    if (!screen_changed) {
+        message_reply(msg, NULL, FLAG_FREE_MESSAGE);
+        return;
+    }
+    screen_changed = false;
     size_t screen_bytes = screen_size.height * screen_size.width * 3;
     // Fill screen with background color
     for (u32 y = 0; y < screen_size.height; y++) {
@@ -278,7 +283,7 @@ static void draw_screen(void) {
         }
     }
     // Send screen buffer
-    channel_send(video_data_channel, &(SendMessage){2, (SendMessageData[]){{sizeof(ScreenSize), &screen_size}, {screen_bytes, screen}}, 0, NULL}, FLAG_NONBLOCK);
+    message_reply(msg, &(SendMessage){2, (SendMessageData[]){{sizeof(ScreenSize), &screen_size}, {screen_bytes, screen}}, 0, NULL}, FLAG_FREE_MESSAGE);
 }
 
 typedef enum ModKeys : u32 {
@@ -288,24 +293,14 @@ typedef enum ModKeys : u32 {
 
 void main(void) {
     err_t err;
-    handle_t video_size_channel;
-    err = resource_get(&resource_name("video/size"), RESOURCE_TYPE_CHANNEL_SEND, &video_size_channel);
-    if (err)
-        return;
-    err = resource_get(&resource_name("video/data"), RESOURCE_TYPE_CHANNEL_SEND, &video_data_channel);
-    if (err)
-        return;
-    err = channel_call_read(video_size_channel, NULL, &(ReceiveMessage){sizeof(ScreenSize), &screen_size, 0, NULL}, NULL);
-    if (err)
-        return;
     handle_t event_mqueue;
     err = mqueue_create(&event_mqueue);
     if (err)
         return;
-    err = mqueue_add_channel_resource(event_mqueue, &resource_name("keyboard/key"), (MessageTag){EVENT_KEYBOARD, 0});
+    err = mqueue_add_channel_resource(event_mqueue, &resource_name("video/redraw"), (MessageTag){EVENT_REDRAW, 0});
     if (err)
         return;
-    err = mqueue_add_channel_resource(event_mqueue, &resource_name("video/resize"), (MessageTag){EVENT_RESIZE, 0});
+    err = mqueue_add_channel_resource(event_mqueue, &resource_name("keyboard/key"), (MessageTag){EVENT_KEYBOARD, 0});
     if (err)
         return;
     err = mqueue_add_channel_resource(event_mqueue, &resource_name("text/stdout_r"), (MessageTag){EVENT_STDOUT, 0});
@@ -333,7 +328,6 @@ void main(void) {
     input_buffer = malloc(input_buffer_capacity);
     if (screen == NULL)
         return;
-    draw_screen();
     ModKeys mod_keys_held = 0;
     while (1) {
         MessageTag tag;
@@ -370,56 +364,62 @@ void main(void) {
                 u8 c = keycode_char(key_event.keycode, (mod_keys_held & (MOD_KEY_LEFT_SHIFT | MOD_KEY_RIGHT_SHIFT)));
                 if (c == '\b') {
                     remove_last_input_char();
-                    draw_screen();
+                    screen_changed = true;
                 } else if (c != 0) {
                     err = add_to_input_buffer(c);
                     if (!err) {
                         print_char(c, TEXT_COLOR_STDIN);
-                        draw_screen();
+                        screen_changed = true;
                     }
                 }
             }
             break;
         }
-        case EVENT_RESIZE: {
+        case EVENT_REDRAW: {
+            // Read screen size
             ScreenSize new_screen_size;
-            err = message_read(msg, &(ReceiveMessage){sizeof(ScreenSize), &new_screen_size, 0, NULL}, NULL, NULL, 0, FLAG_FREE_MESSAGE);
+            err = message_read(msg, &(ReceiveMessage){sizeof(ScreenSize), &new_screen_size, 0, NULL}, NULL, NULL, 0, 0);
             if (err)
                 continue;
-            // Resize text buffer
-            if (text_buffer_capacity < (screen_size.width / FONT_WIDTH + 1) * (screen_size.height / FONT_HEIGHT)) {
-                size_t new_text_buffer_capacity = text_buffer_capacity;
-                while (new_text_buffer_capacity < (screen_size.width / FONT_WIDTH + 1) * (screen_size.height / FONT_HEIGHT))
-                    new_text_buffer_capacity *= 2;
-                TextCharacter *new_text_buffer = realloc(text_buffer, new_text_buffer_capacity * sizeof(TextCharacter));
-                if (new_text_buffer == NULL)
-                    continue;
-                text_buffer = new_text_buffer;
-                // Move final part of circular buffer if necessary
-                if (text_buffer_offset + text_buffer_size > text_buffer_capacity) {
-                    memmove(
-                        text_buffer + (text_buffer_offset + new_text_buffer_capacity - text_buffer_capacity) * sizeof(TextCharacter),
-                        text_buffer + text_buffer_offset * sizeof(TextCharacter),
-                        (text_buffer_capacity - text_buffer_offset) * sizeof(TextCharacter));
-                    text_buffer_offset += new_text_buffer_capacity - text_buffer_capacity;
+            // Resize if there was a change
+            if (new_screen_size.width != screen_size.width || new_screen_size.height != screen_size.height) {
+                // Resize text buffer
+                if (text_buffer_capacity < (screen_size.width / FONT_WIDTH + 1) * (screen_size.height / FONT_HEIGHT)) {
+                    size_t new_text_buffer_capacity = text_buffer_capacity;
+                    while (new_text_buffer_capacity < (screen_size.width / FONT_WIDTH + 1) * (screen_size.height / FONT_HEIGHT))
+                        new_text_buffer_capacity *= 2;
+                    TextCharacter *new_text_buffer = realloc(text_buffer, new_text_buffer_capacity * sizeof(TextCharacter));
+                    if (new_text_buffer == NULL)
+                        continue;
+                    text_buffer = new_text_buffer;
+                    // Move final part of circular buffer if necessary
+                    if (text_buffer_offset + text_buffer_size > text_buffer_capacity) {
+                        memmove(
+                            text_buffer + (text_buffer_offset + new_text_buffer_capacity - text_buffer_capacity) * sizeof(TextCharacter),
+                            text_buffer + text_buffer_offset * sizeof(TextCharacter),
+                            (text_buffer_capacity - text_buffer_offset) * sizeof(TextCharacter));
+                        text_buffer_offset += new_text_buffer_capacity - text_buffer_capacity;
+                    }
+                    text_buffer_capacity = new_text_buffer_capacity;
                 }
-                text_buffer_capacity = new_text_buffer_capacity;
+                // Resize screen buffer
+                if (new_screen_size.height * new_screen_size.width * 3 > screen_capacity) {
+                    size_t new_screen_capacity = screen_capacity;
+                    while (new_screen_size.height * new_screen_size.width * 3 > new_screen_capacity)
+                        new_screen_capacity *= 2;
+                    u8 *new_screen = realloc(screen, new_screen_capacity);
+                    if (new_screen == NULL)
+                        continue;
+                    screen = new_screen;
+                    screen_capacity = new_screen_capacity;
+                }
+                // Update screen size and adjust text
+                screen_size = new_screen_size;
+                reshape_text();
+                screen_changed = true;
             }
-            // Resize screen buffer
-            if (new_screen_size.height * new_screen_size.width * 3 > screen_capacity) {
-                size_t new_screen_capacity = screen_capacity;
-                while (new_screen_size.height * new_screen_size.width * 3 > new_screen_capacity)
-                    new_screen_capacity *= 2;
-                u8 *new_screen = realloc(screen, new_screen_capacity);
-                if (new_screen == NULL)
-                    continue;
-                screen = new_screen;
-                screen_capacity = new_screen_capacity;
-            }
-            // Update screen size and adjust text
-            screen_size = new_screen_size;
-            reshape_text();
-            draw_screen();
+            // Redraw screen
+            redraw_screen(msg);
             break;
         }
         case EVENT_STDOUT:
@@ -441,7 +441,7 @@ void main(void) {
                     print_char(output_read_buffer[j], event_source == EVENT_STDERR ? TEXT_COLOR_STDERR : TEXT_COLOR_STDOUT);
             }
             message_reply(msg, NULL, FLAG_FREE_MESSAGE);
-            draw_screen();
+            screen_changed = true;
             break;
         case EVENT_STDIN:
             if (waiting_for_stdin) {
@@ -459,7 +459,7 @@ void main(void) {
                 waiting_for_stdin = true;
                 current_stdin_msg = msg;
             }
-            draw_screen();
+            screen_changed = true;
             break;
         }
     }

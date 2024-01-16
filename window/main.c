@@ -49,11 +49,10 @@ typedef enum EventSource : uintptr_t {
     EVENT_MOUSE_BUTTON,
     EVENT_MOUSE_MOVE,
     EVENT_MOUSE_SCROLL,
-    EVENT_VIDEO_SIZE,
-    EVENT_VIDEO_DATA,
+    EVENT_VIDEO_REDRAW,
+    EVENT_VIDEO_REDRAW_REPLY,
 } EventSource;
 
-static handle_t video_data_channel;
 static handle_t process_spawn_channel;
 
 static handle_t event_queue;
@@ -104,7 +103,7 @@ typedef struct WindowContainer {
     size_t video_buffer_capacity;
     u8 *video_buffer;
     // Input channels
-    handle_t video_resize_in;
+    handle_t video_redraw_in;
     handle_t keyboard_key_in;
     handle_t mouse_button_in;
     handle_t mouse_move_in;
@@ -166,9 +165,7 @@ static i32 resize_starting_position;
 static WindowContainer *create_window(void) {
     err_t err;
     // Allocate channels for the new process
-    handle_t video_size_in, video_size_out;
-    handle_t video_data_in, video_data_out;
-    handle_t video_resize_in, video_resize_out;
+    handle_t video_redraw_in, video_redraw_out;
     handle_t keyboard_key_in, keyboard_key_out;
     handle_t mouse_button_in, mouse_button_out;
     handle_t mouse_move_in, mouse_move_out;
@@ -177,15 +174,9 @@ static WindowContainer *create_window(void) {
     handle_t text_stderr_in, text_stderr_out;
     handle_t text_stdin_in, text_stdin_out;
     handle_t window_close_in, window_close_out;
-    err = channel_create(&video_size_in, &video_size_out);
+    err = channel_create(&video_redraw_in, &video_redraw_out);
     if (err)
-        goto fail_video_size_channel_create;
-    err = channel_create(&video_data_in, &video_data_out);
-    if (err)
-        goto fail_video_data_channel_create;
-    err = channel_create(&video_resize_in, &video_resize_out);
-    if (err)
-        goto fail_video_resize_channel_create;
+        goto fail_video_redraw_channel_create;
     err = channel_create(&keyboard_key_in, &keyboard_key_out);
     if (err)
         goto fail_keyboard_key_channel_create;
@@ -215,7 +206,7 @@ static WindowContainer *create_window(void) {
     if (window == NULL)
         goto fail_window_alloc;
     window->header.type = CONTAINER_WINDOW;
-    window->video_resize_in = video_resize_in;
+    window->video_redraw_in = video_redraw_in;
     window->keyboard_key_in = keyboard_key_in;
     window->mouse_button_in = mouse_button_in;
     window->mouse_move_in = mouse_move_in;
@@ -228,9 +219,7 @@ static WindowContainer *create_window(void) {
         goto fail_video_buffer_alloc;
     // Spawn terminal process
     ResourceName program1_resource_names[] = {
-        resource_name("video/size"),
-        resource_name("video/data"),
-        resource_name("video/resize"),
+        resource_name("video/redraw"),
         resource_name("keyboard/key"),
         resource_name("mouse/button"),
         resource_name("mouse/move"),
@@ -241,9 +230,7 @@ static WindowContainer *create_window(void) {
         resource_name("window/close"),
     };
     SendAttachedHandle program1_resource_handles[] = {
-        {ATTACHED_HANDLE_FLAG_MOVE, video_size_in},
-        {ATTACHED_HANDLE_FLAG_MOVE, video_data_in},
-        {ATTACHED_HANDLE_FLAG_MOVE, video_resize_out},
+        {ATTACHED_HANDLE_FLAG_MOVE, video_redraw_out},
         {ATTACHED_HANDLE_FLAG_MOVE, keyboard_key_out},
         {ATTACHED_HANDLE_FLAG_MOVE, mouse_button_out},
         {ATTACHED_HANDLE_FLAG_MOVE, mouse_move_out},
@@ -286,9 +273,6 @@ static WindowContainer *create_window(void) {
     }, NULL);
     if (err)
         goto fail_process_spawn;
-    // Attach channels to event queue
-    mqueue_add_channel(event_queue, video_size_out, (MessageTag){EVENT_VIDEO_SIZE, (uintptr_t)window});
-    mqueue_add_channel(event_queue, video_data_out, (MessageTag){EVENT_VIDEO_DATA, (uintptr_t)window});
     return window;
 fail_process_spawn:
     free(window->video_buffer);
@@ -319,22 +303,16 @@ fail_mouse_button_channel_create:
     handle_free(keyboard_key_in);
     handle_free(keyboard_key_out);
 fail_keyboard_key_channel_create:
-    handle_free(video_resize_in);
-    handle_free(video_resize_out);
-fail_video_resize_channel_create:
-    handle_free(video_data_in);
-    handle_free(video_data_out);
-fail_video_data_channel_create:
-    handle_free(video_size_in);
-    handle_free(video_size_out);
-fail_video_size_channel_create:
+    handle_free(video_redraw_in);
+    handle_free(video_redraw_out);
+fail_video_redraw_channel_create:
     return NULL;
 }
 
 // Free window object
 static void window_free(WindowContainer *window) {
     free(window->video_buffer);
-    handle_free(window->video_resize_in);
+    handle_free(window->video_redraw_in);
     handle_free(window->keyboard_key_in);
     handle_free(window->mouse_button_in);
     handle_free(window->mouse_move_in);
@@ -568,24 +546,6 @@ static bool container_move_offset(Container *container, double diff) {
     return valid && diff != 0.0;
 }
 
-// Send a resize message to every window in the container
-static void send_resize_messages(Container *container) {
-    switch (container->type) {
-    case CONTAINER_WINDOW: {
-        WindowContainer *window = (WindowContainer *)container;
-        ScreenSize window_size;
-        get_window_size(window, &window_size);
-        channel_send(window->video_resize_in, &(SendMessage){1, &(SendMessageData){sizeof(ScreenSize), &window_size}, 0, NULL}, FLAG_NONBLOCK);
-        break;
-    }
-    case CONTAINER_SPLIT_HORIZONTAL:
-    case CONTAINER_SPLIT_VERTICAL:
-        for (Container *child = ((SplitContainer *)container)->first_child; child != NULL; child = child->next_sibling)
-            send_resize_messages(child);
-        break;
-    }
-}
-
 // Shift the given edge of the focused window by the given number of pixels
 // Positive `diff` values represent expanding the window, negative ones represent shrinking.
 static void container_resize(Container *container, Direction side, i32 diff) {
@@ -597,19 +557,10 @@ static void container_resize(Container *container, Direction side, i32 diff) {
     ScreenSize parent_size;
     get_container_size((Container *)container->parent, &parent_size);
     u32 parent_length = direction_is_horizontal(side) ? parent_size.width : parent_size.height;
-    if (direction_is_forward(side)) {
-        bool borders_changed = container_move_offset(container->next_sibling, (double)diff / parent_length);
-        if (borders_changed) {
-            send_resize_messages(container);
-            send_resize_messages(container->next_sibling);
-        }
-    } else {
-        bool borders_changed = container_move_offset(container, - (double)diff / parent_length);
-        if (borders_changed) {
-            send_resize_messages(container);
-            send_resize_messages(container->prev_sibling);
-        }
-    }
+    if (direction_is_forward(side))
+        container_move_offset(container->next_sibling, (double)diff / parent_length);
+    else
+        container_move_offset(container, - (double)diff / parent_length);
 }
 
 // Resize a container and its siblings after it has been inserted into its parent
@@ -810,10 +761,6 @@ static void add_new_window_next_to_focused(Direction side) {
         container_insert_after((Container *)window, (Container *)focused_window);
     else
         container_insert_before((Container *)window, (Container *)focused_window);
-    // Send messages informing of the resize
-    for (Container *child = focused_window->header.parent->first_child; child != NULL; child = child->next_sibling)
-        if (child != (Container *)window)
-            send_resize_messages(child);
     // Set the new window as focused
     // This will also update all `focused_window` links to have correct values.
     set_focused_window(window);
@@ -829,7 +776,6 @@ static void close_window(WindowContainer *window) {
     } else {
         container_remove((Container *)window);
         set_focused_window(window->header.next_sibling != NULL ? window->header.next_sibling->focused_window : window->header.prev_sibling->focused_window);
-        send_resize_messages((Container *)window->header.parent);
         container_normalize(window->header.parent);
     }
     // Free the window
@@ -869,18 +815,14 @@ static void move_focused_window(Direction direction) {
                 container_insert_before((Container *)window, (Container *)gparent);
             container_normalize(parent);
             set_focused_window(window);
-            send_resize_messages((Container *)window->header.parent);
         } else if (forward_sibling->type == CONTAINER_WINDOW) {
             // The next sibling in the direction of movement is a window, so we swap it with the current one
             container_swap_with_next_sibling(direction_is_forward(direction) ? (Container *)window : window->header.prev_sibling);
-            send_resize_messages((Container *)window);
-            send_resize_messages((Container *)forward_sibling);
         } else {
             // The next sibling in the direction of movement is split, so we put the window at its beginning
             SplitContainer *parent = window->header.parent;
             container_remove((Container *)window);
             container_insert_before((Container *)window, ((SplitContainer *)forward_sibling)->first_child);
-            send_resize_messages((Container *)parent);
             container_normalize(parent);
             set_focused_window(window);
         }
@@ -904,7 +846,6 @@ static void move_focused_window(Direction direction) {
             container_insert_before((Container *)window, (Container *)parent);
         container_normalize(parent);
         set_focused_window(window);
-        send_resize_messages((Container *)window->header.parent);
     }
 }
 
@@ -927,7 +868,6 @@ static void move_focused_window_to_workspace(u32 workspace) {
     } else {
         container_remove((Container *)window);
         set_focused_window(window->header.next_sibling != NULL ? window->header.next_sibling->focused_window : window->header.prev_sibling->focused_window);
-        send_resize_messages((Container *)window->header.parent);
         container_normalize(window->header.parent);
     }
     // Place window in new workspace
@@ -941,7 +881,6 @@ static void move_focused_window_to_workspace(u32 workspace) {
     } else {
         container_insert_before((Container *)window, ((SplitContainer *)root_container[workspace])->first_child);
     }
-    send_resize_messages(root_container[workspace]);
     set_focused_window(window);
 }
 
@@ -1041,10 +980,17 @@ static void draw_container(Container *container, u32 origin_x, u32 origin_y, u32
 #define STATUS_BAR_NUMBER_WIDTH (FONT_WIDTH + 7)
 #define STATUS_BAR_NUMBER_OFFSET 5
 
+static bool screen_changed = true;
+
 static char time_fmt_buf[32];
 
 // Draw the screen
-static void draw_screen(void) {
+static void redraw_screen(handle_t msg) {
+    if (!screen_changed) {
+        message_reply(msg, NULL, FLAG_FREE_MESSAGE);
+        return;
+    }
+    screen_changed = false;
     Rectangle resize_edge = (Rectangle){0, 0, 0, 0};
     // Draw the root container to the screen buffer if the is one, otherwise fill the screen with a gray background
     if (root_container[current_workspace] == NULL)
@@ -1086,7 +1032,25 @@ time_print_fail:
         }
     }
     // Send the screen buffer
-    channel_send(video_data_channel, &(SendMessage){1, &(SendMessageData){3 * screen_size.width * screen_size.height, screen_buffer}, 0, NULL}, 0);
+    message_reply(msg, &(SendMessage){1, &(SendMessageData){3 * screen_size.width * screen_size.height, screen_buffer}, 0, NULL}, FLAG_FREE_MESSAGE);
+}
+
+// Send a resize message to every window in the container
+static void send_redraw_messages(Container *container) {
+    switch (container->type) {
+    case CONTAINER_WINDOW: {
+        WindowContainer *window = (WindowContainer *)container;
+        ScreenSize window_size;
+        get_window_size(window, &window_size);
+        channel_call_async(window->video_redraw_in, &(SendMessage){1, &(SendMessageData){sizeof(ScreenSize), &window_size}, 0, NULL}, event_queue, (MessageTag){EVENT_VIDEO_REDRAW_REPLY, (uintptr_t)container});
+        break;
+    }
+    case CONTAINER_SPLIT_HORIZONTAL:
+    case CONTAINER_SPLIT_VERTICAL:
+        for (Container *child = ((SplitContainer *)container)->first_child; child != NULL; child = child->next_sibling)
+            send_redraw_messages(child);
+        break;
+    }
 }
 
 typedef enum ModKeys : u32 {
@@ -1101,19 +1065,28 @@ typedef enum ModKeys : u32 {
 void main(void) {
     timezone_set((Timezone){4, DST_EU});
     err_t err;
-    handle_t video_size_channel;
-    err = resource_get(&resource_name("video/size"), RESOURCE_TYPE_CHANNEL_SEND, &video_size_channel);
-    if (err)
-        return;
-    err = resource_get(&resource_name("video/data"), RESOURCE_TYPE_CHANNEL_SEND, &video_data_channel);
-    if (err)
-        return;
     err = resource_get(&resource_name("process/spawn"), RESOURCE_TYPE_CHANNEL_SEND, &process_spawn_channel);
     if (err)
         return;
     err = mqueue_create(&event_queue);
     if (err)
         return;
+    // Handle first redraw to get resolution
+    handle_t msg;
+    err = mqueue_add_channel_resource(event_queue, &resource_name("video/redraw"), (MessageTag){EVENT_VIDEO_REDRAW, 0});
+    if (err)
+        return;
+    mqueue_receive(event_queue, NULL, &msg, TIMEOUT_NONE, 0);
+    err = message_read(msg, &(ReceiveMessage){sizeof(ScreenSize), &screen_size, 0, NULL}, NULL, NULL, 0, 0);
+    if (err)
+        return;
+    cursor.x = screen_size.width / 2;
+    cursor.y = screen_size.height / 2;
+    screen_buffer = malloc(3 * screen_size.width * screen_size.height);
+    if (screen_buffer == NULL)
+        return;
+    redraw_screen(msg);
+    // Add other channels to queue
     err = mqueue_add_channel_resource(event_queue, &resource_name("keyboard/key"), (MessageTag){EVENT_KEYBOARD_KEY, 0});
     if (err)
         return;
@@ -1126,25 +1099,16 @@ void main(void) {
     err = mqueue_add_channel_resource(event_queue, &resource_name("mouse/scroll"), (MessageTag){EVENT_MOUSE_SCROLL, 0});
     if (err)
         return;
-    err = channel_call_read(video_size_channel, NULL, &(ReceiveMessage){sizeof(ScreenSize), &screen_size, 0, NULL}, NULL);
-    if (err)
-        return;
-    cursor.x = screen_size.width / 2;
-    cursor.y = screen_size.height / 2;
-    screen_buffer = malloc(3 * screen_size.width * screen_size.height);
-    if (screen_buffer == NULL)
-        return;
     ModKeys mod_keys_held = 0;
-    draw_screen();
     while (1) {
-        handle_t msg;
         MessageTag tag;
         i64 t;
         time_get(&t);
-        err = mqueue_receive(event_queue, &tag, &msg, (t / 10000000 + 1) * 10000000, 0);
+        err = mqueue_receive(event_queue, &tag, &msg, (t / 10000000 + 1) * 10000000, FLAG_PRIORITIZE_TIMEOUT);
         if (err) {
+            // Timeout at the start of each second so that timer in status bar can be redrawn
             if (err == ERR_KERNEL_TIMEOUT)
-                draw_screen();
+                screen_changed = true;
             continue;
         }
         switch ((EventSource)tag.data[0]) {
@@ -1248,7 +1212,7 @@ void main(void) {
                         if (root_container[current_workspace] != NULL)
                             close_window(root_container[current_workspace]->focused_window);
                     }
-                    draw_screen();
+                    screen_changed = true;
                 } else if (!meta_held && key_event.keycode != KEY_LEFT_META && key_event.keycode != KEY_RIGHT_META && root_container[current_workspace] != NULL) {
                     // Send the key event to the focused window
                     handle_t keyboard_data_in = root_container[current_workspace]->focused_window->keyboard_key_in;
@@ -1257,14 +1221,16 @@ void main(void) {
                 break;
             case STATE_WINDOW_CREATE:
                 if (key_event.pressed) {
-                    if (direction_selected)
+                    if (direction_selected) {
                         add_new_window_next_to_focused(direction);
+                        screen_changed = true;
+                    }
                     state = STATE_NORMAL;
                 }
                 break;
             case STATE_WINDOW_RESIZE:
                 state = STATE_NORMAL;
-                draw_screen();
+                screen_changed = true;
                 break;
             }
             break;
@@ -1287,7 +1253,7 @@ void main(void) {
                             resize_starting_position = direction_is_horizontal(resize_direction) ? cursor.x : cursor.y;
                             state = STATE_WINDOW_RESIZE;
                         }
-                        draw_screen();
+                        screen_changed = true;
                         break;
                     case STATE_WINDOW_CREATE:
                         state = STATE_NORMAL;
@@ -1301,7 +1267,7 @@ void main(void) {
                             ((direction_is_horizontal(resize_direction) ? cursor.x : cursor.y) - resize_starting_position);
                         container_resize(resize_container, resize_direction, diff);
                         state = STATE_NORMAL;
-                        draw_screen();
+                        screen_changed = true;
                     }
                 }
             }
@@ -1346,7 +1312,7 @@ void main(void) {
             case STATE_WINDOW_RESIZE:
                 break;
             }
-            draw_screen();
+            screen_changed = true;
             break;
         }
         case EVENT_MOUSE_SCROLL: {
@@ -1360,19 +1326,14 @@ void main(void) {
                 channel_send(pointed_at_window->mouse_scroll_in, &(SendMessage){1, &(SendMessageData){sizeof(MouseScrollEvent), &scroll_event}, 0, NULL}, FLAG_NONBLOCK);
             break;
         }
-        case EVENT_VIDEO_SIZE: {
-            ScreenSize window_size;
-            get_window_size((WindowContainer *)tag.data[1], &window_size);
-            err = message_read(msg, &(ReceiveMessage){0, NULL, 0, NULL}, NULL, NULL, ERR_INVALID_ARG, 0);
-            if (err)
-                continue;
-            message_reply(msg, &(SendMessage){1, &(SendMessageData){sizeof(ScreenSize), &window_size}, 0, NULL}, FLAG_FREE_MESSAGE);
+        case EVENT_VIDEO_REDRAW: {
+            redraw_screen(msg);
+            if (root_container[current_workspace] != NULL)
+                send_redraw_messages(root_container[current_workspace]);
             break;
         }
-        case EVENT_VIDEO_DATA: {
-            ScreenSize window_size;
+        case EVENT_VIDEO_REDRAW_REPLY: {
             WindowContainer *window = (WindowContainer *)tag.data[1];
-            get_window_size(window, &window_size);
             // Get the dimensions of the received buffer
             ScreenSize video_buffer_size;
             err = message_read(msg, &(ReceiveMessage){sizeof(ScreenSize), &video_buffer_size, 0, NULL}, NULL, NULL, 0, FLAG_ALLOW_PARTIAL_DATA_READ);
@@ -1397,7 +1358,7 @@ void main(void) {
             err = message_read(msg, &(ReceiveMessage){window_data_size, window->video_buffer, 0, NULL}, &(MessageLength){sizeof(ScreenSize), 0}, NULL, 0, FLAG_FREE_MESSAGE);
             if (err)
                 continue;
-            draw_screen();
+            screen_changed = true;
             break;
         }
         }

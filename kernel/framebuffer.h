@@ -3,12 +3,7 @@
 #include "types.h"
 #include "channel.h"
 
-#define FB_MQ_TAG_DATA 0
-#define FB_MQ_TAG_SIZE 1
-
-extern Channel *framebuffer_data_channel;
-extern Channel *framebuffer_size_channel;
-extern MessageQueue *framebuffer_mqueue;
+extern Channel *framebuffer_redraw_channel;
 
 void framebuffer_init(void);
 u32 get_framebuffer_width(void);

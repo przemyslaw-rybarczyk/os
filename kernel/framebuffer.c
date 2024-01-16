@@ -4,6 +4,7 @@
 #include "page.h"
 #include "spinlock.h"
 #include "string.h"
+#include "time.h"
 
 #include "font.h"
 
@@ -215,62 +216,55 @@ void print_hex_u8(u8 n) {
     print_hex((u64)n, 2);
 }
 
-Channel *framebuffer_data_channel;
-Channel *framebuffer_size_channel;
-MessageQueue *framebuffer_mqueue;
+Channel *framebuffer_redraw_channel;
+
+#define TICKS_PER_SEC 10000000
+#define FPS 60
 
 void framebuffer_fast_copy_32_bit(void *screen, const void *data);
 
 _Noreturn void framebuffer_kernel_thread_main(void) {
+    err_t err;
     ScreenSize screen_size = {fb_width, fb_height};
+    i64 next_frame = INT64_MIN;
     while (1) {
-        Message *message;
-        // Get message from framebuffer meessage queue
-        mqueue_receive(framebuffer_mqueue, &message, false, false, TIMEOUT_NONE);
-        switch (message->tag.data[0]) {
-        case FB_MQ_TAG_DATA: {
-            // Check message size
-            if (message->data_size != fb_height * fb_width * 3 || message->handles_size != 0) {
-                message_free(message);
-                continue;
-            }
-            // Display the contents of the message
-            // Use fast copy if it's available
-            framebuffer_lock();
-            if (fb_fast_copy) {
-                framebuffer_fast_copy_32_bit(framebuffer, message->data);
-            } else {
-                for (size_t y = 0; y < fb_height; y++) {
-                    for (size_t x = 0; x < fb_width; x++) {
-                        u8 *pixel = &message->data[(y * fb_width + x) * 3];
-                        u32 color = ((pixel[0] >> r_cut) << r_pos) | ((pixel[1] >> g_cut) << g_pos) | ((pixel[2] >> b_cut) << b_pos);
-                        for (u8 i = 0; i < fb_bytes_per_pixel; i++)
-                            framebuffer[y * fb_pitch + x * fb_bytes_per_pixel + i] = (u8)(color >> (8 * i));
-                    }
+        // Wait before starting next frame
+        // Don't wait if the frame is overdue
+        syscall_process_wait(next_frame);
+        // Calculate time frame after this one should start
+        i64 current_time = time_get();
+        i64 current_second = current_time / TICKS_PER_SEC - (current_time < 0 && current_time % TICKS_PER_SEC != 0);
+        i64 current_frame_in_second = (current_time - TICKS_PER_SEC * current_second) / (TICKS_PER_SEC / FPS);
+        next_frame = TICKS_PER_SEC * current_second + (TICKS_PER_SEC / FPS) * (current_frame_in_second + 1);
+        // Send redraw message containing requested screen size and wait for reply
+        Message *message = message_alloc_copy(sizeof(ScreenSize), &screen_size);
+        if (message == NULL)
+            continue;
+        Message *reply;
+        err = channel_call(framebuffer_redraw_channel, message, &reply);
+        if (err)
+            continue;
+        // Check reply size
+        if (reply->data_size != fb_height * fb_width * 3 || reply->handles_size != 0) {
+            message_free(reply);
+            continue;
+        }
+        // Display the contents of the reply
+        // Use fast copy if it's available
+        framebuffer_lock();
+        if (fb_fast_copy) {
+            framebuffer_fast_copy_32_bit(framebuffer, reply->data);
+        } else {
+            for (size_t y = 0; y < fb_height; y++) {
+                for (size_t x = 0; x < fb_width; x++) {
+                    u8 *pixel = &reply->data[(y * fb_width + x) * 3];
+                    u32 color = ((pixel[0] >> r_cut) << r_pos) | ((pixel[1] >> g_cut) << g_pos) | ((pixel[2] >> b_cut) << b_pos);
+                    for (u8 i = 0; i < fb_bytes_per_pixel; i++)
+                        framebuffer[y * fb_pitch + x * fb_bytes_per_pixel + i] = (u8)(color >> (8 * i));
                 }
             }
-            framebuffer_unlock();
-            message_free(message);
-            break;
         }
-        case FB_MQ_TAG_SIZE: {
-            // Check message size
-            if (message->data_size != 0 || message->handles_size != 0) {
-                message_reply_error(message, ERR_INVALID_ARG);
-                message_free(message);
-                continue;
-            }
-            // Request for screen size
-            Message *reply = message_alloc_copy(sizeof(ScreenSize), &screen_size);
-            if (reply == NULL) {
-                message_reply_error(message, ERR_NO_MEMORY);
-                message_free(message);
-                continue;
-            }
-            message_reply(message, reply);
-            message_free(message);
-            break;
-        }
-        }
+        framebuffer_unlock();
+        message_free(reply);
     }
 }
