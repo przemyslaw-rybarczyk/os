@@ -98,12 +98,12 @@ static const u8 keycode_chars_upper[] = {
 static void send_from_input_buffer(handle_t msg, size_t bytes_requested) {
     size_t bytes_to_send = bytes_requested <= input_buffer_pending_size ? bytes_requested : input_buffer_pending_size;
     if (bytes_to_send <= input_buffer_capacity - input_buffer_offset)
-        message_reply(msg, &(SendMessage){1, &(SendMessageData){bytes_to_send, input_buffer + input_buffer_offset}, 0, NULL}, FLAG_FREE_MESSAGE);
+        message_reply(msg, &(SendMessage){1, &(SendMessageData){bytes_to_send, input_buffer + input_buffer_offset}, 0, NULL}, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
     else
         message_reply(msg, &(SendMessage){2, (SendMessageData[]){
             {input_buffer_capacity - input_buffer_offset, input_buffer + input_buffer_offset},
             {bytes_to_send - (input_buffer_capacity - input_buffer_offset), input_buffer}
-        }, 0, NULL}, FLAG_FREE_MESSAGE);
+        }, 0, NULL}, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
     input_buffer_offset = (input_buffer_offset + bytes_to_send) & (input_buffer_capacity - 1);
     input_buffer_size -= bytes_to_send;
     input_buffer_pending_size -= bytes_to_send;
@@ -225,7 +225,7 @@ static bool screen_changed = true;
 
 static void redraw_screen(handle_t msg) {
     if (!screen_changed) {
-        message_reply(msg, NULL, FLAG_FREE_MESSAGE);
+        message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
         return;
     }
     screen_changed = false;
@@ -283,7 +283,7 @@ static void redraw_screen(handle_t msg) {
         }
     }
     // Send screen buffer
-    message_reply(msg, &(SendMessage){2, (SendMessageData[]){{sizeof(ScreenSize), &screen_size}, {screen_bytes, screen}}, 0, NULL}, FLAG_FREE_MESSAGE);
+    message_reply(msg, &(SendMessage){2, (SendMessageData[]){{sizeof(ScreenSize), &screen_size}, {screen_bytes, screen}}, 0, NULL}, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
 }
 
 typedef enum ModKeys : u32 {
@@ -440,7 +440,7 @@ void main(void) {
                 for (size_t j = 0; j < read_size; j++)
                     print_char(output_read_buffer[j], event_source == EVENT_STDERR ? TEXT_COLOR_STDERR : TEXT_COLOR_STDOUT);
             }
-            message_reply(msg, NULL, FLAG_FREE_MESSAGE);
+            message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
             screen_changed = true;
             break;
         case EVENT_STDIN:
@@ -452,7 +452,7 @@ void main(void) {
             if (err)
                 continue;
             if (stdin_bytes_requested == 0) {
-                message_reply(msg, NULL, FLAG_FREE_MESSAGE);
+                message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
             } else if (input_buffer_pending_size > 0) {
                 send_from_input_buffer(msg, stdin_bytes_requested);
             } else {

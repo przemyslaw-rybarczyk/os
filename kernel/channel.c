@@ -854,11 +854,13 @@ err_t syscall_mqueue_receive(handle_t mqueue_i, MessageTag *tag_ptr, handle_t *m
     return 0;
 }
 
+// Reply to a message
+// If FLAG_REPLY_ON_FAILURE is set, out-of-memory errors will cause an error reply of ERR_NO_MEMORY to be sent.
 err_t syscall_message_reply(handle_t message_i, const SendMessage *user_reply, u64 flags) {
     err_t err;
     Handle message_handle;
     // Verify flags are valid
-    if (flags & ~FLAG_FREE_MESSAGE)
+    if (flags & ~(FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE))
         return ERR_KERNEL_INVALID_ARG;
     // Verify buffer is valid
     err = verify_user_send_message(user_reply);
@@ -879,6 +881,9 @@ err_t syscall_message_reply(handle_t message_i, const SendMessage *user_reply, u
     if (!err)
         // Send the reply
         err = message_reply(message_handle.message, reply);
+    if ((flags & FLAG_REPLY_ON_FAILURE) && err == ERR_KERNEL_NO_MEMORY)
+        // Send reply error code if there was a failure
+        message_reply_error(message_handle.message, ERR_NO_MEMORY);
     // Free message and handle if requested
     if (flags & FLAG_FREE_MESSAGE)
         handle_clear(&cpu_local->current_process->handles, message_i, true);

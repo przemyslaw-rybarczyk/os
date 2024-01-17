@@ -10,6 +10,7 @@
 #define FLAG_ALLOW_PARTIAL_HANDLES_READ (UINT64_C(1) << 2)
 #define FLAG_FREE_MESSAGE (UINT64_C(1) << 3)
 #define FLAG_PRIORITIZE_TIMEOUT (UINT64_C(1) << 4)
+#define FLAG_REPLY_ON_FAILURE (UINT64_C(1) << 5)
 
 typedef struct MessageTag {
     uintptr_t data[2];

@@ -987,7 +987,7 @@ static char time_fmt_buf[32];
 // Draw the screen
 static void redraw_screen(handle_t msg) {
     if (!screen_changed) {
-        message_reply(msg, NULL, FLAG_FREE_MESSAGE);
+        message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
         return;
     }
     screen_changed = false;
@@ -1032,7 +1032,7 @@ time_print_fail:
         }
     }
     // Send the screen buffer
-    message_reply(msg, &(SendMessage){1, &(SendMessageData){3 * screen_size.width * screen_size.height, screen_buffer}, 0, NULL}, FLAG_FREE_MESSAGE);
+    message_reply(msg, &(SendMessage){1, &(SendMessageData){3 * screen_size.width * screen_size.height, screen_buffer}, 0, NULL}, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
 }
 
 // Send a resize message to every window in the container

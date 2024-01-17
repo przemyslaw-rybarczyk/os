@@ -329,6 +329,9 @@ process_switch:
   ; Return to the process
   ret
 
+ERR_NO_MEMORY equ 0x3
+ERR_KERNEL_NO_MEMORY equ 0xFFFFFFFFFFFF0003
+
 ; Enter a process
 ; When a process is created, its instruction pointer is set to the start of this function,
 ; which finishes initializing process state and jumps to the actual entry point.
@@ -354,6 +357,9 @@ process_start:
   mov rsi, rax
   mov rdi, [rsp + 8]
   call message_reply
+  cmp rax, ERR_KERNEL_NO_MEMORY
+  mov rax, ERR_NO_MEMORY
+  je .fail
   mov rdi, [rsp + 8]
   call message_free
 .no_message:
