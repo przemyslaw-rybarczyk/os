@@ -524,16 +524,15 @@ err_t mqueue_receive(MessageQueue *queue, Message **message_ptr, bool nonblock, 
     // Remove a message from the queue
     Message *message = queue->start;
     queue->start = queue->start->next_message;
-    if (message->error_code)
-        return message->error_code;
-    *message_ptr = message;
-    if (!message->is_reply)
+    if (!message->is_reply) {
         queue->length -= 1;
-    // If there is a blocked sender, unblock it
-    Process *blocked_sender = process_queue_remove(&queue->blocked_senders);
-    if (blocked_sender != NULL)
-        process_enqueue(blocked_sender);
+        // If there is a blocked sender, unblock it
+        Process *blocked_sender = process_queue_remove(&queue->blocked_senders);
+        if (blocked_sender != NULL)
+            process_enqueue(blocked_sender);
+    }
     spinlock_release(&queue->lock);
+    *message_ptr = message;
     return 0;
 }
 
@@ -844,6 +843,9 @@ err_t syscall_mqueue_receive(handle_t mqueue_i, MessageTag *tag_ptr, handle_t *m
     // Return the tag
     if (tag_ptr != NULL)
         *tag_ptr = message->tag;
+    // Return error code if the message has one
+    if (message->error_code)
+        return message->error_code;
     // Add the handle
     err = handles_reserve(&cpu_local->current_process->handles, 1);
     if (err)
