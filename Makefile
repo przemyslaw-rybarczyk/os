@@ -69,8 +69,8 @@ endef
 
 $(BUILD)/image.bin: $(kernel_OBJECTS) kernel/linker.ld
 	clang $(KERNEL_LDFLAGS) -T kernel/linker.ld $(kernel_OBJECTS) -o $@
-# Pad the file so its size is a multiple of 512 (sector size)
-	./pad_to_multiple.sh $@ 512
+# Pad the file so its size is large enough to run in an emulator
+	truncate -s '>516096' $@
 
 $(BUILD)/window/included_programs.s.o: window/included_programs.s $(BUILD)/program1/program1.bin $(BUILD)/program2/program2.bin $(BUILD)/terminal/terminal.bin
 	$(asm_recipe)
