@@ -10,7 +10,7 @@ extern Channel *mouse_button_channel;
 extern Channel *mouse_move_channel;
 extern Channel *mouse_scroll_channel;
 
-extern atomic_bool send_input_delayed;
+extern volatile atomic_bool send_input_delayed;
 
 typedef struct InputEvent {
     enum {

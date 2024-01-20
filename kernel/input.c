@@ -16,11 +16,11 @@ Channel *mouse_move_channel;
 Channel *mouse_scroll_channel;
 
 // Set if there are events in the queue waiting to be sent
-atomic_bool send_input_delayed;
+volatile atomic_bool send_input_delayed;
 
 // Queue holding unsent input events
 static InputEvent input_event_queue[INPUT_EVENT_QUEUE_SIZE];
-static atomic_size_t input_event_queue_size = 0;
+static volatile atomic_size_t input_event_queue_size = 0;
 static spinlock_t input_event_queue_lock;
 
 // Add an input event to the queue and send it if possible
