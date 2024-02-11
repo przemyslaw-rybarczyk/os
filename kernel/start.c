@@ -1,6 +1,7 @@
 #include "types.h"
 
 #include "acpi.h"
+#include "ahci.h"
 #include "alloc.h"
 #include "channel.h"
 #include "framebuffer.h"
@@ -46,6 +47,10 @@ void kernel_start(void *stack) {
     ps2_init();
     if (pci_init() != 0) {
         print_string("Failed to detect required PCI devices\n");
+        goto halt;
+    }
+    if (ahci_init() != 0) {
+        print_string("Failed to initialize AHCI controller\n");
         goto halt;
     }
     if (acpi_init() != 0) {

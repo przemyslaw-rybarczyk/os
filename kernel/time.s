@@ -49,7 +49,7 @@ time_init:
   call time_get_tsc
   mov rcx, rax
   ; Wait
-  mov di, TSC_CALIBRATE_PIT_CYCLES
+  mov edi, TSC_CALIBRATE_PIT_CYCLES
   call pit_wait
   ; Get second TSC reading
   push rcx

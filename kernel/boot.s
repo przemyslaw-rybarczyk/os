@@ -1,10 +1,6 @@
 extern kernel_start
 extern kernel_start_ap
 extern last_kernel_stack
-extern pd_fb
-extern pdpt_page_stack
-extern pt_id_map_init
-global idle_page_map
 
 ; Variables declared by linker script
 extern KERNEL_LMA
@@ -18,6 +14,11 @@ extern kernel_bss_length_dwords
 global vbe_mode_info
 global memory_ranges
 global memory_ranges_length
+global pd_fb
+global pdpt_page_stack
+global pd_devices_other
+global pt_id_map_init
+global idle_page_map
 
 ; Initial page for kernel stack
 stack equ 0x7F000
@@ -35,7 +36,7 @@ pd_kernel equ 0x77000
 pt_kernel equ 0x76000
 pdpt_devices equ 0x75000
 pd_fb equ 0x74000
-pd_id_map_init equ 0x73000
+pd_devices_other equ 0x73000
 pt_id_map_init equ 0x72000
 pdpt_page_stack equ 0x71000
 boot_page_tables_start equ 0x71000
@@ -117,7 +118,7 @@ SECTORS_PER_LOAD equ 0x7F
 
 DEVICES_PML4E equ 0x1FD
 FB_PDPTE equ 0x000
-ID_MAP_INIT_PDPTE equ 0x002
+DEVICES_OTHER_PDPTE equ 0x002
 STACK_PML4E equ 0x1FE
 STACK_BOTTOM_VIRTUAL equ (0xFFFF << 48) | (STACK_PML4E << 39) | PAGE_SIZE
 PAGE_STACK_PML4E equ 0x1FC
@@ -661,8 +662,8 @@ protected_mode_start:
   ; The pd_fb, pt_id_map_init, and pdpt_page_stack will be filled in by the kernel.
   mov dword [pml4 + DEVICES_PML4E * 8], pdpt_devices | PAGE_WRITE | PAGE_PRESENT
   mov dword [pdpt_devices + FB_PDPTE * 8], pd_fb | PAGE_WRITE | PAGE_PRESENT
-  mov dword [pdpt_devices + ID_MAP_INIT_PDPTE * 8], pd_id_map_init | PAGE_WRITE | PAGE_PRESENT
-  mov dword [pd_id_map_init], pt_id_map_init | PAGE_WRITE | PAGE_PRESENT
+  mov dword [pdpt_devices + DEVICES_OTHER_PDPTE * 8], pd_devices_other | PAGE_WRITE | PAGE_PRESENT
+  mov dword [pd_devices_other], pt_id_map_init | PAGE_WRITE | PAGE_PRESENT
   mov dword [pml4 + PAGE_STACK_PML4E * 8], pdpt_page_stack | PAGE_WRITE | PAGE_PRESENT
   mov dword [pml4 + PAGE_STACK_PML4E * 8 + 4], PAGE_NX >> 32
   ; Map kernel contents at the beginning of the last PDPTE (top 1 GB of address space)

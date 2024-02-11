@@ -102,7 +102,7 @@ smp_init:
   mov dword [rax + LAPIC_INTERRUPT_COMMAND_REGISTER_LOW], ICR_ALL_EXCLUDING_SELF | ICR_ASSERT | ICR_INIT
   ; Wait before sending SIPI
   push rax
-  mov di, WAIT_BEFORE_SIPI_PIT_CYCLES
+  mov edi, WAIT_BEFORE_SIPI_PIT_CYCLES
   call pit_wait
   pop rax
   ; Send SIPI to every AP

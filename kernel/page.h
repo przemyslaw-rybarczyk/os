@@ -6,6 +6,7 @@
 #define PAGE_PRESENT (UINT64_C(1) << 0)
 #define PAGE_WRITE (UINT64_C(1) << 1)
 #define PAGE_USER (UINT64_C(1) << 2)
+#define PAGE_PCD (UINT64_C(1) << 4)
 #define PAGE_LARGE (UINT64_C(1) << 7)
 #define PAGE_GLOBAL (UINT64_C(1) << 8)
 #define PAGE_NX (UINT64_C(1) << 63)
