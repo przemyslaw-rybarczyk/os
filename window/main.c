@@ -54,6 +54,8 @@ typedef enum EventSource : uintptr_t {
 } EventSource;
 
 static handle_t process_spawn_channel;
+static handle_t drive_info_channel;
+static handle_t drive_open_channel;
 
 static handle_t event_queue;
 
@@ -256,11 +258,15 @@ static WindowContainer *create_window(void) {
         resource_name("text/stdout"),
         resource_name("text/stderr"),
         resource_name("text/stdin"),
+        resource_name("drive/info"),
+        resource_name("drive/open"),
     };
     SendAttachedHandle program2_resource_handles[] = {
         {ATTACHED_HANDLE_FLAG_MOVE, text_stdout_in},
         {ATTACHED_HANDLE_FLAG_MOVE, text_stderr_in},
         {ATTACHED_HANDLE_FLAG_MOVE, text_stdin_in},
+        {0, drive_info_channel},
+        {0, drive_open_channel},
     };
     err = channel_call(process_spawn_channel, &(SendMessage){
         5, (SendMessageData[]){
@@ -1066,6 +1072,12 @@ void main(void) {
     timezone_set((Timezone){4, DST_EU});
     err_t err;
     err = resource_get(&resource_name("process/spawn"), RESOURCE_TYPE_CHANNEL_SEND, &process_spawn_channel);
+    if (err)
+        return;
+    err = resource_get(&resource_name("drive/info"), RESOURCE_TYPE_CHANNEL_SEND, &drive_info_channel);
+    if (err)
+        return;
+    err = resource_get(&resource_name("drive/open"), RESOURCE_TYPE_CHANNEL_SEND, &drive_open_channel);
     if (err)
         return;
     err = mqueue_create(&event_queue);

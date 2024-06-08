@@ -49,10 +49,6 @@ void kernel_start(void *stack) {
         print_string("Failed to detect required PCI devices\n");
         goto halt;
     }
-    if (ahci_init() != 0) {
-        print_string("Failed to initialize AHCI controller\n");
-        goto halt;
-    }
     if (acpi_init() != 0) {
         print_string("Failed to read ACPI tables\n");
         goto halt;
@@ -65,6 +61,10 @@ void kernel_start(void *stack) {
     apic_init(true);
     smp_init();
     smp_init_sync(true);
+    if (ahci_init() != 0) {
+        print_string("Failed to initialize AHCI controller\n");
+        goto halt;
+    }
     if (set_double_fault_stack() != 0) {
         framebuffer_lock();
         print_string("Failed to initialize double fault stack\n");

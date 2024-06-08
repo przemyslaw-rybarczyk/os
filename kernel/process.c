@@ -1,6 +1,7 @@
 #include "types.h"
 #include "process.h"
 
+#include "ahci.h"
 #include "alloc.h"
 #include "channel.h"
 #include "framebuffer.h"
@@ -175,6 +176,9 @@ err_t process_setup(void) {
     process_spawn_mqueue = mqueue_alloc();
     if (process_spawn_mqueue == NULL)
         return ERR_KERNEL_NO_MEMORY;
+    ahci_main_mqueue = mqueue_alloc();
+    if (ahci_main_mqueue == NULL)
+        return ERR_KERNEL_NO_MEMORY;
     framebuffer_redraw_channel = channel_alloc();
     if (framebuffer_redraw_channel == NULL)
         return ERR_KERNEL_NO_MEMORY;
@@ -193,15 +197,28 @@ err_t process_setup(void) {
     process_spawn_channel = channel_alloc();
     if (process_spawn_channel == NULL)
         return ERR_KERNEL_NO_MEMORY;
+    drive_info_channel = channel_alloc();
+    if (drive_info_channel == NULL)
+        return ERR_KERNEL_NO_MEMORY;
+    drive_open_channel = channel_alloc();
+    if (drive_open_channel == NULL)
+        return ERR_KERNEL_NO_MEMORY;
     channel_set_mqueue(process_spawn_channel, process_spawn_mqueue, (MessageTag){0, 0});
+    channel_set_mqueue(drive_info_channel, ahci_main_mqueue, (MessageTag){AHCI_MAIN_TAG_DRIVE_INFO, 0});
+    channel_set_mqueue(drive_open_channel, ahci_main_mqueue, (MessageTag){AHCI_MAIN_TAG_DRIVE_OPEN, 0});
     Process *framebuffer_kernel_thread;
     err = process_create(&framebuffer_kernel_thread, (ResourceList){0, NULL});
+    if (err)
+        return err;
+    Process *ahci_main_kernel_thread;
+    err = process_create(&ahci_main_kernel_thread, (ResourceList){0, NULL});
     if (err)
         return err;
     err = process_create(&process_spawn_kernel_thread, (ResourceList){0, NULL});
     if (err)
         return err;
     process_set_kernel_stack(framebuffer_kernel_thread, framebuffer_kernel_thread_main);
+    process_set_kernel_stack(ahci_main_kernel_thread, ahci_main_kernel_thread_main);
     process_set_kernel_stack(process_spawn_kernel_thread, process_spawn_kernel_thread_main);
     channel_add_ref(framebuffer_redraw_channel);
     channel_add_ref(keyboard_key_channel);
@@ -210,7 +227,7 @@ err_t process_setup(void) {
     channel_add_ref(mouse_scroll_channel);
     channel_add_ref(process_spawn_channel);
     Process *init_process;
-    ResourceListEntry *init_resources = malloc(7 * sizeof(ResourceListEntry));
+    ResourceListEntry *init_resources = malloc(8 * sizeof(ResourceListEntry));
     if (init_resources == NULL)
         return ERR_KERNEL_NO_MEMORY;
     init_resources[0] = (ResourceListEntry){
@@ -237,11 +254,20 @@ err_t process_setup(void) {
         resource_name("process/spawn"), {
             RESOURCE_TYPE_CHANNEL_SEND,
             {.channel = process_spawn_channel}}};
-    err = process_create(&init_process, (ResourceList){6, init_resources});
+    init_resources[6] = (ResourceListEntry){
+        resource_name("drive/info"), {
+            RESOURCE_TYPE_CHANNEL_SEND,
+            {.channel = drive_info_channel}}};
+    init_resources[7] = (ResourceListEntry){
+        resource_name("drive/open"), {
+            RESOURCE_TYPE_CHANNEL_SEND,
+            {.channel = drive_open_channel}}};
+    err = process_create(&init_process, (ResourceList){8, init_resources});
     if (err)
         return err;
     process_set_user_stack(init_process, included_file_window, included_file_window_end - included_file_window, NULL);
     process_enqueue(framebuffer_kernel_thread);
+    process_enqueue(ahci_main_kernel_thread);
     process_enqueue(process_spawn_kernel_thread);
     process_enqueue(init_process);
     return 0;

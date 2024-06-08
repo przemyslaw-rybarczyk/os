@@ -12,6 +12,9 @@ typedef enum err_t : u64 {
     ERR_NO_MEMORY,
     ERR_INVALID_OPERATION,
     ERR_TIMEOUT,
+    ERR_OUT_OF_RANGE,
+    ERR_IO_INTERNAL,
+    ERR_DOES_NOT_EXIST,
     // General kernel error codes - analogous to the general error codes
     ERR_KERNEL_OTHER = ERR_KERNEL_MIN + 1,
     ERR_KERNEL_INVALID_ARG,

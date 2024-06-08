@@ -42,6 +42,7 @@ void process_queue_add(ProcessQueue *queue, Process *process);
 Process *process_queue_remove(ProcessQueue *queue);
 err_t process_create(Process **process_ptr, ResourceList resources);
 void process_set_user_stack(Process *process, const u8 *file, size_t file_length, Message *message);
+void process_set_kernel_stack(Process *process, void *entry_point);
 void userspace_init(void);
 void process_enqueue(Process *process);
 err_t process_setup(void);

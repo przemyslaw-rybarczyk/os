@@ -41,6 +41,7 @@ typedef struct Message {
     struct Message *next_message;
 } Message;
 
+Message *message_alloc(size_t data_size);
 Message *message_alloc_copy(size_t data_size, const void *data);
 err_t message_read_user(const Message *message, ReceiveMessage *user_message, const MessageLength *offset, bool check_types);
 void message_free(Message *message);

@@ -83,8 +83,8 @@ static err_t verify_user_receive_message(const ReceiveMessage *user_message) {
     return 0;
 }
 
-// Create a message from a given data buffer
-Message *message_alloc_copy(size_t data_size, const void *data) {
+// Create a message with a data buffer of a given size
+Message *message_alloc(size_t data_size) {
     // Allocate message
     Message *message = malloc(sizeof(Message));
     if (message == NULL)
@@ -97,9 +97,15 @@ Message *message_alloc_copy(size_t data_size, const void *data) {
         free(message);
         return NULL;
     }
+    return message;
+}
+
+// Create a message from a given data buffer
+Message *message_alloc_copy(size_t data_size, const void *data) {
+    Message *message = message_alloc(data_size);
+    if (message == NULL)
+        return NULL;
     memcpy(message->data, data, data_size);
-    message->handles_size = 0;
-    message->handles = NULL;
     return message;
 }
 

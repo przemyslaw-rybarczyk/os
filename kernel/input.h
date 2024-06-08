@@ -28,4 +28,5 @@ typedef struct InputEvent {
 } InputEvent;
 
 void add_input_event(InputEvent event);
+void ahci_irq_handler(void);
 void send_input_events(void);

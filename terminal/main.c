@@ -300,16 +300,11 @@ void main(void) {
     err = mqueue_add_channel_resource(event_mqueue, &resource_name("video/redraw"), (MessageTag){EVENT_REDRAW, 0});
     if (err)
         return;
-    err = mqueue_add_channel_resource(event_mqueue, &resource_name("keyboard/key"), (MessageTag){EVENT_KEYBOARD, 0});
+    handle_t msg;
+    err = mqueue_receive(event_mqueue, NULL, &msg, TIMEOUT_NONE, 0);
     if (err)
         return;
-    err = mqueue_add_channel_resource(event_mqueue, &resource_name("text/stdout_r"), (MessageTag){EVENT_STDOUT, 0});
-    if (err)
-        return;
-    err = mqueue_add_channel_resource(event_mqueue, &resource_name("text/stderr_r"), (MessageTag){EVENT_STDERR, 0});
-    if (err)
-        return;
-    err = mqueue_add_channel_resource(event_mqueue, &resource_name("text/stdin_r"), (MessageTag){EVENT_STDIN, 0});
+    err = message_read(msg, &(ReceiveMessage){sizeof(ScreenSize), &screen_size, 0, NULL}, NULL, NULL, 0, 0);
     if (err)
         return;
     text_buffer_capacity = TEXT_BUFFER_DEFAULT_SIZE;
@@ -324,6 +319,19 @@ void main(void) {
     screen = malloc(screen_capacity);
     if (screen == NULL)
         return;
+    redraw_screen(msg);
+    err = mqueue_add_channel_resource(event_mqueue, &resource_name("keyboard/key"), (MessageTag){EVENT_KEYBOARD, 0});
+    if (err)
+        return;
+    err = mqueue_add_channel_resource(event_mqueue, &resource_name("text/stdout_r"), (MessageTag){EVENT_STDOUT, 0});
+    if (err)
+        return;
+    err = mqueue_add_channel_resource(event_mqueue, &resource_name("text/stderr_r"), (MessageTag){EVENT_STDERR, 0});
+    if (err)
+        return;
+    err = mqueue_add_channel_resource(event_mqueue, &resource_name("text/stdin_r"), (MessageTag){EVENT_STDIN, 0});
+    if (err)
+        return;
     input_buffer_capacity = INPUT_BUFFER_DEFAULT_SIZE;
     input_buffer = malloc(input_buffer_capacity);
     if (screen == NULL)
@@ -331,7 +339,6 @@ void main(void) {
     ModKeys mod_keys_held = 0;
     while (1) {
         MessageTag tag;
-        handle_t msg;
         err = mqueue_receive(event_mqueue, &tag, &msg, TIMEOUT_NONE, 0);
         if (err)
             continue;
@@ -395,8 +402,8 @@ void main(void) {
                     // Move final part of circular buffer if necessary
                     if (text_buffer_offset + text_buffer_size > text_buffer_capacity) {
                         memmove(
-                            text_buffer + (text_buffer_offset + new_text_buffer_capacity - text_buffer_capacity) * sizeof(TextCharacter),
-                            text_buffer + text_buffer_offset * sizeof(TextCharacter),
+                            text_buffer + (text_buffer_offset + new_text_buffer_capacity - text_buffer_capacity),
+                            text_buffer + text_buffer_offset,
                             (text_buffer_capacity - text_buffer_offset) * sizeof(TextCharacter));
                         text_buffer_offset += new_text_buffer_capacity - text_buffer_capacity;
                     }

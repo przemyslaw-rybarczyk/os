@@ -1,8 +1,10 @@
 #include "types.h"
 #include "input.h"
 
+#include "ahci.h"
 #include "channel.h"
 #include "interrupt.h"
+#include "smp.h"
 #include "spinlock.h"
 #include "percpu.h"
 
@@ -15,8 +17,11 @@ Channel *mouse_button_channel;
 Channel *mouse_move_channel;
 Channel *mouse_scroll_channel;
 
-// Set if there are events in the queue waiting to be sent
+// Set if there are events in the queue waiting to be sent or drive IRQ waiting to be processed
 volatile atomic_bool send_input_delayed;
+
+// Set if there is a drive IRQ waiting to be processed
+static volatile atomic_bool drive_event_delayed = false;
 
 // Queue holding unsent input events
 static InputEvent input_event_queue[INPUT_EVENT_QUEUE_SIZE];
@@ -43,10 +48,24 @@ void add_input_event(InputEvent event) {
         send_input_delayed = true;
 }
 
+void ahci_irq_handler(void) {
+    if (cpu_local->idle || cpu_local->preempt_disable == 0) {
+        drive_process_irq();
+    } else {
+        drive_event_delayed = true;
+        send_input_delayed = true;
+    }
+    apic_eoi();
+}
+
 // Send all input events in the queue
 void send_input_events(void) {
     err_t err;
     send_input_delayed = false;
+    if (drive_event_delayed) {
+        drive_event_delayed = false;
+        drive_process_irq();
+    }
     // Early return when queue is empty to avoid contesting the queue lock
     if (input_event_queue_size == 0)
         return;
