@@ -120,7 +120,7 @@ static err_t add_to_input_buffer(u8 c) {
         input_buffer = new_input_buffer;
         // Move final part of circular buffer if necessary
         if (input_buffer_offset + input_buffer_size > input_buffer_capacity) {
-            memmove(
+            memcpy(
                 input_buffer + (input_buffer_offset + new_input_buffer_capacity - input_buffer_capacity),
                 input_buffer + input_buffer_offset,
                 input_buffer_capacity - input_buffer_offset);
@@ -145,22 +145,26 @@ static err_t add_to_input_buffer(u8 c) {
 // Remove the last non-pending character in the input buffer if there is one
 // Implements backspace.
 static void remove_last_input_char(void) {
-    if (input_buffer_pending_size < input_buffer_size) {
-        input_buffer_size--;
-        text_buffer_size--;
-        // Move cursor back
-        if (cursor_x == 0) {
-            cursor_y--;
-            cursor_x = 0;
-            for (size_t i = text_buffer_size; i-- > 0; ) {
-                u8 c = text_buffer[(text_buffer_offset + i) & (text_buffer_capacity - 1)].ch;
-                cursor_x++;
-                if (c == '\n' || cursor_x >= screen_size.width / FONT_WIDTH)
-                    cursor_x = 0;
-            }
-        } else {
-            cursor_x--;
+    if (input_buffer_pending_size >= input_buffer_size)
+        return;
+    input_buffer_size--;
+    if (text_buffer_size == 0)
+        return;
+    text_buffer_size--;
+    // Move cursor back
+    if (cursor_x == 0) {
+        cursor_y--;
+        cursor_x = 0;
+        for (size_t i = text_buffer_size; i-- > 0; ) {
+            u8 c = text_buffer[(text_buffer_offset + i) & (text_buffer_capacity - 1)].ch;
+            if (c == '\n')
+                break;
+            cursor_x++;
+            if (cursor_x >= screen_size.width / FONT_WIDTH)
+                cursor_x = 0;
         }
+    } else {
+        cursor_x--;
     }
 }
 
@@ -174,8 +178,8 @@ static u8 keycode_char(Keycode keycode, bool shift) {
 
 // Remove the first line of text from the text buffer
 static void remove_first_line(void) {
-    for (size_t i = 0; i < screen_size.width / FONT_WIDTH; i++) {
-        text_buffer_offset++;
+    for (size_t i = 0; i < screen_size.width / FONT_WIDTH && text_buffer_size > 0; i++) {
+        text_buffer_offset = (text_buffer_offset + 1) & (text_buffer_capacity - 1);
         text_buffer_size--;
         if (text_buffer[(text_buffer_offset - 1) & (text_buffer_capacity - 1)].ch == '\n')
             break;
@@ -334,7 +338,7 @@ void main(void) {
         return;
     input_buffer_capacity = INPUT_BUFFER_DEFAULT_SIZE;
     input_buffer = malloc(input_buffer_capacity);
-    if (screen == NULL)
+    if (input_buffer == NULL)
         return;
     ModKeys mod_keys_held = 0;
     while (1) {
@@ -391,9 +395,9 @@ void main(void) {
             // Resize if there was a change
             if (new_screen_size.width != screen_size.width || new_screen_size.height != screen_size.height) {
                 // Resize text buffer
-                if (text_buffer_capacity < (screen_size.width / FONT_WIDTH + 1) * (screen_size.height / FONT_HEIGHT)) {
+                if (text_buffer_capacity < (new_screen_size.width / FONT_WIDTH + 1) * (new_screen_size.height / FONT_HEIGHT)) {
                     size_t new_text_buffer_capacity = text_buffer_capacity;
-                    while (new_text_buffer_capacity < (screen_size.width / FONT_WIDTH + 1) * (screen_size.height / FONT_HEIGHT))
+                    while (new_text_buffer_capacity < (new_screen_size.width / FONT_WIDTH + 1) * (new_screen_size.height / FONT_HEIGHT))
                         new_text_buffer_capacity *= 2;
                     TextCharacter *new_text_buffer = realloc(text_buffer, new_text_buffer_capacity * sizeof(TextCharacter));
                     if (new_text_buffer == NULL)
@@ -401,7 +405,7 @@ void main(void) {
                     text_buffer = new_text_buffer;
                     // Move final part of circular buffer if necessary
                     if (text_buffer_offset + text_buffer_size > text_buffer_capacity) {
-                        memmove(
+                        memcpy(
                             text_buffer + (text_buffer_offset + new_text_buffer_capacity - text_buffer_capacity),
                             text_buffer + text_buffer_offset,
                             (text_buffer_capacity - text_buffer_offset) * sizeof(TextCharacter));
