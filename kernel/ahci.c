@@ -142,12 +142,6 @@ typedef struct ReceivedFIS {
     u8 reserved1[256];
 } __attribute__((packed)) ReceivedFIS;
 
-volatile HBA *hba = (volatile HBA *)AHCI_MAPPING_AREA;
-
-static u32 command_slots_max;
-static CommandHeader (*command_lists)[32];
-static CommandTable *command_tables;
-
 typedef struct IssuedRequest {
     Message *message;
     Message *reply;
@@ -160,25 +154,53 @@ typedef struct IssuedCommand {
     i64 offset;
 } IssuedCommand;
 
+typedef struct Drive {
+    // Lock for variables related to the port
+    spinlock_t lock;
+    // Size of sectors on the drive
+    u64 sector_size;
+    // Number of sectors on the drive
+    u64 sector_count;
+    // Set if drive supports LBA48
+    bool is_lba48;
+    // Set if receive thread is waiting for a command slot to be freed up
+    bool receive_thread_blocked;
+    // Set if reply thread is waiting a command to be completed
+    bool reply_thread_blocked;
+    // Set if reply thread should check drive status again instead of blocking
+    bool reply_thread_repeat;
+    // Bitmask for commands that have been issued
+    u32 commands_issued;
+    // Pointer to thread responsible for receiving messages from userspace and issuing requests
+    Process *receive_thread;
+    // Pointer to thread responsible for receiving replies from the drive and passing them to userspace
+    Process *reply_thread;
+    // Queue for requests from userspace
+    MessageQueue *queue;
+    // AHCI command list
+    CommandHeader *command_list;
+    // List of AHCI command tables for each slot
+    CommandTable *command_tables;
+    // List of commands issued for each slot
+    IssuedCommand *issued_commands;
+} Drive;
+
+static Drive *drives[32] = {};
+
+volatile HBA *hba = (volatile HBA *)AHCI_MAPPING_AREA;
+static u32 command_slots_max;
+
 // Bit set for each connected port
 static u32 ports_connected;
 
-// Record for each command slot
-static IssuedCommand *issued_commands;
-
-// Sector size and count for each drive
-static u64 drive_sector_size[32];
-static u64 drive_sector_count[32];
-
-// Bit set if drive supports LBA48
-static u32 drive_is_lba48;
-
-// Message queue for each port
-static MessageQueue *port_queue[32];
-
-// Number of drives shown to userspace and size of each one
+// Number of drives shown to userspace and port number and size of each one
 static u32 user_drive_num = 0;
+static u32 user_drive_port[32];
 static size_t user_drive_size[32];
+
+// Used to initialize connection number for port threads
+static volatile _Atomic u32 ahci_receive_threads_initialized = 0;
+static volatile _Atomic u32 ahci_reply_threads_initialized = 0;
 
 // Initialize the AHCI controller
 err_t ahci_init(void) {
@@ -240,19 +262,20 @@ err_t ahci_init(void) {
     }
     // Create pointers to allocated structures
     // They are laid out so that none cross a page boundary.
-    command_lists = (CommandHeader (*)[32])(AHCI_MAPPING_AREA + 2 * PAGE_SIZE);
-    command_tables = (CommandTable *)(u64)(command_lists + ports_connected_num);
+    CommandHeader *command_headers = (CommandHeader *)(AHCI_MAPPING_AREA + 2 * PAGE_SIZE);
+    CommandTable *command_tables_all = (CommandTable *)(u64)(command_headers + 32 * ports_connected_num);
     // Allocate buffer for results of IDENTIFY DEVICE command
     u64 identify_buffer_page = page_alloc();
     if (identify_buffer_page == 0)
         return ERR_KERNEL_NO_MEMORY;
     // Initialize connected ports
-    u32 ports_initialized = 0;
+    u32 drive_id = 0;
     for (u32 port_i = 0; port_i < 32; port_i++) {
         // Skip if port not connected
         if (!((ports_connected >> port_i) & 1))
             continue;
-        u32 conn_i = ports_initialized++;
+        CommandHeader *command_list = &command_headers[32 * drive_id];
+        CommandTable *command_tables = &command_tables_all[command_slots_max * drive_id];
         // Spin up device
         hba->ports[port_i].command_status |= PORT_CMD_POWER_ON | PORT_CMD_SPIN_UP;
         while ((hba->ports[port_i].sata_status & PORT_SATA_STATUS_DET) != PORT_SATA_STATUS_DET_ESTABLISHED)
@@ -267,12 +290,12 @@ err_t ahci_init(void) {
             ;
         // Set up command list to point to command tables
         for (u32 j = 0; j < command_slots_max; j++) {
-            size_t command_table_offset = ports_connected_num * 1024 + (conn_i * command_slots_max + j) * 256;
-            command_lists[conn_i][j].command_table = ahci_pages[command_table_offset / PAGE_SIZE] + command_table_offset % PAGE_SIZE;
+            size_t command_table_offset = ports_connected_num * 1024 + (drive_id * command_slots_max + j) * 256;
+            command_list[j].command_table = ahci_pages[command_table_offset / PAGE_SIZE] + command_table_offset % PAGE_SIZE;
         }
         // Set command list and FIS base to their physical addresses
-        size_t command_list_offset = conn_i * 1024;
-        size_t fis_offset = ports_connected_num * (1024 + command_slots_max * 256) + conn_i * 256;
+        size_t command_list_offset = drive_id * 1024;
+        size_t fis_offset = ports_connected_num * (1024 + command_slots_max * 256) + drive_id * 256;
         hba->ports[port_i].command_list_base = ahci_pages[command_list_offset / PAGE_SIZE] + command_list_offset % PAGE_SIZE;
         hba->ports[port_i].fis_base = ahci_pages[fis_offset / PAGE_SIZE] + fis_offset % PAGE_SIZE;
         // Reenable FIS receive and command list processing
@@ -282,63 +305,62 @@ err_t ahci_init(void) {
         hba->ports[port_i].sata_error = UINT32_C(-1);
         hba->ports[port_i].interrupt_status = UINT32_C(-1);
         // Construct IDENTIFY DEVICE command in command slot 0
-        command_tables[conn_i * command_slots_max].command_fis.fis_type = FIS_TYPE_HOST_TO_DEVICE;
-        command_tables[conn_i * command_slots_max].command_fis.flags = FIS_FLAGS_COMMAND;
-        command_tables[conn_i * command_slots_max].command_fis.command = FIS_COMMAND_IDENTIFY_DEVICE;
-        command_tables[conn_i * command_slots_max].region[0].data_base = identify_buffer_page;
-        command_tables[conn_i * command_slots_max].region[0].byte_count = 511;
-        command_lists[conn_i][0].table_length = 1;
-        command_lists[conn_i][0].flags = COMMAND_LIST_FIS_LENGTH;
+        command_tables[0].command_fis.fis_type = FIS_TYPE_HOST_TO_DEVICE;
+        command_tables[0].command_fis.flags = FIS_FLAGS_COMMAND;
+        command_tables[0].command_fis.command = FIS_COMMAND_IDENTIFY_DEVICE;
+        command_tables[0].region[0].data_base = identify_buffer_page;
+        command_tables[0].region[0].byte_count = 511;
+        command_list[0].table_length = 1;
+        command_list[0].flags = COMMAND_LIST_FIS_LENGTH;
         // Send command and wait for it to be processed
         hba->ports[port_i].command_issue = 1;
         while (hba->ports[port_i].command_issue & 1) {
             while (!hba->ports[port_i].interrupt_status)
                 ;
             if (hba->ports[port_i].interrupt_status & PORT_INT_ERROR_ANY)
-                goto fail;
+                continue;
         }
         // Clear SATA error and interrupt status registers again
         hba->ports[port_i].sata_error = UINT32_C(-1);
         hba->ports[port_i].interrupt_status = UINT32_C(-1);
         u16 *identify_buffer = PHYS_ADDR(identify_buffer_page);
         // Check transferred byte count for underflow
-        if (command_lists[conn_i][0].byte_count != 512)
-            goto fail;
+        if (command_list[0].byte_count != 512)
+            continue;
         // Check for LBA and DMA in capabilities
         if (!(identify_buffer[IDENTIFY_CAP] & (IDENTIFY_CAP_LBA | IDENTIFY_CAP_DMA)))
-            goto fail;
+            continue;
+        u64 sector_size = 512;
         // Get logical sector size in bytes
         if ((identify_buffer[IDENTIFY_SECTOR_SIZE_FLAGS] & IDENTIFY_FIELD_VALID_MASK) == IDENTIFY_FIELD_VALID
                 && (identify_buffer[IDENTIFY_SECTOR_SIZE_FLAGS] & IDENTIFY_SECTOR_SIZE_FLAGS_LOGICAL_SIZE_SUPPORTED))
-            drive_sector_size[conn_i] =
+            sector_size =
                 2 * ((u32)identify_buffer[IDENTIFY_LOGICAL_SECTOR_SIZE]
                     | ((u32)identify_buffer[IDENTIFY_LOGICAL_SECTOR_SIZE + 1] << 16));
-        else
-            drive_sector_size[conn_i] = 512;
         // Require sector size to be power of two fitting in page
-        if (drive_sector_size[conn_i] == 0 || drive_sector_size[conn_i] > PAGE_SIZE
-                || (drive_sector_size[conn_i] & (drive_sector_size[conn_i] - 1)) != 0)
-            goto fail;
+        if (sector_size == 0 || sector_size > PAGE_SIZE
+                || (sector_size & (sector_size - 1)) != 0)
+            continue;
         // Determine if drive supports LBA48
         bool is_lba48 = (identify_buffer[IDENTIFY_COM_SUP_2] & IDENTIFY_FIELD_VALID_MASK) == IDENTIFY_FIELD_VALID
             && (identify_buffer[IDENTIFY_COM_SUP_2] & IDENTIFY_COM_SUP_2_LBA_48);
-        drive_is_lba48 |= (u32)is_lba48 << conn_i;
         // Get logical sector count
+        u64 sector_count = 0;
         if (is_lba48)
-            drive_sector_count[conn_i] =
+            sector_count =
                 (u64)identify_buffer[IDENTIFY_SECTOR_COUNT_48]
                 | ((u64)identify_buffer[IDENTIFY_SECTOR_COUNT_48 + 1] << 16)
                 | ((u64)identify_buffer[IDENTIFY_SECTOR_COUNT_48 + 2] << 32)
                 | ((u64)identify_buffer[IDENTIFY_SECTOR_COUNT_48 + 3] << 48);
         else
-            drive_sector_count[conn_i] =
+            sector_count =
                 (u32)identify_buffer[IDENTIFY_SECTOR_COUNT_28]
                 | ((u32)identify_buffer[IDENTIFY_SECTOR_COUNT_28 + 1] << 16);
-        if (drive_sector_count[conn_i] == 0)
-            goto fail;
+        if (sector_count == 0)
+            continue;
         // Allocate message queue
-        port_queue[conn_i] = mqueue_alloc();
-        if (port_queue[conn_i] == NULL)
+        MessageQueue *port_queue = mqueue_alloc();
+        if (port_queue == NULL)
             return ERR_KERNEL_NO_MEMORY;
         // Spawn receive and reply thread
         Process *receive_thread;
@@ -353,83 +375,44 @@ err_t ahci_init(void) {
         process_set_kernel_stack(reply_thread, ahci_drive_reply_kernel_thread_main);
         process_enqueue(receive_thread);
         process_enqueue(reply_thread);
-        user_drive_size[user_drive_num] = drive_sector_size[conn_i] * drive_sector_count[conn_i];
+        user_drive_size[user_drive_num] = sector_size * sector_count;
         user_drive_num++;
         // Enable interrupts for port
         hba->ports[port_i].interrupt_enable = UINT32_C(-1);
-        continue;
-fail:
-        // Set sector size to zero to indicate that the port failed to initialize
-        drive_sector_size[conn_i] = 0;
+        // Allocate drive structure
+        drives[port_i] = malloc(sizeof(Drive));
+        if (drives[port_i] == NULL)
+            return ERR_KERNEL_NO_MEMORY;
+        memset(drives[port_i], 0, sizeof(Drive));
+        drives[port_i]->sector_size = sector_size;
+        drives[port_i]->sector_count = sector_count;
+        drives[port_i]->is_lba48 = is_lba48;
+        drives[port_i]->queue = port_queue;
+        drives[port_i]->command_list = command_list;
+        drives[port_i]->command_tables = command_tables;
+        // Allocate memory for issued commands
+        drives[port_i]->issued_commands = malloc(sizeof(IssuedCommand) * command_slots_max);
+        if (drives[port_i]->issued_commands == NULL)
+            return ERR_NO_MEMORY;
+        user_drive_port[drive_id] = port_i;
+        drive_id++;
     }
     page_free(identify_buffer_page);
     // Clear interrupts
     hba->interrupt_status = UINT32_C(-1);
-    // Allocate memory for issued commands
-    issued_commands = malloc(sizeof(IssuedCommand) * ports_connected_num * command_slots_max);
-    if (issued_commands == NULL)
-        return ERR_NO_MEMORY;
     return 0;
-}
-
-// Lock for the variables relating to each port
-static spinlock_t port_lock[32];
-
-// Pointers to the two threads created for each drive
-static Process *drive_receive_thread[32];
-static Process *drive_reply_thread[32];
-
-// Set if receive thread is waiting for a command slot to be freed up
-static bool receive_thread_blocked[32];
-
-// Set if reply thread is waiting a command to be completed
-static bool reply_thread_blocked[32];
-
-// Set if receive thread should check slot status again instead of blocking
-static bool receive_thread_repeat[32];
-
-// Set if reply thread should check drive status again instead of blocking
-static bool reply_thread_repeat[32];
-
-// Bitmask for commands that have been issued for a given port
-u32 port_commands_issued[32];
-
-// Used to initialize connection number for port threads
-static volatile _Atomic u32 ahci_receive_threads_initialized = 0;
-static volatile _Atomic u32 ahci_reply_threads_initialized = 0;
-
-// Get port numbers from drive ID
-static err_t get_port_number(u32 drive_id, u32 *conn_i_ptr, u32 *port_i_ptr) {
-    u32 ports_skipped = 0;
-    u32 conn_i = 0;
-    for (u32 port_i = 0; port_i < 32; port_i++) {
-        if (!((ports_connected >> port_i) & 1))
-            continue;
-        if (drive_sector_size[conn_i] == 0) {
-            conn_i++;
-            continue;
-        }
-        if (ports_skipped++ == drive_id) {
-            *conn_i_ptr = conn_i;
-            *port_i_ptr = port_i;
-            return 0;
-        }
-        conn_i++;
-    }
-    return ERR_INVALID_ARG;
 }
 
 _Noreturn void ahci_drive_receive_kernel_thread_main(void) {
     err_t err;
     // Get port number
-    u32 conn_i, port_i;
-    get_port_number(atomic_fetch_add(&ahci_receive_threads_initialized, 1), &conn_i, &port_i);
-    u32 sectors_per_page = PAGE_SIZE / drive_sector_size[conn_i];
-    drive_receive_thread[conn_i] = cpu_local->current_process;
+    u32 port_i = user_drive_port[atomic_fetch_add(&ahci_receive_threads_initialized, 1)];
+    u32 sectors_per_page = PAGE_SIZE / drives[port_i]->sector_size;
+    drives[port_i]->receive_thread = cpu_local->current_process;
     while (1) {
         Message *message;
         // Get message from user process
-        mqueue_receive(port_queue[conn_i], &message, false, false, TIMEOUT_NONE);
+        mqueue_receive(drives[port_i]->queue, &message, false, false, TIMEOUT_NONE);
         if (message->data_size != 2 * sizeof(u64) || message->handles_size != 0) {
             err = ERR_INVALID_ARG;
             goto fail;
@@ -448,7 +431,7 @@ _Noreturn void ahci_drive_receive_kernel_thread_main(void) {
             continue;
         }
         // Check bounds
-        if (offset + length > drive_sector_size[conn_i] * drive_sector_count[conn_i] || offset + length < offset) {
+        if (offset + length > drives[port_i]->sector_size * drives[port_i]->sector_count || offset + length < offset) {
             err = ERR_OUT_OF_RANGE;
             goto fail;
         }
@@ -479,32 +462,27 @@ _Noreturn void ahci_drive_receive_kernel_thread_main(void) {
                 err = ERR_NO_MEMORY;
                 goto fail_buffer_page_alloc;
             }
-            spinlock_acquire(&port_lock[port_i]);
+            spinlock_acquire(&drives[port_i]->lock);
             // Get next empty slot
             u32 slot_i;
             while (1) {
                 for (slot_i = 0; slot_i < command_slots_max; slot_i++)
-                    if (!((port_commands_issued[conn_i] >> slot_i) & 1))
+                    if (!((drives[port_i]->commands_issued >> slot_i) & 1))
                         goto slot_found;
-                if (receive_thread_repeat[conn_i]) {
-                    receive_thread_repeat[conn_i] = false;
-                } else {
-                    // Block if no free slots available
-                    receive_thread_blocked[conn_i] = true;
-                    process_block(&port_lock[port_i]);
-                    spinlock_acquire(&port_lock[port_i]);
-                }
+                // Block if no free slots available
+                drives[port_i]->receive_thread_blocked = true;
+                process_block(&drives[port_i]->lock);
+                spinlock_acquire(&drives[port_i]->lock);
             }
 slot_found:;
             // Construct request
-            CommandHeader *command_header = &command_lists[conn_i][slot_i];
-            CommandTable *command_table = &command_tables[conn_i * command_slots_max + slot_i];
-            bool is_lba48 = (bool)((drive_is_lba48 >> conn_i) & 1);
+            CommandHeader *command_header = &drives[port_i]->command_list[slot_i];
+            CommandTable *command_table = &drives[port_i]->command_tables[slot_i];
             u64 lba = (offset_page + i) * sectors_per_page;
             command_table->command_fis.fis_type = FIS_TYPE_HOST_TO_DEVICE;
             command_table->command_fis.flags = FIS_FLAGS_COMMAND;
-            command_table->command_fis.command = is_lba48 ? FIS_COMMAND_READ_DMA_EXT : FIS_COMMAND_READ_DMA;
-            command_table->command_fis.device = is_lba48 ? (1 << 6) : 0;
+            command_table->command_fis.command = drives[port_i]->is_lba48 ? FIS_COMMAND_READ_DMA_EXT : FIS_COMMAND_READ_DMA;
+            command_table->command_fis.device = drives[port_i]->is_lba48 ? (1 << 6) : 0;
             command_table->command_fis.lba0 = (u8)lba;
             command_table->command_fis.lba1 = (u8)(lba >> 8);
             command_table->command_fis.lba2 = (u8)(lba >> 16);
@@ -520,12 +498,12 @@ slot_found:;
             // Issue request
             hba->ports[port_i].command_issue = UINT32_C(1) << slot_i;
             // Construct issued command structure
-            IssuedCommand *issued_command = &issued_commands[conn_i * command_slots_max + slot_i];
+            IssuedCommand *issued_command = &drives[port_i]->issued_commands[slot_i];
             issued_command->request = issued_request;
             issued_command->offset = (offset_page + i) * PAGE_SIZE - offset;
             // Mark command as issued internally
-            port_commands_issued[conn_i] |= UINT32_C(1) << slot_i;
-            spinlock_release(&port_lock[port_i]);
+            drives[port_i]->commands_issued |= UINT32_C(1) << slot_i;
+            spinlock_release(&drives[port_i]->lock);
         }
         continue;
 fail_buffer_page_alloc:
@@ -540,33 +518,32 @@ fail:
 
 _Noreturn void ahci_drive_reply_kernel_thread_main(void) {
     // Get port number
-    u32 conn_i, port_i;
-    get_port_number(atomic_fetch_add(&ahci_reply_threads_initialized, 1), &conn_i, &port_i);
-    drive_reply_thread[port_i] = cpu_local->current_process;
+    u32 port_i = user_drive_port[atomic_fetch_add(&ahci_reply_threads_initialized, 1)];
+    drives[port_i]->reply_thread = cpu_local->current_process;
     while (1) {
         // Block until an interrupt from the drive
-        spinlock_acquire(&port_lock[port_i]);
-        if (reply_thread_repeat[port_i]) {
-            reply_thread_repeat[port_i] = false;
+        spinlock_acquire(&drives[port_i]->lock);
+        if (drives[port_i]->reply_thread_repeat) {
+            drives[port_i]->reply_thread_repeat = false;
         } else {
-            reply_thread_blocked[port_i] = true;
-            process_block(&port_lock[port_i]);
-            spinlock_acquire(&port_lock[port_i]);
+            drives[port_i]->reply_thread_blocked = true;
+            process_block(&drives[port_i]->lock);
+            spinlock_acquire(&drives[port_i]->lock);
         }
         // Get interrupt status and clear it
         u32 interrupt_status = hba->ports[port_i].interrupt_status;
         hba->ports[port_i].interrupt_status = interrupt_status;
         hba->interrupt_status = UINT32_C(1) << port_i;
         // Go over all commands that have been completed
-        u32 commands_completed = port_commands_issued[conn_i] & ~hba->ports[port_i].command_issue;
-        spinlock_release(&port_lock[port_i]);
+        u32 commands_completed = drives[port_i]->commands_issued & ~hba->ports[port_i].command_issue;
+        spinlock_release(&drives[port_i]->lock);
         for (u32 slot_i = 0; slot_i < command_slots_max; slot_i++) {
             if (!((commands_completed >> slot_i) & 1))
                 continue;
-            CommandHeader *command_header = &command_lists[conn_i][slot_i];
-            CommandTable *command_table = &command_tables[conn_i * command_slots_max + slot_i];
+            CommandHeader *command_header = &drives[port_i]->command_list[slot_i];
+            CommandTable *command_table = &drives[port_i]->command_tables[slot_i];
             void *buffer = PHYS_ADDR(command_table->region[0].data_base);
-            IssuedCommand *issued_command = &issued_commands[conn_i * command_slots_max + slot_i];
+            IssuedCommand *issued_command = &drives[port_i]->issued_commands[slot_i];
             IssuedRequest *issued_request = issued_command->request;
             if (command_header->byte_count == PAGE_SIZE) {
                 // Copy data from buffer to reply data
@@ -578,10 +555,10 @@ _Noreturn void ahci_drive_reply_kernel_thread_main(void) {
                     memcpy(issued_request->reply->data, buffer - issued_command->offset, PAGE_SIZE + issued_command->offset);
                 else
                     memcpy(issued_request->reply->data, buffer - issued_command->offset, issued_request->reply->data_size);
-                spinlock_acquire(&port_lock[port_i]);
+                spinlock_acquire(&drives[port_i]->lock);
             } else {
                 // If we received the wrong number of bytes, signal an error and mark request as failed
-                spinlock_acquire(&port_lock[port_i]);
+                spinlock_acquire(&drives[port_i]->lock);
                 message_free(issued_request->reply);
                 message_reply_error(issued_request->message, ERR_IO_INTERNAL);
                 message_free(issued_request->message);
@@ -601,12 +578,12 @@ _Noreturn void ahci_drive_reply_kernel_thread_main(void) {
                 free(issued_request);
             }
             // Mark command slot as free
-            port_commands_issued[conn_i] &= ~(UINT32_C(1) << slot_i);
-            if (receive_thread_blocked[conn_i]) {
-                receive_thread_blocked[conn_i] = false;
-                process_enqueue(drive_receive_thread[conn_i]);
+            drives[port_i]->commands_issued &= ~(UINT32_C(1) << slot_i);
+            if (drives[port_i]->receive_thread_blocked) {
+                drives[port_i]->receive_thread_blocked = false;
+                process_enqueue(drives[port_i]->receive_thread);
             }
-            spinlock_release(&port_lock[port_i]);
+            spinlock_release(&drives[port_i]->lock);
         }
     }
 }
@@ -617,14 +594,14 @@ void drive_process_irq(void) {
     for (u32 port_i = 0; port_i < 32; port_i++) {
         if (!((interrupt_status >> port_i) & 1))
             continue;
-        spinlock_acquire(&port_lock[port_i]);
-        if (reply_thread_blocked[port_i]) {
-            reply_thread_blocked[port_i] = false;
-            process_enqueue(drive_reply_thread[port_i]);
+        spinlock_acquire(&drives[port_i]->lock);
+        if (drives[port_i]->reply_thread_blocked) {
+            drives[port_i]->reply_thread_blocked = false;
+            process_enqueue(drives[port_i]->reply_thread);
         } else {
-            reply_thread_repeat[port_i] = true;
+            drives[port_i]->reply_thread_repeat = true;
         }
-        spinlock_release(&port_lock[port_i]);
+        spinlock_release(&drives[port_i]->lock);
     }
 }
 
@@ -661,12 +638,11 @@ _Noreturn void ahci_main_kernel_thread_main(void) {
                 goto fail;
             }
             size_t drive_id = *(size_t *)message->data;
-            u32 port_i, conn_i;
-            err = get_port_number(drive_id, &port_i, &conn_i);
-            if (err) {
+            if (drive_id > user_drive_num) {
                 err = ERR_DOES_NOT_EXIST;
                 goto fail;
             }
+            u32 port_i = user_drive_port[drive_id];
             Message *reply = message_alloc(0);
             if (reply == NULL) {
                 err = ERR_NO_MEMORY;
@@ -682,9 +658,8 @@ _Noreturn void ahci_main_kernel_thread_main(void) {
                 err = ERR_NO_MEMORY;
                 goto fail_handles_alloc;
             }
+            channel_set_mqueue(drive_channel, drives[port_i]->queue, (MessageTag){0, 0});
             reply->handles_size = 1;
-            channel_set_mqueue(drive_channel, port_queue[conn_i], (MessageTag){conn_i, 0});
-            channel_add_ref(drive_channel);
             reply->handles[0] = (AttachedHandle){ATTACHED_HANDLE_TYPE_CHANNEL_SEND, {.channel = drive_channel}};
             message_reply(message, reply);
             message_free(message);
