@@ -649,10 +649,10 @@ err_t channel_call(Channel *channel, Message *message, Message **reply) {
 }
 
 // Set message to expect an async reply and send it on a channel
-err_t channel_call_async(Channel *channel, Message *message, MessageQueue *mqueue, MessageTag tag) {
+err_t channel_call_async(Channel *channel, Message *message, MessageQueue *mqueue, MessageTag tag, bool nonblock) {
     err_t err;
     MessageQueue *queue;
-    err = channel_prepare_for_send(channel, message, &queue, false);
+    err = channel_prepare_for_send(channel, message, &queue, nonblock);
     if (err) {
         message_free(message);
         return err;
@@ -666,7 +666,7 @@ err_t channel_call_async(Channel *channel, Message *message, MessageQueue *mqueu
     message->reply_tag = tag;
     mqueue_add_ref(mqueue);
     message->mqueue = mqueue;
-    return mqueue_send(queue, message, false);
+    return mqueue_send(queue, message, nonblock);
 }
 
 // Returns the length of the message
@@ -1053,8 +1053,11 @@ err_t syscall_channel_create(handle_t *channel_send_i_ptr, handle_t *channel_rec
     return 0;
 }
 
-err_t syscall_channel_call_async(handle_t channel_i, const SendMessage *user_message, handle_t mqueue_i, MessageTag tag) {
+err_t syscall_channel_call_async(handle_t channel_i, const SendMessage *user_message, handle_t mqueue_i, MessageTag tag, u64 flags) {
     err_t err;
+    // Verify flags are valid
+    if (flags & ~FLAG_NONBLOCK)
+        return ERR_KERNEL_INVALID_ARG;
     // Verify buffers are valid
     err = verify_user_send_message(user_message);
     if (err)
@@ -1079,7 +1082,7 @@ err_t syscall_channel_call_async(handle_t channel_i, const SendMessage *user_mes
     if (err)
         return err;
     // Send the message
-    err = channel_call_async(channel_handle.channel, message, mqueue_handle.mqueue, tag);
+    err = channel_call_async(channel_handle.channel, message, mqueue_handle.mqueue, tag, (bool)(flags & FLAG_NONBLOCK));
     if (err)
         return err;
     return 0;

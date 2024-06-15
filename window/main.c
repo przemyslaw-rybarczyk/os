@@ -1048,7 +1048,7 @@ static void send_redraw_messages(Container *container) {
         WindowContainer *window = (WindowContainer *)container;
         ScreenSize window_size;
         get_window_size(window, &window_size);
-        channel_call_async(window->video_redraw_in, &(SendMessage){1, &(SendMessageData){sizeof(ScreenSize), &window_size}, 0, NULL}, event_queue, (MessageTag){EVENT_VIDEO_REDRAW_REPLY, (uintptr_t)container});
+        channel_call_async(window->video_redraw_in, &(SendMessage){1, &(SendMessageData){sizeof(ScreenSize), &window_size}, 0, NULL}, event_queue, (MessageTag){EVENT_VIDEO_REDRAW_REPLY, (uintptr_t)container}, FLAG_NONBLOCK);
         break;
     }
     case CONTAINER_SPLIT_HORIZONTAL:
