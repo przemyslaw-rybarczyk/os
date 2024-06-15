@@ -31,6 +31,7 @@ extern message_free
 extern time_from_tsc
 extern schedule_timeslice_interrupt
 extern cancel_timeslice_interrupt
+extern panic
 
 struc Process
   .rsp: resq 1
@@ -73,6 +74,12 @@ section .bss
 ; Length of timeslice in TSC ticks
 ; Set by time_init().
 timeslice_length: resq 1
+
+section .rodata
+
+process_block_panic_msg: db `process_block() called with more than one lock held\0`
+process_exit_panic_msg: db `process_exit() called with locks held\0`
+process_switch_panic_msg: db `process_switch() called with locks held\0`
 
 section .text
 
@@ -214,6 +221,11 @@ sched_start:
 ; Must be called with no locks held other than the one passed as argument.
 ; The argument may be NULL, in which case no lock is released.
 process_block:
+  cmp qword gs:[PerCPU.preempt_disable], 1
+  jna .one_lock_held
+  mov rdi, process_block_panic_msg
+  call panic
+.one_lock_held:
   push rdi
   ; Disable interrupts
   call interrupt_disable
@@ -248,6 +260,11 @@ process_block:
 ; Ends the current process
 ; Must be called with no locks held.
 process_exit:
+  cmp qword gs:[PerCPU.preempt_disable], 0
+  je .no_locks_held
+  mov rdi, process_exit_panic_msg
+  call panic
+.no_locks_held:
   mov rbx, gs:[PerCPU.current_process]
   ; Free the process contents
   ; This does not free any parts of the process control block that are necessary to switch back to the process running in kernel mode.
@@ -279,6 +296,11 @@ process_exit:
 ; Preempt the current process and run a different one
 ; Must be called with no locks held.
 process_switch:
+  cmp qword gs:[PerCPU.preempt_disable], 0
+  je .no_locks_held
+  mov rdi, process_switch_panic_msg
+  call panic
+.no_locks_held:
   ; Disable interrupts
   call interrupt_disable
   ; End the timeslice
