@@ -89,7 +89,7 @@ static bool interrupt_pushes_error_code(u8 i) {
 
 // This is a default handler used for exceptions that don't have a specific handler assigned to them.
 // It's called by the wrapper in `interrupt.s`.
-// It prints the exception information and halts.
+// If the interrupt occurred in kernel code, it prints the exception information and halts.
 void general_exception_handler(u8 interrupt_number, InterruptFrame *interrupt_frame, u64 error_code) {
     // If the exception occurred in user mode, kill the currently running process
     if ((interrupt_frame->cs & 3) != 0) {
@@ -134,6 +134,18 @@ void general_exception_handler(u8 interrupt_number, InterruptFrame *interrupt_fr
         print_hex_u64(page_fault_address);
         print_newline();
     }
+    while (1)
+        asm volatile ("hlt");
+}
+
+// Function called when the kernel enters a state that should be impossible to reach.
+// It prints a given message and halts.
+void panic(const char *str) {
+    // Stop all other cores
+    send_halt_ipi();
+    // Print the message and halt
+    print_string("Kernel panic: ");
+    print_string(str);
     while (1)
         asm volatile ("hlt");
 }
