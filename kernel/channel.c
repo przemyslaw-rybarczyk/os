@@ -386,6 +386,7 @@ void mqueue_del_ref(MessageQueue *queue) {
             message_free(message);
             message = next_message;
         }
+        spinlock_release(&queue->lock);
         free(queue);
     } else {
         spinlock_release(&queue->lock);
@@ -566,6 +567,7 @@ void channel_del_ref(Channel *channel) {
     if (channel->refcount == 0) {
         if (channel->queue != NULL)
             mqueue_del_ref(channel->queue);
+        spinlock_release(&channel->lock);
         free(channel);
     } else {
         spinlock_release(&channel->lock);
