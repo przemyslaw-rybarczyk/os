@@ -60,7 +60,6 @@ void ahci_irq_handler(void) {
 
 // Send all input events in the queue
 void send_input_events(void) {
-    err_t err;
     send_input_delayed = false;
     if (drive_event_delayed) {
         drive_event_delayed = false;
@@ -97,9 +96,7 @@ void send_input_events(void) {
         }
         if (message == NULL)
             continue;
-        err = channel_send(channel, message, true);
-        if (err)
-            message_free(message);
+        channel_send(channel, message, true);
     }
     spinlock_release(&input_event_queue_lock);
     interrupt_enable();
