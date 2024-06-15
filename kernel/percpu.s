@@ -9,36 +9,27 @@ MSR_GS_BAS equ 0xC0000101
 
 ERR_NO_MEMORY equ 0xFFFFFFFFFFFF0002
 
-; Allocate per-CPU data and set the GS base so it can be used
-; Takes the idle stack base as an argument.
+; Initialize per-CPU data and set the GS base so it can be used
+; Takes the preallocated PerCPU strucutre and idle stack base as an arguments.
 percpu_init:
   push rdi
-  ; Allocate the per-CPU data structure
-  mov rdi, PerCPU_size
-  call malloc
-  test rax, rax
-  jz .malloc_fail
-  push rax
-  ; Clear the allocated structure
-  mov rdi, rax
+  push rsi
+  ; Clear the PerCPU structure
   xor rsi, rsi
   mov rdx, PerCPU_size
   call memset
-  pop rax
+  pop rsi
   pop rdi
   ; Set the self pointer
-  mov [rax + PerCPU.self], rax
+  mov [rdi + PerCPU.self], rdi
   ; Set the idle stack
-  mov [rax + PerCPU.idle_stack], rdi
+  mov [rdi + PerCPU.idle_stack], rsi
   ; Initialize interrupts as disabled once
-  mov qword [rax + PerCPU.interrupt_disable], 1
+  mov qword [rdi + PerCPU.interrupt_disable], 1
   ; Set the GS base
   mov ecx, MSR_GS_BAS
-  mov rdx, rax
+  mov rax, rdi
+  mov rdx, rdi
   shr rdx, 32
   wrmsr
-  xor rax, rax
-  ret
-.malloc_fail:
-  mov rax, ERR_NO_MEMORY
   ret

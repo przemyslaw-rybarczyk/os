@@ -60,4 +60,4 @@ typedef struct PerCPU {
 
 #define cpu_local ((__seg_gs PerCPU *)0)
 
-err_t percpu_init(void *stack);
+void percpu_init(PerCPU *percpu, void *stack);

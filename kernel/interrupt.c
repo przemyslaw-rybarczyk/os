@@ -7,31 +7,15 @@
 #include "process.h"
 #include "segment.h"
 #include "smp.h"
+#include "string.h"
 
 #define IDT_GATE_PRESENT 0x80
 #define IDT_GATE_INTERRUPT 0x0E
-
-#define IDT_ENTRIES_NUM 0x30
 
 #define INT_DOUBLE_FAULT 0x08
 #define INT_PAGE_FAULT 0x0E
 
 extern u64 interrupt_handlers[IDT_ENTRIES_NUM];
-
-typedef struct IDTEntry {
-    u16 addr1;
-    u16 segment;
-    u8 ist;
-    u8 gate_type;
-    u16 addr2;
-    u32 addr3;
-    u32 reserved1;
-} __attribute__((packed)) IDTEntry;
-
-typedef struct IDTR {
-    u16 size;
-    u64 offset;
-} __attribute__((packed)) IDTR;
 
 static void idt_set_entry(IDTEntry *entry, u64 addr, u8 ist) {
     *entry = (IDTEntry){
@@ -49,20 +33,11 @@ IDTEntry idt_bsp[IDT_ENTRIES_NUM];
 IDTR idtr_bsp;
 
 // Initialize the IDT
-// If `bsp` is set, the IDT and IDTR are set from the statically allocated variables `idt_bsp` and `idtr_bsp`, and not allocated dynamically.
-// This option so that interrupts can be initialized on the BSP before initializing the page allocator and memory allocator.
-// This way, if there's an issue with either of those it will produce an error message rather than a triple fault.
-err_t interrupt_init(bool bsp) {
-    // Allocate the IDT and IDTR
+void interrupt_init(IDTEntry *idt, IDTR *idtr) {
     size_t idt_size = IDT_ENTRIES_NUM * sizeof(IDTEntry);
-    IDTEntry *idt = bsp ? &idt_bsp : malloc(idt_size);
-    if (idt == NULL)
-        return ERR_KERNEL_NO_MEMORY;
-    IDTR *idtr = bsp ? &idtr_bsp : malloc(sizeof(IDTR));
-    if (idtr == NULL) {
-        free(idt);
-        return ERR_KERNEL_NO_MEMORY;
-    }
+    // Clear the IDT
+    memset(idt, 0, idt_size);
+    // Set the IDTR
     *idtr = (IDTR){idt_size - 1, (u64)idt};
     // Fill the IDT entries with the handlers defined in `interrupt.s`
     // Interrupts with handler address given as 0 don't have a handler.
@@ -72,7 +47,6 @@ err_t interrupt_init(bool bsp) {
     }
     // Load the IDT Descriptor
     asm volatile ("lidt [%0]" : : "r"(idtr));
-    return 0;
 }
 
 typedef struct InterruptFrame {

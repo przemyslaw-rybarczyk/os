@@ -17,25 +17,34 @@
 #include "stack.h"
 #include "time.h"
 
+// There are two things that we need to initialize before being able to use the memory allocator:
+// - the IDT, so that any errors that occur during further initialization won't cause a triple fault,
+// - the per-CPU data, since the memory allocator modifies it when using spinlocks.
+// Since we don't have access to the heap yet, we need to allocate the necessary memory earlier.
+// The memory for early BSP initialization is allocated statically.
+// For the APs, it's allocated on the heap by the BSP before starting them.
+typedef struct PerCPUPrealloc {
+    IDTEntry idt[IDT_ENTRIES_NUM];
+    IDTR idtr;
+    PerCPU percpu;
+} PerCPUPrealloc;
+
+PerCPUPrealloc bsp_prealloc;
+PerCPUPrealloc *ap_prealloc;
+
 void _string_init(void);
 
 void kernel_start(void *stack) {
     framebuffer_init();
     _string_init();
-    if (interrupt_init(true) != 0) {
-        print_string("Failed to initialize interrupt handlers\n");
-        goto halt;
-    }
+    interrupt_init(bsp_prealloc.idt, &bsp_prealloc.idtr);
+    percpu_init(&bsp_prealloc.percpu, stack);
     if (page_alloc_init() != 0) {
         print_string("Failed to initialize paging structures\n");
         goto halt;
     }
     if (_alloc_init() != 0) {
         print_string("Failed to initialize memory allocator\n");
-        goto halt;
-    }
-    if (percpu_init(stack) != 0) {
-        print_string("Failed to initialize CPU-local storage\n");
         goto halt;
     }
     if (gdt_init() != 0) {
@@ -51,6 +60,11 @@ void kernel_start(void *stack) {
     }
     if (acpi_init() != 0) {
         print_string("Failed to read ACPI tables\n");
+        goto halt;
+    }
+    ap_prealloc = malloc((cpu_num - 1) * sizeof(PerCPUPrealloc));
+    if (ap_prealloc == NULL) {
+        print_string("Failed to allocate ap_prealloc\n");
         goto halt;
     }
     if (stack_init() != 0) {
@@ -81,18 +95,9 @@ halt:
 }
 
 void kernel_start_ap(void *stack) {
-    if (interrupt_init(false) != 0) {
-        framebuffer_lock();
-        print_string("Failed to initialize interrupt handlers on AP\n");
-        framebuffer_unlock();
-        goto halt;
-    }
-    if (percpu_init(stack) != 0) {
-        framebuffer_lock();
-        print_string("Failed to initialize CPU-local storage on AP\n");
-        framebuffer_unlock();
-        goto halt;
-    }
+    u64 ap_id = ((u64)stack - PAGE_SIZE - KERNEL_INIT_STACK) / (2 * PAGE_SIZE) - 1;
+    interrupt_init(ap_prealloc[ap_id].idt, &ap_prealloc[ap_id].idtr);
+    percpu_init(&ap_prealloc[ap_id].percpu, stack);
     if (gdt_init() != 0) {
         framebuffer_lock();
         print_string("Failed to initialize GDT on AP\n");

@@ -5,14 +5,11 @@
 #include "smp.h"
 #include "spinlock.h"
 
-#define STACK_PML4E UINT64_C(0x1FE)
-#define KERNEL_INIT_STACK ASSEMBLE_ADDR_PML4E(STACK_PML4E, 0)
 #define KERNEL_STACK_AREA_END (KERNEL_INIT_STACK + PDPT_SIZE)
 
 static spinlock_t stack_alloc_lock;
 
 // The address of the last stack that has memory allocated for it
-// This variable is global so it can be used to set up the initial kernel stacks for each core.
 u64 last_kernel_stack = KERNEL_INIT_STACK;
 
 // The address of the first unused allocated kernel stack
