@@ -2,6 +2,7 @@
 
 #include "types.h"
 #include "alloc.h"
+#include "interrupt.h"
 #include "page.h"
 #include "string.h"
 #include "spinlock.h"
@@ -12,12 +13,19 @@
 #else
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <zr/syscalls.h>
 #include <zr/types.h>
 
 #define HEAP_START UINT64_C(0x0000008000000000)
 #define HEAP_END_MAX UINT64_C(0x0000010000000000)
+
+static void panic(const char *str) {
+    fputs("Memory allocator error: ", stderr);
+    fputs(str, stderr);
+    process_exit();
+}
 
 #endif
 
@@ -57,9 +65,11 @@ static err_t heap_extend(size_t increment) {
 }
 
 // The heap is split into consecutive regions, each one starting with a header.
-// The region header contains a flag determining whether the region is allocated or not,
+// The region header contains a field determining whether the region is allocated or not,
 // and pointers to the immediatelly preceding and following region.
-// Through these pointers, all regions form a doubly linked list.
+// The `allocated` field is a u64 - only two values are valid and any other value indicates
+// that the heap has been corrupted.
+// Through the pointers, all regions form a doubly linked list.
 // Since all regions are placed consecutively, a region's size can be calculated by simply subtracting
 // its address from the address of the next region.
 // A special case is the dummy region, whose header is placed at the end of the allocated part of the heap.
@@ -74,8 +84,11 @@ static err_t heap_extend(size_t increment) {
 // Same as with the first list, this list is circular and includes the dummy region.
 // Unlike it though, the regions are not ordered in any way.
 
+#define REGION_ALLOCATED UINT64_C(0x391DC2962365553E)
+#define REGION_FREE UINT64_C(0xEF9AC4499FB1083A)
+
 typedef struct MemoryRegion {
-    bool allocated;
+    u64 allocated;
     struct MemoryRegion *prev_region;
     struct MemoryRegion *next_region;
 } __attribute__((aligned(MALLOC_ALIGNMENT))) MemoryRegion;
@@ -110,7 +123,7 @@ err_t _alloc_init(void) {
         return err;
     // Create the first region and the dummy region and use them to form the linked lists
     dummy_region = (FreeMemoryRegion *)HEAP_START;
-    *dummy_region = (FreeMemoryRegion){{false, (MemoryRegion *)dummy_region, (MemoryRegion *)dummy_region}, dummy_region, dummy_region};
+    *dummy_region = (FreeMemoryRegion){{REGION_FREE, (MemoryRegion *)dummy_region, (MemoryRegion *)dummy_region}, dummy_region, dummy_region};
     return 0;
 }
 
@@ -153,12 +166,12 @@ static void *allocate_in_region(size_t n, FreeMemoryRegion *region) {
     // If there is enough space left to fit another unallocated region after the allocation, create one
     if (region_size((MemoryRegion *)region) >= n + sizeof(FreeMemoryRegion)) {
         FreeMemoryRegion *new_region = (FreeMemoryRegion *)((char *)region + sizeof(MemoryRegion) + n);
-        new_region->header.allocated = false;
+        new_region->header.allocated = REGION_FREE;
         insert_into_region_list((MemoryRegion *)new_region, (MemoryRegion *)region);
         insert_into_free_region_list(new_region);
     }
     // Mark the region as allocated and return the data
-    region->header.allocated = true;
+    region->header.allocated = REGION_ALLOCATED;
     remove_from_free_region_list(region);
     return (void *)&((AllocatedMemoryRegion *)region)->data;
 }
@@ -178,12 +191,12 @@ static void *allocate_at_end(size_t n) {
     // large enough to fit the allocation
     FreeMemoryRegion *region = dummy_region;
     FreeMemoryRegion *new_dummy_region = (FreeMemoryRegion *)((char *)region + n + sizeof(MemoryRegion));
-    new_dummy_region->header.allocated = false;
+    new_dummy_region->header.allocated = REGION_FREE;
     insert_into_region_list((MemoryRegion *)new_dummy_region, (MemoryRegion *)region);
     insert_into_free_region_list(new_dummy_region);
     dummy_region = new_dummy_region;
     // Mark the new region as allocated and return the data
-    region->header.allocated = true;
+    region->header.allocated = REGION_ALLOCATED;
     remove_from_free_region_list(region);
     return (void *)(&((AllocatedMemoryRegion *)region)->data);
 }
@@ -198,9 +211,13 @@ void *malloc(size_t n) {
     if (n < sizeof(FreeMemoryRegion) - sizeof(MemoryRegion))
         n = sizeof(FreeMemoryRegion) - sizeof(MemoryRegion);
     // Search for the smallest free region that can fit the allocation
+    if (dummy_region->header.allocated != REGION_FREE)
+        panic("Heap corruption detected");
     FreeMemoryRegion *best_fit_region = NULL;
     size_t best_fit_size = SIZE_MAX;
     for (FreeMemoryRegion *region = dummy_region->next_free_region; region != dummy_region; region = region->next_free_region) {
+        if (region->header.allocated != REGION_FREE)
+            panic("Heap corruption detected");
         size_t size = region_size((MemoryRegion *)region);
         if (size >= n && size < best_fit_size) {
             best_fit_region = region;
@@ -224,23 +241,31 @@ void free(void *p) {
     alloc_lock_acquire();
     FreeMemoryRegion *region = (FreeMemoryRegion *)((char *)p - sizeof(MemoryRegion));
     // Mark the region as free and insert it into the free region list
-    region->header.allocated = false;
+    if (region->header.allocated == REGION_FREE)
+        panic("Double free");
+    if (region->header.allocated != REGION_ALLOCATED)
+        panic("Heap corruption detected");
+    region->header.allocated = REGION_FREE;
     insert_into_free_region_list(region);
     // If the next region is free, coalesce with it
-    if (!region->header.next_region->allocated) {
+    if (region->header.next_region->allocated == REGION_FREE) {
         // If we're coalescing with the dummy region, update the dummy region
         if ((FreeMemoryRegion *)region->header.next_region == dummy_region)
             dummy_region = region;
         remove_from_free_region_list((FreeMemoryRegion *)region->header.next_region);
         remove_from_region_list(region->header.next_region);
+    } else if (region->header.next_region->allocated != REGION_ALLOCATED) {
+        panic("Heap corruption detected");
     }
     // If the previous region is free, coalesce with it
-    if (!region->header.prev_region->allocated) {
+    if (region->header.prev_region->allocated == REGION_FREE) {
         // If this region is the dummy region now, move it backwards
         if (dummy_region == region)
             dummy_region = (FreeMemoryRegion *)region->header.prev_region;
         remove_from_free_region_list(region);
         remove_from_region_list((MemoryRegion *)region);
+    } else if (region->header.prev_region->allocated != REGION_ALLOCATED) {
+        panic("Heap corruption detected");
     }
     alloc_lock_release();
 }
