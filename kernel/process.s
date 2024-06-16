@@ -10,6 +10,8 @@ global process_block
 global process_exit
 global process_start
 global process_time_get
+global cpu_haltable_num
+global cpu_halted
 
 extern interrupt_disable
 extern interrupt_enable
@@ -74,6 +76,12 @@ section .bss
 ; Length of timeslice in TSC ticks
 ; Set by time_init().
 timeslice_length: resq 1
+
+; Number of CPUs that have completed the intialization process and can receive halt IPIs
+cpu_haltable_num: resq 1
+
+; Set if CPU was halted due to an error
+cpu_halted: resb 1
 
 section .rodata
 
@@ -212,8 +220,16 @@ process_time_get:
 sched_start:
   ; Get the first process to run
   call sched_replace_process
+  ; If another CPU has already halted due to an error, halt
+  cmp byte [cpu_halted], 0
+  jne .halt
+  ; Indicate that this CPU can be halted via an IPI
+  lock add qword [cpu_haltable_num], 1
   ; Skip the part of process_switch where current process state is saved, since there is no current process yet
   jmp process_switch.from_no_process
+.halt:
+  hlt
+  jmp .halt
 
 ; Preempt the current process without returning it to the queue
 ; Takes a spinlock as argument. After saving process state, the spinlock is released.

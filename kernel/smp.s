@@ -12,6 +12,8 @@ global halt_ipi_handler
 extern cpus
 extern cpu_num
 extern lapic
+extern cpu_halted
+extern cpu_haltable_num
 
 extern pit_wait
 extern time_from_tsc
@@ -180,16 +182,19 @@ send_halt_ipi:
   ; This avoids a race condition when two cores encounter a fatal error at around the same time.
   jne halt_ipi_handler
   mov rax, [lapic]
+  ; Set flag so CPUs not yet fully initialized won't continue
+  mov byte [cpu_halted], 1
+  ; Get number of CPUs receiving IPIs
+  mov rdx, [cpu_haltable_num]
   ; Send halt IPI to every other processor
   mov dword [rax + LAPIC_INTERRUPT_COMMAND_REGISTER_HIGH], 0
   mov dword [rax + LAPIC_INTERRUPT_COMMAND_REGISTER_LOW], ICR_ALL_EXCLUDING_SELF | ICR_ASSERT | ICR_FIXED | INT_VECTOR_HALT_IPI
   ; Increment the halted CPU counter and wait for all cores to be halted
   lock add qword [cpu_halted_num], 1
-  mov rax, [cpu_num]
 .wait:
   pause
-  cmp [cpu_halted_num], rax
-  jne .wait
+  cmp [cpu_halted_num], rdx
+  jb .wait
   ret
 
 halt_ipi_handler:
