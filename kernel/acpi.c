@@ -58,7 +58,7 @@ typedef struct RSDP {
     u64 xsdt_address;
     u8 extended_checksum;
     u8 reserved1[3];
-} __attribute__((packed)) RSDP;
+} RSDP;
 
 typedef struct ACPIEntry {
     u8 signature[4];
@@ -71,13 +71,13 @@ typedef struct ACPIEntry {
     u32 creator_id;
     u32 creator_revision;
     u8 data[];
-} __attribute__((packed)) ACPIEntry;
+} ACPIEntry;
 
 typedef struct MADT {
     u32 lapic_address;
     u32 flags;
     u8 data[];
-} __attribute__((packed)) MADT;
+} MADT;
 
 typedef struct MADTRecord {
     u8 type;
@@ -166,7 +166,7 @@ typedef struct IOAPIC {
     u32 reserved1[3];
     u32 iowin;
     u32 reserved2[3];
-} __attribute__((packed)) IOAPIC;
+} IOAPIC;
 
 // Read an I/O APIC register
 static u32 io_apic_read(volatile IOAPIC *io_apic, u32 reg) {

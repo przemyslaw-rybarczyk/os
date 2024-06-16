@@ -33,7 +33,7 @@ typedef struct FXSAVEArea {
     u64 mm[2][8];
     u64 xmm[2][16];
     u64 reserved[12];
-} __attribute__((packed)) FXSAVEArea;
+} FXSAVEArea;
 
 extern u8 process_start[];
 

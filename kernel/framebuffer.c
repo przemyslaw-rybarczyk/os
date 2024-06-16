@@ -48,7 +48,7 @@ typedef struct VBEModeInfo {
     u32 off_screen_mem_offset;
     u16 off_screen_mem_size;
     u8 reserved2[206];
-} __attribute__((packed)) VBEModeInfo;
+} VBEModeInfo;
 
 extern VBEModeInfo vbe_mode_info;
 

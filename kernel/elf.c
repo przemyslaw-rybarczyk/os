@@ -41,7 +41,7 @@ typedef struct ELFHeader {
     u16 sht_entry_size;
     u16 sht_entries_num;
     u16 sht_string_table_index;
-} __attribute__((packed)) ELFHeader;
+} ELFHeader;
 
 typedef struct ELFProgramHeader {
     u32 type;
@@ -52,7 +52,7 @@ typedef struct ELFProgramHeader {
     u64 file_size;
     u64 memory_size;
     u64 alignment;
-} __attribute__((packed)) ELFProgramHeader;
+} ELFProgramHeader;
 
 // Loads an ELF file stored in a buffer into memory.
 // On success `*entry` is set to the entry point.

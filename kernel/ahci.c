@@ -81,7 +81,7 @@ typedef struct HBAPort {
     u32 switching_control;
     u32 device_sleep;
     u32 reserved2[14];
-} __attribute__((packed)) HBAPort;
+} HBAPort;
 
 typedef struct HBA {
     u32 capabilities;
@@ -97,7 +97,7 @@ typedef struct HBA {
     u32 bios_os_handoff;
     u32 reserved1[53];
     HBAPort ports[32];
-} __attribute__((packed)) HBA;
+} HBA;
 
 typedef struct CommandHeader {
     u16 flags;
@@ -105,7 +105,7 @@ typedef struct CommandHeader {
     volatile u32 byte_count;
     u64 command_table;
     u32 reserved1[4];
-} __attribute__((packed)) CommandHeader;
+} CommandHeader;
 
 typedef struct CommandFIS {
     u8 fis_type;
@@ -124,7 +124,7 @@ typedef struct CommandFIS {
     u8 icc;
     u8 control;
     u8 reserved[4];
-} __attribute__((packed)) CommandFIS;
+} CommandFIS;
 
 typedef struct CommandTable {
     CommandFIS command_fis;
@@ -135,12 +135,12 @@ typedef struct CommandTable {
         u64 data_base;
         u32 reserved1;
         u32 byte_count;
-    } __attribute__((packed)) region[8];
-} __attribute__((packed)) CommandTable;
+    } region[8];
+} CommandTable;
 
 typedef struct ReceivedFIS {
     u8 reserved1[256];
-} __attribute__((packed)) ReceivedFIS;
+} ReceivedFIS;
 
 typedef struct IssuedRequest {
     Message *message;

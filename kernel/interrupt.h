@@ -12,7 +12,7 @@ typedef struct IDTEntry {
     u16 addr2;
     u32 addr3;
     u32 reserved1;
-} __attribute__((packed)) IDTEntry;
+} IDTEntry;
 
 typedef struct IDTR {
     u16 size;

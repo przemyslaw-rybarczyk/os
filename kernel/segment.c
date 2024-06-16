@@ -35,7 +35,7 @@ typedef union GDTEntry {
         u32 base4; // base bits 32-63
         u32 reserved1;
     };
-} __attribute__((packed)) GDTEntry;
+} GDTEntry;
 
 typedef struct GDTR {
     u16 size;
