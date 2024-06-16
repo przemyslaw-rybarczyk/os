@@ -145,16 +145,19 @@ void framebuffer_unlock(void) {
     spinlock_release(&fb_lock);
 }
 
-// X position in characters to print the next character at
-// There is no Y position because characters are always printed at the bottom of the screen.
+// Position in characters to print the next character at
 static u32 cursor_x = 0;
+static u32 cursor_y = 0;
 
 void print_newline(void) {
-    // Scroll screen upwards by FONT_HEIGHT pixels
-    for (u32 y = 0; y < fb_height - FONT_HEIGHT; y++)
-        memcpy(framebuffer + y * fb_pitch, framebuffer + (y + FONT_HEIGHT) * fb_pitch, fb_width * fb_bytes_per_pixel);
+    // Scroll down by one line
+    cursor_y += 1;
+    // If we're past the bottom of the screen, move back to the start
+    if (FONT_HEIGHT * (cursor_y + 1) >= fb_height) {
+        cursor_y = 0;
+    }
     // Fill the new line with black
-    memset(framebuffer + (fb_height - FONT_HEIGHT) * fb_pitch, 0x00, FONT_HEIGHT * fb_pitch);
+    memset(framebuffer + cursor_y * FONT_HEIGHT * fb_pitch, 0x00, FONT_HEIGHT * fb_pitch);
     // Move the cursor to the start
     cursor_x = 0;
 }
@@ -163,19 +166,18 @@ void print_char(char c) {
     if (c == '\n') {
         print_newline();
     } else {
-        if (FONT_WIDTH * (cursor_x + 1) >= fb_width) {
-            // If we're past the end of the line, move to a new one
+        // If we're past the end of the line, move to a new one
+        if (FONT_WIDTH * (cursor_x + 1) >= fb_width)
             print_newline();
-        }
         // If the character is valid, print it
         if (FONT_CHAR_LOWEST <= c && c <= FONT_CHAR_HIGHEST) {
             for (size_t y = 0; y < FONT_HEIGHT; y++) {
                 for (size_t x = 0; x < FONT_WIDTH; x++) {
                     for (size_t i = 0; i < fb_bytes_per_pixel; i++) {
-                        size_t fb_x = fb_height - FONT_HEIGHT + y;
-                        size_t fb_y = (cursor_x * FONT_WIDTH + x) * fb_bytes_per_pixel + i;
+                        size_t fb_x = (cursor_x * FONT_WIDTH + x) * fb_bytes_per_pixel + i;
+                        size_t fb_y = cursor_y * FONT_HEIGHT + y;
                         u8 color_byte = (font_chars[c - FONT_CHAR_LOWEST][y] << x) & 0x80 ? 0xFF : 0x00;
-                        framebuffer[fb_x * fb_pitch + fb_y] = color_byte;
+                        framebuffer[fb_y * fb_pitch + fb_x] = color_byte;
                     }
                 }
             }
