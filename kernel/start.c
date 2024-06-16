@@ -35,86 +35,91 @@ PerCPUPrealloc *ap_prealloc;
 void _string_init(void);
 
 void kernel_start(void *stack) {
+    err_t err;
     framebuffer_init();
     _string_init();
     interrupt_init(bsp_prealloc.idt, &bsp_prealloc.idtr);
     percpu_init(&bsp_prealloc.percpu, stack);
-    if (page_alloc_init() != 0) {
-        print_string("Failed to initialize paging structures\n");
-        goto halt;
-    }
-    if (_alloc_init() != 0) {
-        print_string("Failed to initialize memory allocator\n");
-        goto halt;
-    }
-    if (gdt_init() != 0) {
-        print_string("Failed to initialize GDT\n");
-        goto halt;
-    }
+    err = page_alloc_init();
+    if (err)
+        goto fail;
+    err = _alloc_init();
+    if (err)
+        goto fail;
+    err = gdt_init();
+    if (err)
+        goto fail;
     userspace_init();
     pic_disable();
     ps2_init();
-    if (pci_init() != 0) {
-        print_string("Failed to detect required PCI devices\n");
-        goto halt;
-    }
-    if (acpi_init() != 0) {
-        print_string("Failed to read ACPI tables\n");
-        goto halt;
-    }
+    err = pci_init();
+    if (err)
+        goto fail;
+    err = acpi_init();
+    if (err)
+        goto fail;
     ap_prealloc = malloc((cpu_num - 1) * sizeof(PerCPUPrealloc));
-    if (ap_prealloc == NULL) {
-        print_string("Failed to allocate ap_prealloc\n");
-        goto halt;
+    if (cpu_num != 1 && ap_prealloc == NULL) {
+        err = ERR_KERNEL_NO_MEMORY;
+        goto fail;
     }
-    if (stack_init() != 0) {
-        print_string("Failed to initialize kernel stack manager\n");
-        goto halt;
-    }
+    err = stack_init();
+    if (err)
+        goto fail;
     time_init();
     apic_init(true);
+    err = ahci_init();
+    if (err)
+        goto fail;
+    err = set_double_fault_stack();
+    if (err)
+        goto fail;
+    err = process_setup();
+    if (err)
+        goto fail;
     smp_init();
     smp_init_sync(true);
-    if (ahci_init() != 0) {
-        print_string("Failed to initialize AHCI controller\n");
-        goto halt;
-    }
-    if (set_double_fault_stack() != 0) {
-        framebuffer_lock();
-        print_string("Failed to initialize double fault stack\n");
-        framebuffer_unlock();
-        goto halt;
-    }
     remove_identity_mapping();
-    process_setup();
     sched_start();
-halt:
+fail:
+    framebuffer_lock();
+    if (err == ERR_KERNEL_NO_MEMORY) {
+        print_string("Failed to intialize: out of memory\n");
+    } else {
+        print_string("Failed to intialize: error ");
+        print_hex_u64(err);
+        print_newline();
+    }
+    framebuffer_unlock();
     interrupt_disable();
     while (1)
         asm volatile ("hlt");
 }
 
-void kernel_start_ap(void *stack) {
-    u64 ap_id = ((u64)stack - PAGE_SIZE - KERNEL_INIT_STACK) / (2 * PAGE_SIZE) - 1;
+void kernel_start_ap(u64 ap_id, void *stack) {
+    err_t err;
     interrupt_init(ap_prealloc[ap_id].idt, &ap_prealloc[ap_id].idtr);
     percpu_init(&ap_prealloc[ap_id].percpu, stack);
-    if (gdt_init() != 0) {
-        framebuffer_lock();
-        print_string("Failed to initialize GDT on AP\n");
-        framebuffer_unlock();
-        goto halt;
-    }
+    err = gdt_init();
+    if (err)
+        goto fail;
     userspace_init();
     apic_init(false);
+    err = set_double_fault_stack();
+    if (err)
+        goto fail;
     smp_init_sync(false);
-    if (set_double_fault_stack() != 0) {
-        framebuffer_lock();
-        print_string("Failed to initialize double fault stack\n");
-        framebuffer_unlock();
-        goto halt;
-    }
     sched_start();
-halt:
+fail:
+    framebuffer_lock();
+    if (err == ERR_KERNEL_NO_MEMORY) {
+        print_string("Failed to intialize AP: out of memory\n");
+    } else {
+        print_string("Failed to intialize AP: error ");
+        print_hex_u64(err);
+        print_newline();
+    }
+    framebuffer_unlock();
     interrupt_disable();
     while (1)
         asm volatile ("hlt");

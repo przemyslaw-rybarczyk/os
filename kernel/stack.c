@@ -10,7 +10,7 @@
 static spinlock_t stack_alloc_lock;
 
 // The address of the last stack that has memory allocated for it
-u64 last_kernel_stack = KERNEL_INIT_STACK;
+static u64 last_kernel_stack;
 
 // The address of the first unused allocated kernel stack
 // If it's 0, all allocated stacks are in use.
@@ -27,6 +27,7 @@ err_t stack_init(void) {
         if (err)
             return err;
     }
+    last_kernel_stack = KERNEL_INIT_STACK + 2 * (cpu_num - 1) * PAGE_SIZE;
     return 0;
 }
 

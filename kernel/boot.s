@@ -1,6 +1,5 @@
 extern kernel_start
 extern kernel_start_ap
-extern last_kernel_stack
 
 ; Variables declared by linker script
 extern KERNEL_LMA
@@ -608,6 +607,9 @@ protected_mode_start_ap:
 
 bits 64
 
+align 8
+next_ap_id: dq 0
+
 long_mode_start_ap:
   ; Set data segment registers
   mov ax, SEGMENT_KERNEL_DATA
@@ -617,11 +619,14 @@ long_mode_start_ap:
   mov gs, ax
   mov ss, ax
   ; Load initial kernel stack
-  mov rax, 2 * PAGE_SIZE
-  lock xadd [last_kernel_stack], rax
-  lea rsp, [rax + 3 * PAGE_SIZE]
+  mov rdi, 1
+  lock xadd [next_ap_id], rdi
+  mov rsi, STACK_BOTTOM_VIRTUAL + 2 * PAGE_SIZE
+  mov rax, rdi
+  shl rax, 13
+  add rsi, rax
+  mov rsp, rsi
   ; Finally, enter the kernel
-  mov rdi, rsp
   call kernel_start_ap
   ; Loop forever if kernel exits - this shouldn't happen
 .halt:

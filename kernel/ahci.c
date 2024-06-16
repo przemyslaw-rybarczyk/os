@@ -3,6 +3,7 @@
 
 #include "alloc.h"
 #include "channel.h"
+#include "framebuffer.h"
 #include "page.h"
 #include "process.h"
 #include "spinlock.h"
@@ -224,8 +225,10 @@ err_t ahci_init(void) {
             pit_wait(WAIT_AFTER_BIOS_BUSY_PIT_CYCLES);
     }
     // Check 64-bit addressing is supported
-    if (!(hba->capabilities & HBA_CAP_64_BIT_ADDR))
+    if (!(hba->capabilities & HBA_CAP_64_BIT_ADDR)) {
+        print_string("HBA does not support 64-bit addressing\n");
         return ERR_KERNEL_OTHER;
+    }
     // Find which ports are connected
     ports_connected = hba->ports_implemented;
     u32 ports_connected_num = 0;

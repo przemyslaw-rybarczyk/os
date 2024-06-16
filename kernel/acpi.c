@@ -1,6 +1,7 @@
 #include "types.h"
 #include "acpi.h"
 
+#include "framebuffer.h"
 #include "string.h"
 #include "page.h"
 
@@ -130,7 +131,6 @@ static const RSDP *find_rsdp(void) {
 
 // Find the RSDT and XSDT and return a pointer to it
 // `is_xsdt` is set depending on which table was found.
-// Retuns NULL on failure.
 static const ACPIEntry *find_rsdt(const RSDP *rsdp, bool *is_xsdt) {
     // For ACPI versions below 2.0 we get the RSDT, and for version 2.0 and above we get the XSDT.
     if (rsdp->revision < 2) {
@@ -158,6 +158,7 @@ static err_t parse_rsdt(const ACPIEntry *rsdt, bool is_xsdt) {
         if (memcmp(entry->signature, "APIC", 4) == 0)
             return parse_madt(entry);
     }
+    print_string("Could not find MADT\n");
     return ERR_KERNEL_OTHER;
 }
 
@@ -273,8 +274,10 @@ static err_t parse_madt(const ACPIEntry *madt) {
         i += madt_record->length;
     }
     // Save the LAPIC address
-    if (lapic_phys >= IDENTITY_MAPPING_SIZE)
+    if (lapic_phys >= IDENTITY_MAPPING_SIZE) {
+        print_string("LAPIC address is too large\n");
         return ERR_KERNEL_OTHER;
+    }
     lapic = PHYS_ADDR(lapic_phys);
     return 0;
 }
@@ -282,11 +285,11 @@ static err_t parse_madt(const ACPIEntry *madt) {
 // Locate and parse the ACPI tables and set up the I/O APIC according to them
 err_t acpi_init(void) {
     const RSDP *rsdp = find_rsdp();
-    if (rsdp == NULL)
+    if (rsdp == NULL) {
+        print_string("Could not find RSDP\n");
         return ERR_KERNEL_OTHER;
+    }
     bool is_xsdt;
     const ACPIEntry *rsdt = find_rsdt(rsdp, &is_xsdt);
-    if (rsdt == NULL)
-        return ERR_KERNEL_OTHER;
     return parse_rsdt(rsdt, is_xsdt);
 }

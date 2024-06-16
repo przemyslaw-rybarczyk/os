@@ -1,6 +1,8 @@
 #include "types.h"
 #include "pci.h"
 
+#include "framebuffer.h"
+
 #define VENDOR_ID_INVALID 0xFFFF
 #define CLASS_SUBCLASS_SATA 0x0106
 #define CLASS_SUBCLASS_PCI_BRIDGE 0x0604
@@ -126,8 +128,10 @@ err_t pci_init(void) {
         // Skip if the vendor ID is not valid
         u16 vendor_id = (u16)pci_read_u32(base);
         if (vendor_id == VENDOR_ID_INVALID) {
-            if (function == 0)
+            if (function == 0) {
+                print_string("Could not find AHCI controller\n");
                 return ERR_KERNEL_OTHER;
+            }
             continue;
         }
         // Check all devices under this bus
@@ -142,7 +146,9 @@ err_t pci_init(void) {
         }
     }
     // Return error if AHCI controller was not found
-    if (ahci_base == 0)
+    if (ahci_base == 0) {
+        print_string("Could not find AHCI controller\n");
         return ERR_KERNEL_OTHER;
+    }
     return 0;
 }
