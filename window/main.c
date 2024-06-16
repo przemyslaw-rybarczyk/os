@@ -246,7 +246,7 @@ static WindowContainer *create_window(void) {
         3, (SendMessageData[]){
             {sizeof(size_t), &(size_t){0}},
             {sizeof(program1_resource_names), program1_resource_names},
-            {included_file_program1_end - included_file_program1, included_file_program1}},
+            {included_file_terminal_end - included_file_terminal, included_file_terminal}},
         1, &(SendMessageHandles){sizeof(program1_resource_handles) / sizeof(program1_resource_handles[0]), program1_resource_handles}
     }, NULL);
     if (err)
@@ -274,7 +274,7 @@ static WindowContainer *create_window(void) {
             {sizeof(program2_resource_names), program2_resource_names},
             {sizeof(size_t), &(size_t){sizeof(Timezone)}},
             {sizeof(Timezone), &timezone},
-            {included_file_program2_end - included_file_program2, included_file_program2}},
+            {included_file_test_program_end - included_file_test_program, included_file_test_program}},
         1, &(SendMessageHandles){sizeof(program2_resource_handles) / sizeof(program2_resource_handles[0]), program2_resource_handles}
     }, NULL);
     if (err)
