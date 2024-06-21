@@ -197,15 +197,11 @@ err_t process_setup(void) {
     process_spawn_channel = channel_alloc();
     if (process_spawn_channel == NULL)
         return ERR_KERNEL_NO_MEMORY;
-    drive_info_channel = channel_alloc();
-    if (drive_info_channel == NULL)
-        return ERR_KERNEL_NO_MEMORY;
     drive_open_channel = channel_alloc();
     if (drive_open_channel == NULL)
         return ERR_KERNEL_NO_MEMORY;
     channel_set_mqueue(process_spawn_channel, process_spawn_mqueue, (MessageTag){0, 0});
-    channel_set_mqueue(drive_info_channel, ahci_main_mqueue, (MessageTag){AHCI_MAIN_TAG_DRIVE_INFO, 0});
-    channel_set_mqueue(drive_open_channel, ahci_main_mqueue, (MessageTag){AHCI_MAIN_TAG_DRIVE_OPEN, 0});
+    channel_set_mqueue(drive_open_channel, ahci_main_mqueue, (MessageTag){0, 0});
     Process *framebuffer_kernel_thread;
     err = process_create(&framebuffer_kernel_thread, (ResourceList){0, NULL});
     if (err)
@@ -255,17 +251,17 @@ err_t process_setup(void) {
             RESOURCE_TYPE_CHANNEL_SEND,
             {.channel = process_spawn_channel}}};
     init_resources[6] = (ResourceListEntry){
-        resource_name("drive/info"), {
-            RESOURCE_TYPE_CHANNEL_SEND,
-            {.channel = drive_info_channel}}};
+        resource_name("phys_drive/info"), {
+            RESOURCE_TYPE_MESSAGE,
+            {.message = drive_info_msg}}};
     init_resources[7] = (ResourceListEntry){
-        resource_name("drive/open"), {
+        resource_name("phys_drive/open"), {
             RESOURCE_TYPE_CHANNEL_SEND,
             {.channel = drive_open_channel}}};
     err = process_create(&init_process, (ResourceList){8, init_resources});
     if (err)
         return err;
-    process_set_user_stack(init_process, included_file_window, included_file_window_end - included_file_window, NULL);
+    process_set_user_stack(init_process, included_file_init, included_file_init_end - included_file_init, NULL);
     process_enqueue(framebuffer_kernel_thread);
     process_enqueue(ahci_main_kernel_thread);
     process_enqueue(process_spawn_kernel_thread);

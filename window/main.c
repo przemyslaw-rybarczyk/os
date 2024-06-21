@@ -54,8 +54,9 @@ typedef enum EventSource : uintptr_t {
 } EventSource;
 
 static handle_t process_spawn_channel;
-static handle_t drive_info_channel;
 static handle_t drive_open_channel;
+static size_t drive_info_length;
+static void *drive_info_data;
 
 static handle_t event_queue;
 
@@ -255,25 +256,26 @@ static WindowContainer *create_window(void) {
     Timezone timezone = timezone_get();
     ResourceName program2_resource_names[] = {
         resource_name("locale/timezone"),
+        resource_name("virt_drive/info"),
         resource_name("text/stdout"),
         resource_name("text/stderr"),
         resource_name("text/stdin"),
-        resource_name("drive/info"),
-        resource_name("drive/open"),
+        resource_name("virt_drive/open"),
     };
     SendAttachedHandle program2_resource_handles[] = {
         {ATTACHED_HANDLE_FLAG_MOVE, text_stdout_in},
         {ATTACHED_HANDLE_FLAG_MOVE, text_stderr_in},
         {ATTACHED_HANDLE_FLAG_MOVE, text_stdin_in},
-        {0, drive_info_channel},
         {0, drive_open_channel},
     };
     err = channel_call(process_spawn_channel, &(SendMessage){
-        5, (SendMessageData[]){
-            {sizeof(size_t), &(size_t){1}},
+        7, (SendMessageData[]){
+            {sizeof(size_t), &(size_t){2}},
             {sizeof(program2_resource_names), program2_resource_names},
             {sizeof(size_t), &(size_t){sizeof(Timezone)}},
             {sizeof(Timezone), &timezone},
+            {sizeof(size_t), &(size_t){drive_info_length}},
+            {drive_info_length, drive_info_data},
             {included_file_test_program_end - included_file_test_program, included_file_test_program}},
         1, &(SendMessageHandles){sizeof(program2_resource_handles) / sizeof(program2_resource_handles[0]), program2_resource_handles}
     }, NULL);
@@ -1074,12 +1076,20 @@ void main(void) {
     err = resource_get(&resource_name("process/spawn"), RESOURCE_TYPE_CHANNEL_SEND, &process_spawn_channel);
     if (err)
         return;
-    err = resource_get(&resource_name("drive/info"), RESOURCE_TYPE_CHANNEL_SEND, &drive_info_channel);
+    err = resource_get(&resource_name("virt_drive/open"), RESOURCE_TYPE_CHANNEL_SEND, &drive_open_channel);
     if (err)
         return;
-    err = resource_get(&resource_name("drive/open"), RESOURCE_TYPE_CHANNEL_SEND, &drive_open_channel);
+    handle_t drive_info_msg;
+    err = resource_get(&resource_name("virt_drive/info"), RESOURCE_TYPE_MESSAGE, &drive_info_msg);
     if (err)
         return;
+    MessageLength drive_info_msg_length;
+    message_get_length(drive_info_msg, &drive_info_msg_length);
+    drive_info_length = drive_info_msg_length.data;
+    drive_info_data = malloc(drive_info_length);
+    if (drive_info_length != 0 && drive_info_data == NULL)
+        return;
+    message_read(drive_info_msg, &(ReceiveMessage){drive_info_length, drive_info_data, 0, NULL}, NULL, NULL, 0, FLAG_FREE_MESSAGE);
     err = mqueue_create(&event_queue);
     if (err)
         return;

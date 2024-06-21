@@ -9,6 +9,8 @@
 #include "spinlock.h"
 #include "string.h"
 
+#include <zr/drive.h>
+
 #define HBA_CAP_64_BIT_ADDR (UINT32_C(1) << 31)
 #define HBA_CAP_NUM_COMMAND_SLOTS_OFFSET 8
 #define HBA_CONTROL_INTERRUPT (UINT32_C(1) << 1)
@@ -194,14 +196,15 @@ static u32 command_slots_max;
 // Bit set for each connected port
 static u32 ports_connected;
 
-// Number of drives shown to userspace and port number and size of each one
+// Number of drives shown to userspace and port number of each one
 static u32 user_drive_num = 0;
 static u32 user_drive_port[32];
-static size_t user_drive_size[32];
 
 // Used to initialize connection number for port threads
 static volatile _Atomic u32 ahci_receive_threads_initialized = 0;
 static volatile _Atomic u32 ahci_reply_threads_initialized = 0;
+
+Message *drive_info_msg;
 
 // Initialize the AHCI controller
 err_t ahci_init(void) {
@@ -378,7 +381,6 @@ err_t ahci_init(void) {
         process_set_kernel_stack(reply_thread, ahci_drive_reply_kernel_thread_main);
         process_enqueue(receive_thread);
         process_enqueue(reply_thread);
-        user_drive_size[user_drive_num] = sector_size * sector_count;
         user_drive_num++;
         // Enable interrupts for port
         hba->ports[port_i].interrupt_enable = UINT32_C(-1);
@@ -396,11 +398,21 @@ err_t ahci_init(void) {
         // Allocate memory for issued commands
         drives[port_i]->issued_commands = malloc(sizeof(IssuedCommand) * command_slots_max);
         if (drives[port_i]->issued_commands == NULL)
-            return ERR_NO_MEMORY;
+            return ERR_KERNEL_NO_MEMORY;
         user_drive_port[drive_id] = port_i;
         drive_id++;
     }
     page_free(identify_buffer_page);
+    // Create message with drive info that will be passed to init process
+    drive_info_msg = message_alloc(sizeof(PhysDriveInfo) * user_drive_num);
+    if (user_drive_num != 0 && drive_info_msg == NULL)
+        return ERR_KERNEL_NO_MEMORY;
+    PhysDriveInfo *drive_info = drive_info_msg->data;
+    for (u32 drive_id = 0; drive_id < user_drive_num; drive_id++) {
+        u32 port_i = user_drive_port[drive_id];
+        drive_info[drive_id].sector_size = drives[port_i]->sector_size;
+        drive_info[drive_id].sector_count = drives[port_i]->sector_count;
+    }
     // Clear interrupts
     hba->interrupt_status = UINT32_C(-1);
     return 0;
@@ -416,12 +428,14 @@ _Noreturn void ahci_drive_receive_kernel_thread_main(void) {
         Message *message;
         // Get message from user process
         mqueue_receive(drives[port_i]->queue, &message, false, false, TIMEOUT_NONE);
-        if (message->data_size != 2 * sizeof(u64) || message->handles_size != 0) {
+        if (message->data_size != sizeof(FileRange) || message->handles_size != 0) {
             err = ERR_INVALID_ARG;
             goto fail;
         }
-        u64 offset = *(u64 *)message->data;
-        u64 length = *(u64 *)(message->data + sizeof(u64));
+        FileRange *request = (FileRange *)message->data;
+        FileRange *bounds = (FileRange *)message->tag.data[1];
+        u64 offset = request->offset + bounds->offset;
+        u64 length = request->length;
         // Handle case of zero length separately
         if (length == 0) {
             Message *reply = message_alloc_copy(0, NULL);
@@ -434,7 +448,8 @@ _Noreturn void ahci_drive_receive_kernel_thread_main(void) {
             continue;
         }
         // Check bounds
-        if (offset + length > drives[port_i]->sector_size * drives[port_i]->sector_count || offset + length < offset) {
+        if (request->offset + request->length >= bounds->length || request->offset + request->length < request->offset
+                || offset + length > drives[port_i]->sector_size * drives[port_i]->sector_count || offset + length < offset) {
             err = ERR_OUT_OF_RANGE;
             goto fail;
         }
@@ -609,7 +624,6 @@ void drive_process_irq(void) {
 }
 
 MessageQueue *ahci_main_mqueue;
-Channel *drive_info_channel;
 Channel *drive_open_channel;
 
 _Noreturn void ahci_main_kernel_thread_main(void) {
@@ -618,63 +632,53 @@ _Noreturn void ahci_main_kernel_thread_main(void) {
         Message *message;
         // Get message from user process
         mqueue_receive(ahci_main_mqueue, &message, false, false, TIMEOUT_NONE);
-        switch (message->tag.data[0]) {
-        case AHCI_MAIN_TAG_DRIVE_INFO: {
-            // Check message size
-            if (message->data_size != 0 || message->handles_size != 0) {
-                err = ERR_INVALID_ARG;
-                goto fail;
-            }
-            Message *reply = message_alloc_copy(user_drive_num * sizeof(size_t), user_drive_size);
-            if (reply == NULL) {
-                err = ERR_NO_MEMORY;
-                goto fail;
-            }
-            message_reply(message, reply);
-            message_free(message);
-            break;
+        // Check message size
+        if (message->data_size != sizeof(PhysDriveOpenArgs) || message->handles_size != 0) {
+            err = ERR_INVALID_ARG;
+            goto fail;
         }
-        case AHCI_MAIN_TAG_DRIVE_OPEN: {
-            // Check message size
-            if (message->data_size != sizeof(size_t) || message->handles_size != 0) {
-                err = ERR_INVALID_ARG;
-                goto fail;
-            }
-            size_t drive_id = *(size_t *)message->data;
-            if (drive_id > user_drive_num) {
-                err = ERR_DOES_NOT_EXIST;
-                goto fail;
-            }
-            u32 port_i = user_drive_port[drive_id];
-            Message *reply = message_alloc(0);
-            if (reply == NULL) {
-                err = ERR_NO_MEMORY;
-                goto fail;
-            }
-            Channel *drive_channel = channel_alloc();
-            if (drive_channel == NULL) {
-                err = ERR_NO_MEMORY;
-                goto fail_channel_alloc;
-            }
-            reply->handles = malloc(sizeof(AttachedHandle));
-            if (reply->handles == NULL) {
-                err = ERR_NO_MEMORY;
-                goto fail_handles_alloc;
-            }
-            channel_set_mqueue(drive_channel, drives[port_i]->queue, (MessageTag){0, 0});
-            reply->handles_size = 1;
-            reply->handles[0] = (AttachedHandle){ATTACHED_HANDLE_TYPE_CHANNEL_SEND, {.channel = drive_channel}};
-            message_reply(message, reply);
-            message_free(message);
-            break;
+        PhysDriveOpenArgs *args = (PhysDriveOpenArgs *)message->data;
+        if (args->drive_id > user_drive_num) {
+            err = ERR_DOES_NOT_EXIST;
+            goto fail;
+        }
+        u32 port_i = user_drive_port[args->drive_id];
+        FileRange *bounds = malloc(sizeof(FileRange));
+        if (bounds == NULL) {
+            err = ERR_NO_MEMORY;
+            goto fail;
+        }
+        bounds->offset = args->offset;
+        bounds->length = args->length;
+        Message *reply = message_alloc(0);
+        if (reply == NULL) {
+            err = ERR_NO_MEMORY;
+            goto fail_reply_alloc;
+        }
+        Channel *drive_channel = channel_alloc();
+        if (drive_channel == NULL) {
+            err = ERR_NO_MEMORY;
+            goto fail_channel_alloc;
+        }
+        reply->handles = malloc(sizeof(AttachedHandle));
+        if (reply->handles == NULL) {
+            err = ERR_NO_MEMORY;
+            goto fail_handles_alloc;
+        }
+        channel_set_mqueue(drive_channel, drives[port_i]->queue, (MessageTag){0, (u64)bounds});
+        reply->handles_size = 1;
+        reply->handles[0] = (AttachedHandle){ATTACHED_HANDLE_TYPE_CHANNEL_SEND, {.channel = drive_channel}};
+        message_reply(message, reply);
+        message_free(message);
+        continue;
 fail_handles_alloc:
-            channel_del_ref(drive_channel);
+        channel_del_ref(drive_channel);
 fail_channel_alloc:
-            message_free(reply);
+        message_free(reply);
+fail_reply_alloc:
+        free(bounds);
 fail:
-            message_reply_error(message, err);
-            message_free(message);
-        }
-        }
+        message_reply_error(message, err);
+        message_free(message);
     }
 }

@@ -1,44 +1,45 @@
 #include <zr/types.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 
+#include <zr/drive.h>
 #include <zr/syscalls.h>
 
 static u8 data_buf[1024];
 
 void main(void) {
     err_t err;
-    handle_t drive_info_channel, drive_open_channel;
-    err = resource_get(&resource_name("drive/info"), RESOURCE_TYPE_CHANNEL_SEND, &drive_info_channel);
+    handle_t drive_open_channel;
+    err = resource_get(&resource_name("virt_drive/open"), RESOURCE_TYPE_CHANNEL_SEND, &drive_open_channel);
     if (err)
         return;
-    err = resource_get(&resource_name("drive/open"), RESOURCE_TYPE_CHANNEL_SEND, &drive_open_channel);
+    handle_t drive_info_msg;
+    err = resource_get(&resource_name("virt_drive/info"), RESOURCE_TYPE_MESSAGE, &drive_info_msg);
     if (err)
         return;
-    printf("Getting drive information\n");
-    handle_t drive_info_reply;
-    err = channel_call(drive_info_channel, &(SendMessage){0, NULL, 0, NULL}, &drive_info_reply);
-    if (err) {
-        printf("Got error %zX\n", err);
+    MessageLength drive_info_length;
+    message_get_length(drive_info_msg, &drive_info_length);
+    if (drive_info_length.data % sizeof(VirtDriveInfo) != 0)
         return;
-    }
-    MessageLength drive_info_reply_length;
-    message_get_length(drive_info_reply, &drive_info_reply_length);
-    printf("Number of drives: %zu\n", drive_info_reply_length.data / sizeof(size_t));
-    for (size_t i = 0; sizeof(size_t) * i < drive_info_reply_length.data; i++) {
-        size_t drive_size;
-        message_read(drive_info_reply, &(ReceiveMessage){sizeof(size_t), &drive_size, 0, NULL}, &(MessageLength){sizeof(size_t) * i, 0}, NULL, 0, FLAG_ALLOW_PARTIAL_DATA_READ);
-        printf("Size of drive #%zu is %zu B\n", i, drive_size);
+    u32 drive_num = drive_info_length.data / sizeof(VirtDriveInfo);
+    VirtDriveInfo *drive_info = malloc(drive_info_length.data);
+    if (drive_info_length.data != 0 && drive_info == NULL)
+        return;
+    message_read(drive_info_msg, &(ReceiveMessage){drive_info_length.data, drive_info, 0, NULL}, NULL, NULL, 0, FLAG_FREE_MESSAGE);
+    printf("Found %d partitions\n", drive_num);
+    for (u32 i = 0; i < drive_num; i++) {
+        printf("guid: %016lX%016lX, size: %016lX\n", drive_info[i].guid[1], drive_info[i].guid[0], drive_info[i].size);
         printf("Opening drive\n");
         ReceiveAttachedHandle drive_read_attached_handle = {ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0};
-        err = channel_call_read(drive_open_channel, &(SendMessage){1, &(SendMessageData){sizeof(size_t), &i}, 0, NULL}, &(ReceiveMessage){0, NULL, 1, &drive_read_attached_handle}, NULL);
+        err = channel_call_read(drive_open_channel, &(SendMessage){1, &(SendMessageData){sizeof(u32), &i}, 0, NULL}, &(ReceiveMessage){0, NULL, 1, &drive_read_attached_handle}, NULL);
         if (err) {
             printf("Got error %zX\n", err);
             return;
         }
         handle_t drive_read_handle = drive_read_attached_handle.handle_i;
         printf("Reading first 1K\n");
-        err = channel_call_read(drive_read_handle, &(SendMessage){1, &(SendMessageData){2 * sizeof(u64), (u64[]){0, 1024}}, 0, NULL}, &(ReceiveMessage){1024, data_buf, 0, NULL}, NULL);
+        err = channel_call_read(drive_read_handle, &(SendMessage){1, &(SendMessageData){sizeof(FileRange), &(FileRange){0, 1024}}, 0, NULL}, &(ReceiveMessage){1024, data_buf, 0, NULL}, NULL);
         if (err) {
             printf("Got error %zX\n", err);
             return;

@@ -10,10 +10,11 @@ USER_CFLAGS = -target x86_64-pc-none-elf -ffreestanding -masm=intel -fno-PIC -no
 USER_LDFLAGS = -target x86_64-pc-none-elf -ffreestanding -static -nostdlib -O2
 
 # All subprojects other than the kernel are either programs or libraries
-PROGRAMS = test_program terminal window
+PROGRAMS = init test_program terminal window
 LIBS = libc
 
 # The dependencies for each subproject
+init_DEPS = libc
 test_program_DEPS = libc
 terminal_DEPS = libc
 window_DEPS = libc
@@ -74,7 +75,10 @@ $(BUILD)/image.bin: $(kernel_OBJECTS) kernel/linker.ld
 $(BUILD)/window/included_programs.s.o: window/included_programs.s $(BUILD)/test_program/test_program.bin $(BUILD)/terminal/terminal.bin
 	$(asm_recipe)
 
-$(BUILD)/kernel/included_programs.s.o: kernel/included_programs.s $(BUILD)/window/window.bin
+$(BUILD)/init/included_programs.s.o: init/included_programs.s $(BUILD)/window/window.bin
+	$(asm_recipe)
+
+$(BUILD)/kernel/included_programs.s.o: kernel/included_programs.s $(BUILD)/init/init.bin
 	$(asm_recipe)
 
 $(eval $(call common_template,kernel,libc,$(KERNEL_CFLAGS)))

@@ -43,8 +43,6 @@ typedef enum err_t : u64 {
     ERR_KERNEL_MESSAGE_ALREADY_REPLIED_TO,
 } err_t;
 
-#ifdef _KERNEL
-
 // Convert an error code to a user error code
 static inline err_t user_error_code(err_t err) {
     if (err < ERR_KERNEL_MIN)
@@ -54,5 +52,3 @@ static inline err_t user_error_code(err_t err) {
     else
         return ERR_INVALID_ARG;
 }
-
-#endif

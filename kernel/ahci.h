@@ -10,8 +10,5 @@ void drive_process_irq(void);
 _Noreturn void ahci_main_kernel_thread_main(void);
 
 extern MessageQueue *ahci_main_mqueue;
-extern Channel *drive_info_channel;
+extern Message *drive_info_msg;
 extern Channel *drive_open_channel;
-
-#define AHCI_MAIN_TAG_DRIVE_INFO 0
-#define AHCI_MAIN_TAG_DRIVE_OPEN 1
