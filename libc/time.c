@@ -5,9 +5,8 @@
 
 #include <zr/error.h>
 #include <zr/syscalls.h>
-#include <zr/timezone.h>
+#include <zr/time.h>
 
-#define TICKS_PER_SEC 10000000
 #define NSEC_PER_TICK 100
 
 static Timezone timezone = {0, DST_NONE};

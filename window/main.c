@@ -8,7 +8,7 @@
 #include <zr/keyboard.h>
 #include <zr/mouse.h>
 #include <zr/syscalls.h>
-#include <zr/timezone.h>
+#include <zr/time.h>
 #include <zr/video.h>
 
 #include "font.h"
