@@ -287,7 +287,7 @@ time_t mktime(struct tm *tm) {
     i64 year = tm->tm_year - 70;
     // Years since 1600 (start of leap year cycle)
     i64 cyear = tm->tm_year + 300;
-    // True is year is leap
+    // True if year is leap
     bool is_leap_year = (cyear % 4 == 0 && (cyear % 100 != 0 || cyear % 400 == 0));
     // Leap years since epoch
     i64 leap_years = idiv(cyear, 4) - idiv(cyear, 100) + idiv(cyear, 400) - 89;
@@ -295,7 +295,7 @@ time_t mktime(struct tm *tm) {
     i64 day =
         year * 365 + leap_years
         + month_offsets[tm->tm_mon]
-        + (is_leap_year && tm->tm_mon > 1)
+        - (is_leap_year && tm->tm_mon <= 1)
         + tm->tm_mday - 1;
     // Seconds since epoch
     time_t t = tm->tm_sec + 60 * (tm->tm_min + 60 * (tm->tm_hour + 24 * day));
