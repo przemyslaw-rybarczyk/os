@@ -275,8 +275,8 @@ struct tm *localtime_r(const time_t *t_ptr, struct tm *tm) {
     return tm;
 }
 
-time_t mktime(struct tm *tm) {
-    int tm_isdst = tm->tm_isdst;
+// Same as mktime(), but always uses GMT as timezone
+time_t mktime_gmt(struct tm *tm) {
     // Handle month overflow
     i64 year_diff, month;
     idivmod(tm->tm_mon, 12, &year_diff, &month);
@@ -300,7 +300,18 @@ time_t mktime(struct tm *tm) {
     time_t t = tm->tm_sec + 60 * (tm->tm_min + 60 * (tm->tm_hour + 24 * day));
     // Adjust all fields in tm struct
     gmtime_r(&t, tm);
-    // Apply reverse timezone shift
+    // DST never applies to GMT
+    if (tm->tm_isdst < 0)
+        tm->tm_isdst = 0;
+    if (tm->tm_isdst > 0)
+        t -= 60 * 60;
+    return t;
+}
+
+time_t mktime(struct tm *tm) {
+    int tm_isdst = tm->tm_isdst;
+    time_t t = mktime_gmt(tm);
+    // Apply reverse timezone shift and set tm_isdst if it's negative
     tm->tm_isdst = tm_isdst;
     t -= 15 * 60 * timezone.utc_offset;
     if (tm->tm_isdst < 0) {
@@ -318,9 +329,9 @@ time_t mktime(struct tm *tm) {
             tm->tm_isdst = is_dst_na(tm);
             break;
         }
+        if (tm->tm_isdst > 0)
+            t -= 60 * 60;
     }
-    if (tm->tm_isdst > 0)
-        t -= 60 * 60;
     return t;
 }
 
