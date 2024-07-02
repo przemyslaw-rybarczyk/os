@@ -261,12 +261,14 @@ static WindowContainer *create_window(void) {
         resource_name("text/stderr"),
         resource_name("text/stdin"),
         resource_name("virt_drive/open"),
+        resource_name("process/spawn"),
     };
     SendAttachedHandle program2_resource_handles[] = {
         {ATTACHED_HANDLE_FLAG_MOVE, text_stdout_in},
         {ATTACHED_HANDLE_FLAG_MOVE, text_stderr_in},
         {ATTACHED_HANDLE_FLAG_MOVE, text_stdin_in},
         {0, drive_open_channel},
+        {0, process_spawn_channel},
     };
     err = channel_call(process_spawn_channel, &(SendMessage){
         7, (SendMessageData[]){

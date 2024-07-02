@@ -22,3 +22,12 @@ typedef struct FileRange {
     u64 offset;
     u64 length;
 } FileRange;
+
+typedef struct FileMetadata {
+    bool is_dir;
+    u8 reserved1[7];
+    u64 size;
+    i64 create_time;
+    i64 modify_time;
+    i64 access_time;
+} FileMetadata;

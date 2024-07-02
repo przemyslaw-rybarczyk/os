@@ -10,11 +10,12 @@ USER_CFLAGS = -target x86_64-pc-none-elf -ffreestanding -masm=intel -fno-PIC -no
 USER_LDFLAGS = -target x86_64-pc-none-elf -ffreestanding -static -nostdlib -O2
 
 # All subprojects other than the kernel are either programs or libraries
-PROGRAMS = init test_program terminal window
+PROGRAMS = init fat32 test_program terminal window
 LIBS = libc
 
 # The dependencies for each subproject
 init_DEPS = libc
+fat32_DEPS = libc
 test_program_DEPS = libc
 terminal_DEPS = libc
 window_DEPS = libc
@@ -71,6 +72,9 @@ $(BUILD)/image.bin: $(kernel_OBJECTS) kernel/linker.ld
 	clang $(KERNEL_LDFLAGS) -T kernel/linker.ld $(kernel_OBJECTS) -o $@
 # Pad the file so its size is large enough to run in an emulator
 	truncate -s '>516096' $@
+
+$(BUILD)/test_program/included_programs.s.o: test_program/included_programs.s $(BUILD)/fat32/fat32.bin
+	$(asm_recipe)
 
 $(BUILD)/window/included_programs.s.o: window/included_programs.s $(BUILD)/test_program/test_program.bin $(BUILD)/terminal/terminal.bin
 	$(asm_recipe)
