@@ -43,6 +43,7 @@ void main(void) {
     u32 i;
     if (scanf("%u", &i) != 1)
         return;
+    getchar();
     if (i >= drive_num)
         return;
     ReceiveAttachedHandle drive_read_attached_handle = {ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0};
@@ -53,14 +54,20 @@ void main(void) {
     err = channel_create(&file_stat_in, &file_stat_out);
     if (err)
         return;
+    handle_t file_list_in, file_list_out;
+    err = channel_create(&file_list_in, &file_list_out);
+    if (err)
+        return;
     ResourceName fs_resource_names[] = {
         resource_name("virt_drive/info"),
         resource_name("virt_drive/read"),
         resource_name("file/stat_r"),
+        resource_name("file/list_r"),
     };
     SendAttachedHandle fs_resource_handles[] = {
         {ATTACHED_HANDLE_FLAG_MOVE, drive_read_attached_handle.handle_i},
         {ATTACHED_HANDLE_FLAG_MOVE, file_stat_out},
+        {ATTACHED_HANDLE_FLAG_MOVE, file_list_out},
     };
     err = channel_call(process_spawn_channel, &(SendMessage){
         5, (SendMessageData[]){
@@ -75,31 +82,32 @@ void main(void) {
         return;
     while (1) {
         printf("Path: \n");
-        if (scanf(" %255[^\n]", path_buf) != 1)
+        if (scanf("%255[^\n]", path_buf) != 1)
             return;
-        FileMetadata stat;
-        err = channel_call_read(file_stat_in, &(SendMessage){1, &(SendMessageData){strlen(path_buf), path_buf}, 0, NULL}, &(ReceiveMessage){sizeof(FileMetadata), &stat, 0, NULL}, NULL);
+        handle_t reply;
+        err = channel_call(file_list_in, &(SendMessage){1, &(SendMessageData){strlen(path_buf), path_buf}, 0, NULL}, &reply);
         if (err == ERR_DOES_NOT_EXIST) {
-            printf("Error: file does not exist\n");
+            printf("Error: directory does not exist\n");
+        } else if (err == ERR_NOT_DIR) {
+            printf("Error: not a directory\n");
         } else if (err) {
             printf("Error: %zX\n", err);
         } else {
-            time_t t;
-            struct tm tm;
-            char time_buf[32];
-            printf("type: %s\nsize: %llu B\n", stat.is_dir ? "dir" : "file", stat.size);
-            t = time_t_from_timestamp(stat.create_time);
-            localtime_r(&t, &tm);
-            strftime(time_buf, 32, "%F %T", &tm);
-            printf("create: %32s.%07llu\n", time_buf, stat.create_time - t * TICKS_PER_SEC);
-            t = time_t_from_timestamp(stat.modify_time);
-            localtime_r(&t, &tm);
-            strftime(time_buf, 32, "%F %T", &tm);
-            printf("modify: %32s.%07llu\n", time_buf, stat.modify_time - t * TICKS_PER_SEC);
-            t = time_t_from_timestamp(stat.access_time);
-            localtime_r(&t, &tm);
-            strftime(time_buf, 32, "%F %T", &tm);
-            printf("access: %32s.%07llu\n", time_buf, stat.access_time - t * TICKS_PER_SEC);
+            MessageLength reply_size;
+            message_get_length(reply, &reply_size);
+            size_t reply_offset = 0;
+            while (reply_offset < reply_size.data) {
+                u32 name_length;
+                err = message_read(reply, &(ReceiveMessage){sizeof(u32), &name_length, 0, NULL}, &(MessageLength){reply_offset, 0}, NULL, 0, FLAG_ALLOW_PARTIAL_DATA_READ);
+                if (err)
+                    return;
+                reply_offset += sizeof(u32);
+                err = message_read(reply, &(ReceiveMessage){name_length <= 255 ? name_length : 255, path_buf, 0, NULL}, &(MessageLength){reply_offset, 0}, NULL, 0, FLAG_ALLOW_PARTIAL_DATA_READ);
+                if (err)
+                    return;
+                reply_offset += name_length;
+                printf("%.*s\n", name_length, path_buf);
+            }
         }
     }
 }

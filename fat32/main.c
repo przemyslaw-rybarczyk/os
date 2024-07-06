@@ -201,7 +201,7 @@ static bool char_allowed_in_long_name(u8 c) {
 // Copy part of a name from a long name entry into a buffer
 // If the entry is the last one, *buf_length is set to the length of the buffer.
 // Does not support Unicode characters above 0xFF - returns an error for those.
-static err_t copy_name_from_long_name_entry(LongNameDirEntry *lne, u8 *buf, size_t *buf_length) {
+static err_t copy_name_from_long_name_entry(LongNameDirEntry *lne, u8 *buf, u32 *buf_length) {
     // Get list of characters from name
     u16 chars[13] = {
         lne->name1[0], lne->name1[1], lne->name1[2], lne->name1[3], lne->name1[4],
@@ -228,48 +228,48 @@ static err_t copy_name_from_long_name_entry(LongNameDirEntry *lne, u8 *buf, size
     return 0;
 }
 
-static u8 name_buf[255];
+typedef struct DirReadState {
+    u32 cluster;
+    u32 entry_i;
+    DirEntry *cluster_entries;
+} DirReadState;
 
-// Get a directory entry for a file, given the first cluster of its containing folder and its name
-static err_t find_entry_in_dir(u32 dir_first_cluster, const u8 *target_name, size_t target_name_length, DirEntry *entry_ptr) {
-    err_t err = 0;
-    // Return early if there are no clusters
-    u32 cluster = dir_first_cluster;
-    if (cluster >= FAT_EOF_MIN)
-        return ERR_DOES_NOT_EXIST;
-    DirEntry *cluster_entries = malloc(cluster_size);
-    if (cluster_entries == 0)
-        return ERR_NO_MEMORY;
+// Get the next entry in a directory
+// After a successful return, the `state` is updated so that it can be used to get the next entry.
+static err_t get_next_dir_entry(DirReadState *state, u8 *name_buf, u32 *name_buf_length_ptr, DirEntry *entry_ptr) {
+    err_t err;
     bool reading_long_name = false;
     u8 next_long_name_ord;
     u8 long_name_checksum;
-    size_t name_buf_length;
-    // Go through each entry in the directory
-    for (u32 entry_i = 0;; entry_i++) {
+    u32 name_buf_length;
+    // Return early if there are no clusters
+    if (state->cluster >= FAT_EOF_MIN)
+        return ERR_DOES_NOT_EXIST;
+    // Go through each entry in the directory starting from the current one
+    while (1) {
         // If we are past the last entry in a cluster, move to the next one
-        if (entry_i >= cluster_size / sizeof(DirEntry)) {
-            err = fat_read_entry_expect_allocated_or_eof(cluster, &cluster);
-            if (err) {
-                if (err == ERR_EOF)
-                    err = ERR_DOES_NOT_EXIST;
-                goto exit;
-            }
-            entry_i = 0;
+        if (state->entry_i >= cluster_size / sizeof(DirEntry)) {
+            err = fat_read_entry_expect_allocated_or_eof(state->cluster, &state->cluster);
+            if (err == ERR_EOF)
+                return ERR_DOES_NOT_EXIST;
+            else if (err)
+                return err;
+            state->entry_i = 0;
         }
         // If this is the first entry in a cluster, load it
-        if (entry_i == 0) {
-            err = drive_read(fat_cluster_offset(cluster), cluster_size, cluster_entries);
+        if (state->entry_i == 0) {
+            err = drive_read(fat_cluster_offset(state->cluster), cluster_size, state->cluster_entries);
             if (err)
-                goto exit;
+                return err;
         }
-        DirEntry *entry = &cluster_entries[entry_i];
+        DirEntry *entry = &state->cluster_entries[state->entry_i];
         // Check if the entry is a long name entry
         if ((entry->attr & LONG_NAME_ATTR_MASK) == LONG_NAME_ATTR) {
             LongNameDirEntry *lne = (LongNameDirEntry *)entry;
             // Don't recognize the long name entry if type is not 0
             if (lne->type != 0) {
                 reading_long_name = false;
-                continue;
+                goto skip_entry;
             }
             if ((lne->ord & LONG_NAME_ORD_LAST) && (lne->ord & LONG_NAME_ORD_MASK) != 0) {
                 // If the long name entry is marked as the last one, copy its contents into the name buffer
@@ -297,11 +297,9 @@ static err_t find_entry_in_dir(u32 dir_first_cluster, const u8 *target_name, siz
             bool has_long_name = reading_long_name && next_long_name_ord == 0;
             reading_long_name = false;
             if (entry->name[0] == 0xE5 || entry->name[0] == ' ')
-                continue;
-            if (entry->name[0] == 0x00) {
-                err = ERR_DOES_NOT_EXIST;
-                goto exit;
-            }
+                goto skip_entry;
+            if (entry->name[0] == 0x00)
+                return ERR_DOES_NOT_EXIST;
             // Verify checksum and ignore long name entry if it's not correct
             if (has_long_name) {
                 u8 checksum = 0;
@@ -334,23 +332,107 @@ static err_t find_entry_in_dir(u32 dir_first_cluster, const u8 *target_name, siz
                 }
                 name_buf_length = main_name_chars + extension_chars + (extension_chars > 0);
             }
-            // If the name is equal to the one requested, return the entry
-            if (target_name_length == name_buf_length && memcmp(target_name, name_buf, target_name_length) == 0) {
-                *entry_ptr = *entry;
-                err = 0;
-                goto exit;
-            }
+            // Return the entry
+            *name_buf_length_ptr = name_buf_length;
+            *entry_ptr = *entry;
+            state->entry_i++;
+            return 0;
         }
 skip_entry:
-        ;
+        state->entry_i++;
+    }
+}
+
+static u8 name_buf[255];
+
+// Get a directory entry for a file, given the first cluster of its containing folder and its name
+static err_t find_entry_in_dir(u32 dir_first_cluster, const u8 *target_name, size_t target_name_length, DirEntry *entry_ptr) {
+    err_t err = 0;
+    // Initialize directory reader state
+    DirEntry *cluster_entries = malloc(cluster_size);
+    if (cluster_entries == NULL)
+        return ERR_NO_MEMORY;
+    DirReadState state = {dir_first_cluster, 0, cluster_entries};
+    while (1) {
+        DirEntry entry;
+        u32 name_buf_length;
+        // Get the next directory entry
+        err = get_next_dir_entry(&state, name_buf, &name_buf_length, &entry);
+        if (err)
+            goto exit;
+        // If the name is equal to the one requested, return the entry
+        if (target_name_length == name_buf_length && memcmp(target_name, name_buf, target_name_length) == 0) {
+            *entry_ptr = entry;
+            err = 0;
+            goto exit;
+        }
     }
 exit:
     free(cluster_entries);
     return err;
 }
 
+#define DIR_LIST_INIT_CAPACITY 64
+
+// Get list of files contained in a directory starting at a given cluster
+static err_t get_dir_list(u32 dir_first_cluster, u8 **list_ptr, size_t *len_ptr) {
+    err_t err = 0;
+    // Allocate list
+    size_t list_len = 0;
+    size_t list_capacity = DIR_LIST_INIT_CAPACITY;
+    u8 *list = malloc(list_capacity);
+    if (list == NULL)
+        return ERR_NO_MEMORY;
+    // Initialize directory reader state
+    DirEntry *cluster_entries = malloc(cluster_size);
+    if (cluster_entries == NULL) {
+        free(list);
+        return ERR_NO_MEMORY;
+    }
+    DirReadState state = {dir_first_cluster, 0, cluster_entries};
+    while (1) {
+        DirEntry entry;
+        u32 name_buf_length;
+        // Get the next directory entry
+        err = get_next_dir_entry(&state, name_buf, &name_buf_length, &entry);
+        if (err) {
+            if (err == ERR_DOES_NOT_EXIST) {
+                *list_ptr = list;
+                *len_ptr = list_len;
+                err = 0;
+            }
+            goto exit;
+        }
+        // Expand list if necessary
+        if (list_capacity - list_len < name_buf_length + sizeof(u32)) {
+            while (list_capacity - list_len < name_buf_length + sizeof(u32))
+                list_capacity *= 2;
+            list = realloc(list, list_capacity);
+            if (list == NULL) {
+                err = ERR_NO_MEMORY;
+                goto exit;
+            }
+        }
+        // Append entry to list
+        *(u32 *)(list + list_len) = name_buf_length;
+        list_len += sizeof(u32);
+        memcpy(list + list_len, name_buf, name_buf_length);
+        list_len += name_buf_length;
+    }
+exit:
+    free(cluster_entries);
+    if (err)
+        free(list);
+    return err;
+}
+
 // Get a directory entry for a file given its path
 static err_t entry_from_path(const u8 *path, size_t path_length, DirEntry *entry_ptr) {
+    // Return root directory if string is empty
+    if (path_length == 0) {
+        *entry_ptr = root_dir_entry;
+        return 0;
+    }
     err_t err;
     // Start at root directory
     DirEntry entry = root_dir_entry;
@@ -402,6 +484,11 @@ static err_t stat_from_entry(const DirEntry *entry, FileMetadata *stat) {
 
 static BPB bpb_buf;
 
+typedef enum RequestTag {
+    TAG_STAT,
+    TAG_LIST,
+} RequestTag;
+
 void main(void) {
     err_t err;
     err = resource_get(&resource_name("virt_drive/read"), RESOURCE_TYPE_CHANNEL_SEND, &drive_channel);
@@ -425,12 +512,16 @@ void main(void) {
     err = mqueue_create(&mqueue);
     if (err)
         return;
-    err = mqueue_add_channel_resource(mqueue, &resource_name("file/stat_r"), (MessageTag){0, 0});
+    err = mqueue_add_channel_resource(mqueue, &resource_name("file/stat_r"), (MessageTag){TAG_STAT, 0});
+    if (err)
+        return;
+    err = mqueue_add_channel_resource(mqueue, &resource_name("file/list_r"), (MessageTag){TAG_LIST, 0});
     if (err)
         return;
     while (1) {
         handle_t msg;
-        mqueue_receive(mqueue, NULL, &msg, TIMEOUT_NONE, 0);
+        MessageTag tag;
+        mqueue_receive(mqueue, &tag, &msg, TIMEOUT_NONE, 0);
         MessageLength msg_length;
         message_get_length(msg, &msg_length);
         u8 *path = malloc(msg_length.data);
@@ -445,9 +536,26 @@ void main(void) {
         err = entry_from_path(path, msg_length.data, &entry);
         if (err)
             goto loop_fail;
-        FileMetadata stat;
-        stat_from_entry(&entry, &stat);
-        message_reply(msg, &(SendMessage){1, &(SendMessageData){sizeof(FileMetadata), &stat}, 0, NULL}, FLAG_FREE_MESSAGE);
+        switch (tag.data[0]) {
+        case TAG_STAT: {
+            FileMetadata stat;
+            stat_from_entry(&entry, &stat);
+            message_reply(msg, &(SendMessage){1, &(SendMessageData){sizeof(FileMetadata), &stat}, 0, NULL}, FLAG_FREE_MESSAGE);
+        }
+        case TAG_LIST: {
+            size_t file_list_length;
+            u8 *file_list;
+            if (!(entry.attr & DIR_ENTRY_ATTR_DIRECTORY)) {
+                err = ERR_NOT_DIR;
+                goto loop_fail;
+            }
+            err = get_dir_list(entry_first_cluster(&entry), &file_list, &file_list_length);
+            if (err)
+                goto loop_fail;
+            message_reply(msg, &(SendMessage){1, &(SendMessageData){file_list_length, file_list}, 0, NULL}, FLAG_FREE_MESSAGE);
+            free(file_list);
+        }
+        }
         continue;
 loop_fail:
         message_reply_error(msg, user_error_code(err), FLAG_FREE_MESSAGE);
