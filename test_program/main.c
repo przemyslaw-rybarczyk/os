@@ -58,16 +58,22 @@ void main(void) {
     err = channel_create(&file_list_in, &file_list_out);
     if (err)
         return;
+    handle_t file_open_in, file_open_out;
+    err = channel_create(&file_open_in, &file_open_out);
+    if (err)
+        return;
     ResourceName fs_resource_names[] = {
         resource_name("virt_drive/info"),
         resource_name("virt_drive/read"),
         resource_name("file/stat_r"),
         resource_name("file/list_r"),
+        resource_name("file/open_r"),
     };
     SendAttachedHandle fs_resource_handles[] = {
         {ATTACHED_HANDLE_FLAG_MOVE, drive_read_attached_handle.handle_i},
         {ATTACHED_HANDLE_FLAG_MOVE, file_stat_out},
         {ATTACHED_HANDLE_FLAG_MOVE, file_list_out},
+        {ATTACHED_HANDLE_FLAG_MOVE, file_open_out},
     };
     err = channel_call(process_spawn_channel, &(SendMessage){
         5, (SendMessageData[]){
@@ -84,30 +90,37 @@ void main(void) {
         printf("Path: \n");
         if (scanf("%255[^\n]", path_buf) != 1)
             return;
+        u64 offset, length;
+        printf("Offset: \n");
+        if (scanf("%zu[^\n]", &offset) != 1)
+            continue;
+        printf("Length: \n");
+        if (scanf("%zu[^\n]", &length) != 1)
+            continue;
         handle_t reply;
-        err = channel_call(file_list_in, &(SendMessage){1, &(SendMessageData){strlen(path_buf), path_buf}, 0, NULL}, &reply);
+        err = channel_call(file_open_in, &(SendMessage){1, &(SendMessageData){strlen(path_buf), path_buf}, 0, NULL}, &reply);
         if (err == ERR_DOES_NOT_EXIST) {
-            printf("Error: directory does not exist\n");
-        } else if (err == ERR_NOT_DIR) {
-            printf("Error: not a directory\n");
+            printf("Error: file does not exist\n");
+            continue;
         } else if (err) {
             printf("Error: %zX\n", err);
-        } else {
-            MessageLength reply_size;
-            message_get_length(reply, &reply_size);
-            size_t reply_offset = 0;
-            while (reply_offset < reply_size.data) {
-                u32 name_length;
-                err = message_read(reply, &(ReceiveMessage){sizeof(u32), &name_length, 0, NULL}, &(MessageLength){reply_offset, 0}, NULL, 0, FLAG_ALLOW_PARTIAL_DATA_READ);
-                if (err)
-                    return;
-                reply_offset += sizeof(u32);
-                err = message_read(reply, &(ReceiveMessage){name_length <= 255 ? name_length : 255, path_buf, 0, NULL}, &(MessageLength){reply_offset, 0}, NULL, 0, FLAG_ALLOW_PARTIAL_DATA_READ);
-                if (err)
-                    return;
-                reply_offset += name_length;
-                printf("%.*s\n", name_length, path_buf);
-            }
+            continue;
         }
+        ReceiveAttachedHandle read_attached_handle = {ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0};
+        err = message_read(reply, &(ReceiveMessage){0, NULL, 1, &read_attached_handle}, NULL, NULL, 0, 0);
+        if (err)
+            return;
+        u8 *data_buf = malloc(length);
+        if (length != 0 && data_buf == NULL)
+            continue;
+        handle_t read_channel = read_attached_handle.handle_i;
+        err = channel_call_read(read_channel, &(SendMessage){1, &(SendMessageData){sizeof(FileRange), &(FileRange){offset, length}}, 0, NULL}, &(ReceiveMessage){length, data_buf, 0, NULL}, NULL);
+        if (err) {
+            printf("Error: %zX\n", err);
+            free(data_buf);
+            continue;
+        }
+        printf("%.*s\n", length, data_buf);
+        free(data_buf);
     }
 }

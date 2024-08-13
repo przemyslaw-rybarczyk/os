@@ -163,6 +163,23 @@ static err_t fat_read_entry(u32 cluster, u32 *entry_ptr) {
     return 0;
 }
 
+// Same as fat_read_entry(), but returns an ERR_IO_INTERNAL if the cluster is not allocated.
+static err_t fat_read_entry_expect_allocated(u32 cluster, u32 *entry_ptr) {
+    err_t err;
+    u32 entry;
+    err = fat_read_entry(cluster, &entry);
+    if (err)
+        return err;
+    if (entry == FAT_BAD_CLUSTER)
+        return ERR_IO_INTERNAL;
+    else if (entry >= FAT_EOF_MIN)
+        return ERR_IO_INTERNAL;
+    else if (entry >= fat_length || entry < 2)
+        return ERR_IO_INTERNAL;
+    *entry_ptr = entry;
+    return 0;
+}
+
 // Same as fat_read_entry(), but returns an ERR_IO_INTERNAL if the cluster is not allocated
 // and ERR_EOF if it's the last one in a file.
 static err_t fat_read_entry_expect_allocated_or_eof(u32 cluster, u32 *entry_ptr) {
@@ -184,6 +201,45 @@ static err_t fat_read_entry_expect_allocated_or_eof(u32 cluster, u32 *entry_ptr)
 // Get the offset of a cluster corresponding to the given FAT entry number
 static u64 fat_cluster_offset(u32 cluster) {
     return data_offset + (u64)(cluster - 2) * cluster_size;
+}
+
+// Read a range of bytes from a file
+static err_t read_file(u32 first_cluster, u64 offset, u64 length, void *data) {
+    err_t err;
+    u32 cluster = first_cluster;
+    u32 src_offset = 0;
+    // Seek until first cluster containing requested data
+    while (src_offset + cluster_size <= offset) {
+        err = fat_read_entry_expect_allocated(cluster, &cluster);
+        if (err)
+            return err;
+        src_offset += cluster_size;
+    }
+    // If this is the only cluster, return now
+    if (offset + length <= src_offset + cluster_size)
+        return drive_read(fat_cluster_offset(cluster) + offset - src_offset, length, data);
+    // Read data from first cluster
+    err = drive_read(fat_cluster_offset(cluster) + offset - src_offset, cluster_size - (offset - src_offset), data);
+    if (err)
+        return err;
+    // Read data from clusters in the middle
+    u32 dest_offset = cluster_size - (offset - src_offset);
+    src_offset += cluster_size;
+    err = fat_read_entry_expect_allocated(cluster, &cluster);
+    if (err)
+        return err;
+    while (src_offset + cluster_size < offset + length) {
+        err = drive_read(fat_cluster_offset(cluster), cluster_size, data + dest_offset);
+        if (err)
+            return err;
+        err = fat_read_entry_expect_allocated(cluster, &cluster);
+        if (err)
+            return err;
+        src_offset += cluster_size;
+        dest_offset += cluster_size;
+    }
+    // Read data from final cluster
+    return drive_read(fat_cluster_offset(cluster), length - dest_offset, data + dest_offset);
 }
 
 // Table of characters allowed in short and long file names - bit is set if character allowed
@@ -487,7 +543,31 @@ static BPB bpb_buf;
 typedef enum RequestTag {
     TAG_STAT,
     TAG_LIST,
+    TAG_OPEN,
+    TAG_READ,
 } RequestTag;
+
+static err_t entry_from_path_msg(handle_t msg, DirEntry *entry) {
+    err_t err;
+    MessageLength msg_length;
+    message_get_length(msg, &msg_length);
+    u8 *path = malloc(msg_length.data);
+    if (msg_length.data != 0 && path == NULL)
+        return ERR_NO_MEMORY;
+    err = message_read(msg, &(ReceiveMessage){msg_length.data, path, 0, NULL}, NULL, NULL, 0, 0);
+    if (err) {
+        free(path);
+        return err;
+    }
+    err = entry_from_path(path, msg_length.data, entry);
+    free(path);
+    return err;
+}
+
+typedef struct OpenFile {
+    u32 first_cluster;
+    u32 file_size;
+} OpenFile;
 
 void main(void) {
     err_t err;
@@ -518,31 +598,29 @@ void main(void) {
     err = mqueue_add_channel_resource(mqueue, &resource_name("file/list_r"), (MessageTag){TAG_LIST, 0});
     if (err)
         return;
+    err = mqueue_add_channel_resource(mqueue, &resource_name("file/open_r"), (MessageTag){TAG_OPEN, 0});
+    if (err)
+        return;
     while (1) {
         handle_t msg;
         MessageTag tag;
         mqueue_receive(mqueue, &tag, &msg, TIMEOUT_NONE, 0);
-        MessageLength msg_length;
-        message_get_length(msg, &msg_length);
-        u8 *path = malloc(msg_length.data);
-        if (msg_length.data != 0 && path == NULL) {
-            err = ERR_NO_MEMORY;
-            goto loop_fail;
-        }
-        err = message_read(msg, &(ReceiveMessage){msg_length.data, path, 0, NULL}, NULL, NULL, 0, 0);
-        if (err)
-            goto loop_fail;
-        DirEntry entry;
-        err = entry_from_path(path, msg_length.data, &entry);
-        if (err)
-            goto loop_fail;
         switch (tag.data[0]) {
         case TAG_STAT: {
+            DirEntry entry;
+            err = entry_from_path_msg(msg, &entry);
+            if (err)
+                goto loop_fail;
             FileMetadata stat;
             stat_from_entry(&entry, &stat);
             message_reply(msg, &(SendMessage){1, &(SendMessageData){sizeof(FileMetadata), &stat}, 0, NULL}, FLAG_FREE_MESSAGE);
+            break;
         }
         case TAG_LIST: {
+            DirEntry entry;
+            err = entry_from_path_msg(msg, &entry);
+            if (err)
+                goto loop_fail;
             size_t file_list_length;
             u8 *file_list;
             if (!(entry.attr & DIR_ENTRY_ATTR_DIRECTORY)) {
@@ -554,6 +632,57 @@ void main(void) {
                 goto loop_fail;
             message_reply(msg, &(SendMessage){1, &(SendMessageData){file_list_length, file_list}, 0, NULL}, FLAG_FREE_MESSAGE);
             free(file_list);
+            break;
+        }
+        case TAG_OPEN: {
+            DirEntry entry;
+            err = entry_from_path_msg(msg, &entry);
+            if (err)
+                goto loop_fail;
+            handle_t file_read_in, file_read_out;
+            err = channel_create(&file_read_in, &file_read_out);
+            if (err)
+                goto loop_fail;
+            OpenFile *open_file = malloc(sizeof(OpenFile));
+            if (open_file == NULL) {
+                err = ERR_NO_MEMORY;
+                goto loop_fail;
+            }
+            open_file->first_cluster = entry_first_cluster(&entry);
+            open_file->file_size = entry.file_size;
+            mqueue_add_channel(mqueue, file_read_out, (MessageTag){TAG_READ, (uintptr_t)open_file});
+            message_reply(msg, &(SendMessage){0, NULL, 1, &(SendMessageHandles){1, &(SendAttachedHandle){0, file_read_in}}}, FLAG_FREE_MESSAGE);
+            break;
+        }
+        case TAG_READ: {
+            OpenFile *open_file = (OpenFile *)tag.data[1];
+            FileRange range;
+            err = message_read(msg, &(ReceiveMessage){sizeof(FileRange), &range, 0, NULL}, NULL, NULL, 0, 0);
+            if (err)
+                goto loop_fail;
+            // Verify range falls within file size
+            if (range.offset + range.length < range.offset || range.offset + range.length > open_file->file_size) {
+                err = ERR_EOF;
+                goto loop_fail;
+            }
+            // Special case for zero length
+            if (range.length == 0) {
+                err = message_reply(msg, NULL, FLAG_FREE_MESSAGE);
+                if (err)
+                    goto loop_fail;
+            }
+            u8 *data_buf = malloc(range.length);
+            if (data_buf == NULL) {
+                err = ERR_NO_MEMORY;
+                goto loop_fail;
+            }
+            err = read_file(open_file->first_cluster, range.offset, range.length, data_buf);
+            if (err)
+                goto loop_fail;
+            err = message_reply(msg, &(SendMessage){1, &(SendMessageData){range.length, data_buf}, 0, NULL}, FLAG_FREE_MESSAGE);
+            if (err)
+                goto loop_fail;
+            break;
         }
         }
         continue;
