@@ -139,7 +139,7 @@ static err_t parse_bpb(BPB *bpb, u64 drive_size) {
     // If there are not enough data clusters, the file system is not FAT32
     if (data_sector_num / bpb->sectors_per_cluster < 65525)
         return ERR_OTHER;
-    if ((u64)bpb->fat_sector_num_32 * (bpb->bytes_per_sector / sizeof(u32)) < data_sector_num)
+    if ((u64)bpb->fat_sector_num_32 * (bpb->bytes_per_sector / sizeof(u32)) * bpb->sectors_per_cluster < data_sector_num)
         return ERR_OTHER;
     fat_offset = (u64)bpb->reserved_sectors_num * bpb->bytes_per_sector;
     data_offset = (u64)(bpb->reserved_sectors_num + bpb->fats_num * bpb->fat_sector_num_32) * bpb->bytes_per_sector;
