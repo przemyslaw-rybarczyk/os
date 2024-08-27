@@ -2,6 +2,7 @@
 
 #include "included_programs.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,8 +47,8 @@ void main(void) {
     getchar();
     if (i >= drive_num)
         return;
-    ReceiveAttachedHandle drive_read_attached_handle = {ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0};
-    err = channel_call_read(drive_open_channel, &(SendMessage){1, &(SendMessageData){sizeof(u32), &i}, 0, NULL}, &(ReceiveMessage){0, NULL, 1, &drive_read_attached_handle}, NULL);
+    ReceiveAttachedHandle drive_attached_handles[] = {{ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}, {ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}};
+    err = channel_call_read(drive_open_channel, &(SendMessage){1, &(SendMessageData){sizeof(u32), &i}, 0, NULL}, &(ReceiveMessage){0, NULL, 2, drive_attached_handles}, NULL);
     if (err)
         return;
     handle_t file_stat_in, file_stat_out;
@@ -65,12 +66,14 @@ void main(void) {
     ResourceName fs_resource_names[] = {
         resource_name("virt_drive/info"),
         resource_name("virt_drive/read"),
+        resource_name("virt_drive/write"),
         resource_name("file/stat_r"),
         resource_name("file/list_r"),
         resource_name("file/open_r"),
     };
     SendAttachedHandle fs_resource_handles[] = {
-        {ATTACHED_HANDLE_FLAG_MOVE, drive_read_attached_handle.handle_i},
+        {ATTACHED_HANDLE_FLAG_MOVE, drive_attached_handles[0].handle_i},
+        {ATTACHED_HANDLE_FLAG_MOVE, drive_attached_handles[1].handle_i},
         {ATTACHED_HANDLE_FLAG_MOVE, file_stat_out},
         {ATTACHED_HANDLE_FLAG_MOVE, file_list_out},
         {ATTACHED_HANDLE_FLAG_MOVE, file_open_out},
@@ -100,23 +103,39 @@ void main(void) {
         handle_t reply;
         err = channel_call(file_open_in, &(SendMessage){1, &(SendMessageData){strlen(path_buf), path_buf}, 0, NULL}, &reply);
         if (err == ERR_DOES_NOT_EXIST) {
-            printf("Error: file does not exist\n");
+            printf("Error when opening: file does not exist\n");
             continue;
         } else if (err) {
-            printf("Error: %zX\n", err);
+            printf("Error when opening: %zX\n", err);
             continue;
         }
-        ReceiveAttachedHandle read_attached_handle = {ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0};
-        err = message_read(reply, &(ReceiveMessage){0, NULL, 1, &read_attached_handle}, NULL, NULL, 0, 0);
+        ReceiveAttachedHandle file_attached_handles[] = {{ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}, {ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}};
+        err = message_read(reply, &(ReceiveMessage){0, NULL, 2, file_attached_handles}, NULL, NULL, 0, 0);
         if (err)
             return;
         u8 *data_buf = malloc(length);
         if (length != 0 && data_buf == NULL)
             continue;
-        handle_t read_channel = read_attached_handle.handle_i;
+        handle_t read_channel = file_attached_handles[0].handle_i;
+        handle_t write_channel = file_attached_handles[1].handle_i;
         err = channel_call_read(read_channel, &(SendMessage){1, &(SendMessageData){sizeof(FileRange), &(FileRange){offset, length}}, 0, NULL}, &(ReceiveMessage){length, data_buf, 0, NULL}, NULL);
         if (err) {
-            printf("Error: %zX\n", err);
+            printf("Error when reading: %zX\n", err);
+            free(data_buf);
+            continue;
+        }
+        for (size_t i = 0; i < length; i++)
+            if (isalpha(data_buf[i]))
+                data_buf[i] ^= 'a' ^ 'A';
+        err = channel_call(write_channel, &(SendMessage){2, (SendMessageData[]){{sizeof(u64), &offset}, {length, data_buf}}, 0, NULL}, NULL);
+        if (err) {
+            printf("Error when writing: %zX\n", err);
+            free(data_buf);
+            continue;
+        }
+        err = channel_call_read(read_channel, &(SendMessage){1, &(SendMessageData){sizeof(FileRange), &(FileRange){offset, length}}, 0, NULL}, &(ReceiveMessage){length, data_buf, 0, NULL}, NULL);
+        if (err) {
+            printf("Error when reading again: %zX\n", err);
             free(data_buf);
             continue;
         }

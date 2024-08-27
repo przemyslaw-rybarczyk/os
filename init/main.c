@@ -206,11 +206,11 @@ void main(void) {
         return;
     // Detect partitions
     for (size_t drive_i = 0; drive_i < drive_num; drive_i++) {
-        ReceiveAttachedHandle drive_read_attached_handle = {ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0};
-        err = channel_call_read(phys_drive_open_channel, &(SendMessage){1, &(SendMessageData){sizeof(PhysDriveOpenArgs), &(PhysDriveOpenArgs){drive_i, 0, UINT64_MAX}}, 0, NULL}, &(ReceiveMessage){0, NULL, 1, &drive_read_attached_handle}, NULL);
+        ReceiveAttachedHandle drive_attached_handles[] = {{ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}, {ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}};
+        err = channel_call_read(phys_drive_open_channel, &(SendMessage){1, &(SendMessageData){sizeof(PhysDriveOpenArgs), &(PhysDriveOpenArgs){drive_i, 0, UINT64_MAX}}, 0, NULL}, &(ReceiveMessage){0, NULL, 2, drive_attached_handles}, NULL);
         if (err)
             return;
-        handle_t drive_read_handle = drive_read_attached_handle.handle_i;
+        handle_t drive_read_handle = drive_attached_handles[0].handle_i;
         err = drive_read(drive_read_handle, MBR_TABLE_OFFSET, sizeof(MBRTable), &mbr_table);
         if (err)
             return;
@@ -318,14 +318,14 @@ part_read_fail:
             goto loop_fail;
         }
         // Create handle by calling physical drive
-        ReceiveAttachedHandle drive_attached_handle = {ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0};
+        ReceiveAttachedHandle drive_attached_handles[] = {{ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}, {ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}};
         u64 sector_size = drive_info[partitions[part_i].drive_i].sector_size;
         PhysDriveOpenArgs drive_open_args = {partitions[part_i].drive_i, partitions[part_i].sector_start * sector_size, partitions[part_i].sector_count * sector_size};
-        err = channel_call_read(phys_drive_open_channel, &(SendMessage){1, &(SendMessageData){sizeof(PhysDriveOpenArgs), &drive_open_args}, 0, NULL}, &(ReceiveMessage){0, NULL, 1, &drive_attached_handle}, NULL);
+        err = channel_call_read(phys_drive_open_channel, &(SendMessage){1, &(SendMessageData){sizeof(PhysDriveOpenArgs), &drive_open_args}, 0, NULL}, &(ReceiveMessage){0, NULL, 2, drive_attached_handles}, NULL);
         if (err)
             goto loop_fail;
         // Reply to the message
-        message_reply(msg, &(SendMessage){0, NULL, 1, &(SendMessageHandles){1, &(SendAttachedHandle){ATTACHED_HANDLE_FLAG_MOVE, drive_attached_handle.handle_i}}}, FLAG_FREE_MESSAGE);
+        message_reply(msg, &(SendMessage){0, NULL, 1, &(SendMessageHandles){2, (SendAttachedHandle[]){{ATTACHED_HANDLE_FLAG_MOVE, drive_attached_handles[0].handle_i}, {ATTACHED_HANDLE_FLAG_MOVE, drive_attached_handles[1].handle_i}}}}, FLAG_FREE_MESSAGE);
         continue;
 loop_fail:
         message_reply_error(msg, user_error_code(err), FLAG_FREE_MESSAGE);

@@ -33,10 +33,13 @@
 #define PORT_INT_ERROR_ANY UINT32_C(0xF9C00010)
 
 #define COMMAND_LIST_FIS_LENGTH 5
+#define COMMAND_LIST_WRITE 0x40
 #define FIS_TYPE_HOST_TO_DEVICE 0x27
 #define FIS_FLAGS_COMMAND 0x80
 #define FIS_COMMAND_READ_DMA_EXT 0x25
+#define FIS_COMMAND_WRITE_DMA_EXT 0x35
 #define FIS_COMMAND_READ_DMA 0xC8
+#define FIS_COMMAND_WRITE_DMA 0xCA
 #define FIS_COMMAND_IDENTIFY_DEVICE 0xEC
 
 #define IDENTIFY_FIELD_VALID_MASK UINT32_C(0xC000)
@@ -152,8 +155,19 @@ typedef struct IssuedRequest {
     bool failed;
 } IssuedRequest;
 
+typedef enum IssuedCommandType {
+    // Read page from drive
+    ISSUED_COMMAND_READ,
+    // Write page to drive
+    ISSUED_COMMAND_WRITE,
+    // Read page from drive, then modify it and write back
+    // Used for pages lying on the edge of a write command
+    ISSUED_COMMAND_READ_EDGE,
+} IssuedCommandType;
+
 typedef struct IssuedCommand {
     IssuedRequest *request;
+    IssuedCommandType type;
     i64 offset;
 } IssuedCommand;
 
@@ -187,6 +201,11 @@ typedef struct Drive {
     // List of commands issued for each slot
     IssuedCommand *issued_commands;
 } Drive;
+
+typedef enum CommandTag {
+    TAG_READ,
+    TAG_WRITE,
+} CommandTag;
 
 static Drive *drives[32] = {};
 
@@ -428,14 +447,34 @@ _Noreturn void ahci_drive_receive_kernel_thread_main(void) {
         Message *message;
         // Get message from user process
         mqueue_receive(drives[port_i]->queue, &message, false, false, TIMEOUT_NONE);
-        if (message->data_size != sizeof(FileRange) || message->handles_size != 0) {
-            err = ERR_INVALID_ARG;
+        // Check if message is write or read command
+        bool write = message->tag.data[0] == TAG_WRITE;
+        // Verify message size
+        FileRange *bounds = (FileRange *)message->tag.data[1];
+        u64 request_offset, length;
+        if (write) {
+            if (message->data_size < sizeof(u64) || message->handles_size != 0) {
+                err = ERR_INVALID_ARG;
+                goto fail;
+            }
+            request_offset = *(u64 *)message->data;
+            length = message->data_size - sizeof(u64);
+        } else {
+            if (message->data_size != sizeof(FileRange) || message->handles_size != 0) {
+                err = ERR_INVALID_ARG;
+                goto fail;
+            }
+            FileRange *request = (FileRange *)message->data;
+            request_offset = request->offset;
+            length = request->length;
+        }
+        u64 offset = request_offset + bounds->offset;
+        // Check bounds
+        if (request_offset + length >= bounds->length || request_offset + length < request_offset
+                || offset + length > drives[port_i]->sector_size * drives[port_i]->sector_count || offset + length < offset) {
+            err = ERR_OUT_OF_RANGE;
             goto fail;
         }
-        FileRange *request = (FileRange *)message->data;
-        FileRange *bounds = (FileRange *)message->tag.data[1];
-        u64 offset = request->offset + bounds->offset;
-        u64 length = request->length;
         // Handle case of zero length separately
         if (length == 0) {
             Message *reply = message_alloc_copy(0, NULL);
@@ -446,12 +485,6 @@ _Noreturn void ahci_drive_receive_kernel_thread_main(void) {
             message_reply(message, reply);
             message_free(message);
             continue;
-        }
-        // Check bounds
-        if (request->offset + request->length >= bounds->length || request->offset + request->length < request->offset
-                || offset + length > drives[port_i]->sector_size * drives[port_i]->sector_count || offset + length < offset) {
-            err = ERR_OUT_OF_RANGE;
-            goto fail;
         }
         // Convert offset and length into pages
         u64 offset_page = offset / PAGE_SIZE;
@@ -466,7 +499,7 @@ _Noreturn void ahci_drive_receive_kernel_thread_main(void) {
         issued_request->outstanding_commands = length_pages;
         issued_request->failed = false;
         // Allocate reply
-        issued_request->reply = message_alloc(length);
+        issued_request->reply = message_alloc(write ? 0 : length);
         if (issued_request->reply == NULL) {
             err = ERR_NO_MEMORY;
             goto fail_reply_alloc;
@@ -481,6 +514,10 @@ _Noreturn void ahci_drive_receive_kernel_thread_main(void) {
                 goto fail_buffer_page_alloc;
             }
             spinlock_acquire(&drives[port_i]->lock);
+            // Copy data to page if writing
+            bool edge_page = offset > (offset_page + i) * PAGE_SIZE || offset + length < (offset_page + i + 1) * PAGE_SIZE;
+            if (write && !edge_page)
+                memcpy(PHYS_ADDR(buffer_page), message->data + sizeof(u64) + ((offset_page + i) * PAGE_SIZE - offset), PAGE_SIZE);
             // Get next empty slot
             u32 slot_i;
             while (1) {
@@ -499,8 +536,10 @@ slot_found:;
             u64 lba = (offset_page + i) * sectors_per_page;
             command_table->command_fis.fis_type = FIS_TYPE_HOST_TO_DEVICE;
             command_table->command_fis.flags = FIS_FLAGS_COMMAND;
-            command_table->command_fis.command = drives[port_i]->is_lba48 ? FIS_COMMAND_READ_DMA_EXT : FIS_COMMAND_READ_DMA;
-            command_table->command_fis.device = drives[port_i]->is_lba48 ? (1 << 6) : 0;
+            command_table->command_fis.command = write && !edge_page
+                ? (drives[port_i]->is_lba48 ? FIS_COMMAND_WRITE_DMA_EXT : FIS_COMMAND_WRITE_DMA)
+                : (drives[port_i]->is_lba48 ? FIS_COMMAND_READ_DMA_EXT : FIS_COMMAND_READ_DMA);
+            command_table->command_fis.device = 1 << 6;
             command_table->command_fis.lba0 = (u8)lba;
             command_table->command_fis.lba1 = (u8)(lba >> 8);
             command_table->command_fis.lba2 = (u8)(lba >> 16);
@@ -511,13 +550,14 @@ slot_found:;
             command_table->region[0].data_base = buffer_page;
             command_table->region[0].byte_count = PAGE_SIZE - 1;
             command_header->table_length = 1;
-            command_header->flags = COMMAND_LIST_FIS_LENGTH;
+            command_header->flags = (write && !edge_page ? COMMAND_LIST_WRITE : 0) | COMMAND_LIST_FIS_LENGTH;
             command_header->byte_count = 0;
             // Issue request
             hba->ports[port_i].command_issue = UINT32_C(1) << slot_i;
             // Construct issued command structure
             IssuedCommand *issued_command = &drives[port_i]->issued_commands[slot_i];
             issued_command->request = issued_request;
+            issued_command->type = write ? (edge_page ? ISSUED_COMMAND_READ_EDGE : ISSUED_COMMAND_WRITE) : ISSUED_COMMAND_READ;
             issued_command->offset = (offset_page + i) * PAGE_SIZE - offset;
             // Mark command as issued internally
             drives[port_i]->commands_issued |= UINT32_C(1) << slot_i;
@@ -563,25 +603,47 @@ _Noreturn void ahci_drive_reply_kernel_thread_main(void) {
             void *buffer = PHYS_ADDR(command_table->region[0].data_base);
             IssuedCommand *issued_command = &drives[port_i]->issued_commands[slot_i];
             IssuedRequest *issued_request = issued_command->request;
-            if (command_header->byte_count == PAGE_SIZE) {
-                // Copy data from buffer to reply data
-                if (issued_command->offset >= 0 && issued_command->offset + PAGE_SIZE <= issued_request->reply->data_size)
-                    memcpy(issued_request->reply->data + issued_command->offset, buffer, PAGE_SIZE);
-                else if (issued_command->offset >= 0)
-                    memcpy(issued_request->reply->data + issued_command->offset, buffer, issued_request->reply->data_size - issued_command->offset);
-                else if (issued_command->offset + PAGE_SIZE <= issued_request->reply->data_size)
-                    memcpy(issued_request->reply->data, buffer - issued_command->offset, PAGE_SIZE + issued_command->offset);
-                else
-                    memcpy(issued_request->reply->data, buffer - issued_command->offset, issued_request->reply->data_size);
-                spinlock_acquire(&drives[port_i]->lock);
-            } else {
+            if (command_header->byte_count != PAGE_SIZE) {
                 // If we received the wrong number of bytes, signal an error and mark request as failed
                 spinlock_acquire(&drives[port_i]->lock);
                 message_free(issued_request->reply);
                 message_reply_error(issued_request->message, ERR_IO_INTERNAL);
                 message_free(issued_request->message);
                 issued_request->failed = true;
+                goto command_fail;
             }
+            if (issued_command->type != ISSUED_COMMAND_WRITE) {
+                // Get size and offsets for part of data to copy
+                size_t data_size = issued_command->type == ISSUED_COMMAND_READ ? issued_request->reply->data_size : issued_request->message->data_size - sizeof(u64);
+                i64 data_offset;
+                i64 buffer_offset;
+                size_t copy_length;
+                if (issued_command->offset >= 0) {
+                    data_offset = issued_command->offset;
+                    buffer_offset = 0;
+                    copy_length = issued_command->offset + PAGE_SIZE <= data_size ? PAGE_SIZE : data_size - issued_command->offset;
+                } else {
+                    data_offset = 0;
+                    buffer_offset = -issued_command->offset;
+                    copy_length = issued_command->offset + PAGE_SIZE <= data_size ? PAGE_SIZE + issued_command->offset : data_size;
+                }
+                // If command was a read, copy data from buffer to reply data
+                // If command was an edge read before a write, copy data from message to buffer
+                if (issued_command->type == ISSUED_COMMAND_READ)
+                    memcpy(issued_request->reply->data + data_offset, buffer + buffer_offset, copy_length);
+                else
+                    memcpy(buffer + buffer_offset, issued_request->message->data + sizeof(u64) + data_offset, copy_length);
+            }
+            spinlock_acquire(&drives[port_i]->lock);
+            if (issued_command->type == ISSUED_COMMAND_READ_EDGE) {
+                // Change request from read to write request and issue it
+                command_table->command_fis.command = drives[port_i]->is_lba48 ? FIS_COMMAND_WRITE_DMA_EXT : FIS_COMMAND_WRITE_DMA;
+                command_header->flags = COMMAND_LIST_WRITE | COMMAND_LIST_FIS_LENGTH;
+                issued_command->type = ISSUED_COMMAND_WRITE;
+                hba->ports[port_i].command_issue = UINT32_C(1) << slot_i;
+                goto skip_free_command;
+            }
+command_fail:
             // Free data buffer page
             page_free(command_table->region[0].data_base);
             // Decrement number of outstanding commands
@@ -601,6 +663,7 @@ _Noreturn void ahci_drive_reply_kernel_thread_main(void) {
                 drives[port_i]->receive_thread_blocked = false;
                 process_enqueue(drives[port_i]->receive_thread);
             }
+skip_free_command:
             spinlock_release(&drives[port_i]->lock);
         }
     }
@@ -655,25 +718,34 @@ _Noreturn void ahci_main_kernel_thread_main(void) {
             err = ERR_NO_MEMORY;
             goto fail_reply_alloc;
         }
-        Channel *drive_channel = channel_alloc();
-        if (drive_channel == NULL) {
+        Channel *read_channel = channel_alloc();
+        if (read_channel == NULL) {
             err = ERR_NO_MEMORY;
-            goto fail_channel_alloc;
+            goto fail_read_channel_alloc;
         }
-        reply->handles = malloc(sizeof(AttachedHandle));
+        Channel *write_channel = channel_alloc();
+        if (write_channel == NULL) {
+            err = ERR_NO_MEMORY;
+            goto fail_write_channel_alloc;
+        }
+        reply->handles = malloc(2 * sizeof(AttachedHandle));
         if (reply->handles == NULL) {
             err = ERR_NO_MEMORY;
             goto fail_handles_alloc;
         }
-        channel_set_mqueue(drive_channel, drives[port_i]->queue, (MessageTag){0, (u64)bounds});
-        reply->handles_size = 1;
-        reply->handles[0] = (AttachedHandle){ATTACHED_HANDLE_TYPE_CHANNEL_SEND, {.channel = drive_channel}};
+        channel_set_mqueue(read_channel, drives[port_i]->queue, (MessageTag){TAG_READ, (uintptr_t)bounds});
+        channel_set_mqueue(write_channel, drives[port_i]->queue, (MessageTag){TAG_WRITE, (uintptr_t)bounds});
+        reply->handles_size = 2;
+        reply->handles[0] = (AttachedHandle){ATTACHED_HANDLE_TYPE_CHANNEL_SEND, {.channel = read_channel}};
+        reply->handles[1] = (AttachedHandle){ATTACHED_HANDLE_TYPE_CHANNEL_SEND, {.channel = write_channel}};
         message_reply(message, reply);
         message_free(message);
         continue;
 fail_handles_alloc:
-        channel_del_ref(drive_channel);
-fail_channel_alloc:
+        channel_del_ref(write_channel);
+fail_write_channel_alloc:
+        channel_del_ref(read_channel);
+fail_read_channel_alloc:
         message_free(reply);
 fail_reply_alloc:
         free(bounds);
