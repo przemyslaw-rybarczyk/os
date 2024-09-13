@@ -17,6 +17,7 @@ typedef enum err_t : u64 {
     ERR_DOES_NOT_EXIST,
     ERR_EOF,
     ERR_NOT_DIR,
+    ERR_NO_SPACE,
     // General kernel error codes - analogous to the general error codes
     ERR_KERNEL_OTHER = ERR_KERNEL_MIN + 1,
     ERR_KERNEL_INVALID_ARG,

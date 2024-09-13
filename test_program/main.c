@@ -93,13 +93,6 @@ void main(void) {
         printf("Path: \n");
         if (scanf("%255[^\n]", path_buf) != 1)
             return;
-        u64 offset, length;
-        printf("Offset: \n");
-        if (scanf("%zu[^\n]", &offset) != 1)
-            continue;
-        printf("Length: \n");
-        if (scanf("%zu[^\n]", &length) != 1)
-            continue;
         handle_t reply;
         err = channel_call(file_open_in, &(SendMessage){1, &(SendMessageData){strlen(path_buf), path_buf}, 0, NULL}, &reply);
         if (err == ERR_DOES_NOT_EXIST) {
@@ -109,37 +102,37 @@ void main(void) {
             printf("Error when opening: %zX\n", err);
             continue;
         }
-        ReceiveAttachedHandle file_attached_handles[] = {{ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}, {ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}};
-        err = message_read(reply, &(ReceiveMessage){0, NULL, 2, file_attached_handles}, NULL, NULL, 0, 0);
+        ReceiveAttachedHandle file_attached_handles[] = {{ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}, {ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}, {ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}};
+        err = message_read(reply, &(ReceiveMessage){0, NULL, 3, file_attached_handles}, NULL, NULL, 0, 0);
         if (err)
             return;
-        u8 *data_buf = malloc(length);
-        if (length != 0 && data_buf == NULL)
-            continue;
         handle_t read_channel = file_attached_handles[0].handle_i;
-        handle_t write_channel = file_attached_handles[1].handle_i;
-        err = channel_call_read(read_channel, &(SendMessage){1, &(SendMessageData){sizeof(FileRange), &(FileRange){offset, length}}, 0, NULL}, &(ReceiveMessage){length, data_buf, 0, NULL}, NULL);
+        handle_t resize_channel = file_attached_handles[2].handle_i;
+        FileMetadata stat;
+        err = channel_call_read(file_stat_in, &(SendMessage){1, &(SendMessageData){strlen(path_buf), path_buf}, 0, NULL}, &(ReceiveMessage){sizeof(FileMetadata), &stat, 0, NULL}, NULL);
         if (err) {
-            printf("Error when reading: %zX\n", err);
-            free(data_buf);
+            printf("Error when getting metadata: %zX\n", err);
             continue;
         }
-        for (size_t i = 0; i < length; i++)
-            if (isalpha(data_buf[i]))
-                data_buf[i] ^= 'a' ^ 'A';
-        err = channel_call(write_channel, &(SendMessage){2, (SendMessageData[]){{sizeof(u64), &offset}, {length, data_buf}}, 0, NULL}, NULL);
+        u64 old_size = stat.size;
+        printf("Old size: %zu\n", old_size);
+        u64 new_size;
+        printf("New size: \n");
+        if (scanf("%zu[^\n]", &new_size) != 1)
+            continue;
+        err = channel_call(resize_channel, &(SendMessage){1, &(SendMessageData){sizeof(u64), &new_size}, 0, NULL}, NULL);
         if (err) {
-            printf("Error when writing: %zX\n", err);
-            free(data_buf);
+            printf("Error when resizing file metadata: %zX\n", err);
             continue;
         }
-        err = channel_call_read(read_channel, &(SendMessage){1, &(SendMessageData){sizeof(FileRange), &(FileRange){offset, length}}, 0, NULL}, &(ReceiveMessage){length, data_buf, 0, NULL}, NULL);
+        err = channel_call(read_channel, &(SendMessage){1, &(SendMessageData){sizeof(FileRange), &(FileRange){old_size, 1}}, 0, NULL}, NULL);
+        if (err)
+            printf("Got error when reading past old EOF: %zX\n", err);
+        err = channel_call_read(file_stat_in, &(SendMessage){1, &(SendMessageData){strlen(path_buf), path_buf}, 0, NULL}, &(ReceiveMessage){sizeof(FileMetadata), &stat, 0, NULL}, NULL);
         if (err) {
-            printf("Error when reading again: %zX\n", err);
-            free(data_buf);
+            printf("Error when getting metadata: %zX\n", err);
             continue;
         }
-        printf("%.*s\n", length, data_buf);
-        free(data_buf);
+        printf("New size: %zu\n", stat.size);
     }
 }

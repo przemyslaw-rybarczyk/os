@@ -10,8 +10,10 @@
 #include <zr/syscalls.h>
 #include <zr/time.h>
 
+#define FAT_FREE UINT32_C(0)
 #define FAT_BAD_CLUSTER UINT32_C(0x0FFFFFF7)
 #define FAT_EOF_MIN UINT32_C(0x0FFFFFF8)
+#define FAT_EOF UINT32_C(0x0FFFFFFF)
 #define FAT_ENTRY_MASK UINT32_C(0x0FFFFFFF)
 
 #define DIR_ENTRY_ATTR_READ_ONLY 0x01
@@ -88,8 +90,14 @@ typedef struct LongNameDirEntry {
 static DirEntry root_dir_entry = {.attr = DIR_ENTRY_ATTR_DIRECTORY};
 
 // Get number of first cluster from directory entry
-static u32 entry_first_cluster(const DirEntry *entry) {
+static u32 entry_get_first_cluster(const DirEntry *entry) {
     return ((u32)entry->first_cluster_high << 16) | entry->first_cluster_low;
+}
+
+// Set number of first cluster in directory entry
+static void entry_set_first_cluster(DirEntry *entry, u32 first_cluster) {
+    entry->first_cluster_high = first_cluster >> 16;
+    entry->first_cluster_low = (u16)first_cluster;
 }
 
 static handle_t drive_read_channel;
@@ -117,6 +125,9 @@ static u64 data_offset;
 static u32 fat_length;
 static u32 root_cluster;
 static u32 cluster_size;
+
+// Blank cluster to be used for write messages to clear regions of memory
+static u8* blank_cluster;
 
 // Parse and verify the BPB
 static err_t parse_bpb(BPB *bpb, u64 drive_size) {
@@ -159,6 +170,10 @@ static err_t parse_bpb(BPB *bpb, u64 drive_size) {
     root_dir_entry.first_cluster_low = (u16)root_cluster;
     root_dir_entry.first_cluster_high = (u16)(root_cluster >> 16);
     cluster_size = bpb->sectors_per_cluster * bpb->bytes_per_sector;
+    blank_cluster = malloc(cluster_size);
+    if (blank_cluster == NULL)
+        return ERR_NO_MEMORY;
+    memset(blank_cluster, 0, cluster_size);
     return 0;
 }
 
@@ -205,6 +220,11 @@ static err_t fat_read_entry_expect_allocated_or_eof(u32 cluster, u32 *entry_ptr)
         return ERR_IO_INTERNAL;
     *entry_ptr = entry;
     return 0;
+}
+
+// Modify an entry for a given cluster in the FAT
+static err_t fat_write_entry(u32 cluster, u32 entry) {
+    return drive_write(fat_offset + sizeof(u32) * cluster, sizeof(u32), &entry);
 }
 
 // Get the offset of a cluster corresponding to the given FAT entry number
@@ -266,6 +286,144 @@ static err_t write_file(u32 first_cluster, u64 offset, u64 length, void *data) {
     return read_write_file(first_cluster, offset, length, data, true);
 }
 
+// Free a chain of clusters
+static err_t free_clusters(u32 first_cluster) {
+    err_t err;
+    u32 cluster = first_cluster;
+    while (1) {
+        u32 next_cluster;
+        err = fat_read_entry_expect_allocated_or_eof(cluster, &next_cluster);
+        if (err == ERR_EOF)
+            return 0;
+        else if (err)
+            return err;
+        err = fat_write_entry(cluster, FAT_FREE);
+        if (err)
+            return err;
+        cluster = next_cluster;
+    }
+}
+
+// Allocate a chain containing the given number of clusters and return the address of the first one
+// The clusters' contents will be zeroed out.
+static err_t allocate_clusters(u32 target_count, u32 *first_cluster_ptr) {
+    err_t err;
+    u32 current_count = 0;
+    u32 first_cluster;
+    u32 last_cluster;
+    // Go through clusters on drive in order
+    for (u32 cluster = 2; cluster < fat_length; cluster++) {
+        u32 entry;
+        err = fat_read_entry(cluster, &entry);
+        if (err)
+            return err;
+        // If cluster is free, attach it to the chain
+        if (entry == FAT_FREE) {
+            if (current_count == 0) {
+                first_cluster = cluster;
+                last_cluster = cluster;
+            } else {
+                err = fat_write_entry(last_cluster, cluster);
+                if (err)
+                    return err;
+                last_cluster = cluster;
+            }
+            // Zero out cluster
+            err = drive_write(fat_cluster_offset(cluster), cluster_size, blank_cluster);
+            if (err)
+                return err;
+            // If we have reached the target number of clusters, return
+            current_count++;
+            if (current_count >= target_count) {
+                err = fat_write_entry(last_cluster, FAT_EOF);
+                if (err)
+                    return err;
+                *first_cluster_ptr = first_cluster;
+                return 0;
+            }
+        }
+    }
+    // If there are not enough free clusters, free the allocated chain
+    err = fat_write_entry(last_cluster, FAT_EOF);
+    if (err)
+        return err;
+    err = free_clusters(first_cluster);
+    if (err)
+        return err;
+    return ERR_NO_SPACE;
+}
+
+// Resize a file to a given size
+static err_t resize_file(DirEntry *entry, u64 entry_offset, u32 new_size) {
+    err_t err;
+    u32 first_cluster = entry_get_first_cluster(entry);
+    u32 old_size = entry->file_size;
+    u32 new_cluster_count = (new_size + cluster_size - 1) & (cluster_size - 1);
+    entry->file_size = new_size;
+    // If resizing already empty file to zero, nothing needs to be done
+    if (new_size == 0 && first_cluster == 0)
+        goto end;
+    // If shrinking a nonempty file to zero, free all the clusters and set first cluster to 0
+    if (new_size == 0) {
+        err = free_clusters(first_cluster);
+        if (err)
+            return err;
+        entry_set_first_cluster(entry, 0);
+        goto end;
+    }
+    // If expanding empty file, create new chain and set first cluster to its start
+    if (first_cluster == 0) {
+        u32 new_first_cluster;
+        err = allocate_clusters(new_cluster_count, &new_first_cluster);
+        if (err)
+            return err;
+        entry_set_first_cluster(entry, new_first_cluster);
+        goto end;
+    }
+    u32 cluster = first_cluster;
+    for (u32 i = 0; ; i++) {
+        u32 next_cluster;
+        // Clear part of cluster after the old end of the file
+        if (i * cluster_size > old_size) {
+            drive_write(fat_cluster_offset(cluster), cluster_size, blank_cluster);
+        } else if ((i + 1) * cluster_size > old_size) {
+            u64 bytes_to_clear = (i + 1) * cluster_size - old_size;
+            drive_write(fat_cluster_offset(cluster) + (cluster_size - bytes_to_clear), bytes_to_clear, blank_cluster);
+        }
+        // Get next cluster
+        err = fat_read_entry_expect_allocated_or_eof(cluster, &next_cluster);
+        // If this is the final cluster, allocate the remaining clusters and attach at the end
+        if (err == ERR_EOF) {
+            if (i == new_cluster_count - 1)
+                goto end;
+            err = allocate_clusters(new_cluster_count - i - 1, &next_cluster);
+            if (err)
+                return err;
+            err = fat_write_entry(cluster, next_cluster);
+            if (err)
+                return err;
+            goto end;
+        } else if (err) {
+            return err;
+        }
+        // If there are more clusters than we need, mark new final cluster as end-of-file and free the remaining clusters
+        if (i == new_cluster_count - 1) {
+            err = fat_write_entry(cluster, FAT_EOF);
+            if (err)
+                return err;
+            err = free_clusters(next_cluster);
+            if (err)
+                return err;
+            goto end;
+        }
+        // Move to next cluster
+        cluster = next_cluster;
+    }
+end:
+    // Write back new directory entry
+    return drive_write(entry_offset, sizeof(DirEntry), entry);
+}
+
 // Table of characters allowed in short and long file names - bit is set if character allowed
 static u8 short_name_allowed_char_table[16] = {0x00, 0x00, 0x00, 0x00, 0xFB, 0x23, 0xFF, 0x03, 0xFF, 0xFF, 0xFF, 0xC7, 0x01, 0x00, 0x00, 0x68};
 static u8 long_name_allowed_char_table[16] = {0x00, 0x00, 0x00, 0x00, 0xFB, 0x7B, 0xFF, 0x0B, 0xFF, 0xFF, 0xFF, 0xEF, 0xFF, 0xFF, 0xFF, 0x6F};
@@ -316,7 +474,7 @@ typedef struct DirReadState {
 
 // Get the next entry in a directory
 // After a successful return, the `state` is updated so that it can be used to get the next entry.
-static err_t get_next_dir_entry(DirReadState *state, u8 *name_buf, u32 *name_buf_length_ptr, DirEntry *entry_ptr) {
+static err_t get_next_dir_entry(DirReadState *state, u8 *name_buf, u32 *name_buf_length_ptr, DirEntry *entry_ptr, u32 *entry_offset_ptr) {
     err_t err;
     bool reading_long_name = false;
     u8 next_long_name_ord;
@@ -415,6 +573,8 @@ static err_t get_next_dir_entry(DirReadState *state, u8 *name_buf, u32 *name_buf
             // Return the entry
             *name_buf_length_ptr = name_buf_length;
             *entry_ptr = *entry;
+            if (entry_offset_ptr != NULL)
+                *entry_offset_ptr = fat_cluster_offset(state->cluster) + state->entry_i * sizeof(DirEntry);
             state->entry_i++;
             return 0;
         }
@@ -426,7 +586,7 @@ skip_entry:
 static u8 name_buf[255];
 
 // Get a directory entry for a file, given the first cluster of its containing folder and its name
-static err_t find_entry_in_dir(u32 dir_first_cluster, const u8 *target_name, size_t target_name_length, DirEntry *entry_ptr) {
+static err_t find_entry_in_dir(u32 dir_first_cluster, const u8 *target_name, size_t target_name_length, DirEntry *entry_ptr, u32 *entry_offset_ptr) {
     err_t err = 0;
     // Initialize directory reader state
     DirEntry *cluster_entries = malloc(cluster_size);
@@ -435,14 +595,17 @@ static err_t find_entry_in_dir(u32 dir_first_cluster, const u8 *target_name, siz
     DirReadState state = {dir_first_cluster, 0, cluster_entries};
     while (1) {
         DirEntry entry;
+        u32 entry_offset;
         u32 name_buf_length;
         // Get the next directory entry
-        err = get_next_dir_entry(&state, name_buf, &name_buf_length, &entry);
+        err = get_next_dir_entry(&state, name_buf, &name_buf_length, &entry, &entry_offset);
         if (err)
             goto exit;
         // If the name is equal to the one requested, return the entry
         if (target_name_length == name_buf_length && memcmp(target_name, name_buf, target_name_length) == 0) {
             *entry_ptr = entry;
+            if (entry_offset_ptr != NULL)
+                *entry_offset_ptr = entry_offset;
             err = 0;
             goto exit;
         }
@@ -474,7 +637,7 @@ static err_t get_dir_list(u32 dir_first_cluster, u8 **list_ptr, size_t *len_ptr)
         DirEntry entry;
         u32 name_buf_length;
         // Get the next directory entry
-        err = get_next_dir_entry(&state, name_buf, &name_buf_length, &entry);
+        err = get_next_dir_entry(&state, name_buf, &name_buf_length, &entry, NULL);
         if (err) {
             if (err == ERR_DOES_NOT_EXIST) {
                 *list_ptr = list;
@@ -507,15 +670,19 @@ exit:
 }
 
 // Get a directory entry for a file given its path
-static err_t entry_from_path(const u8 *path, size_t path_length, DirEntry *entry_ptr) {
+// If the requested folder is the root directory, a dummy entry with an offset of UINT32_MAX will be returned.
+static err_t entry_from_path(const u8 *path, size_t path_length, DirEntry *entry_ptr, u32 *entry_offset_ptr) {
     // Return root directory if string is empty
     if (path_length == 0) {
         *entry_ptr = root_dir_entry;
+        if (entry_offset_ptr != NULL)
+            *entry_offset_ptr = UINT32_MAX;
         return 0;
     }
     err_t err;
     // Start at root directory
     DirEntry entry = root_dir_entry;
+    u32 entry_offset;
     size_t name_start = 0;
     while (1) {
         // Verify current entry is a folder
@@ -525,7 +692,7 @@ static err_t entry_from_path(const u8 *path, size_t path_length, DirEntry *entry
         void *next_separator = memchr(path + name_start, '/', path_length - name_start);
         size_t name_end = next_separator ? (const u8 *)next_separator - path : path_length;
         // Get entry for the name
-        err = find_entry_in_dir(entry_first_cluster(&entry), path + name_start, name_end - name_start, &entry);
+        err = find_entry_in_dir(entry_get_first_cluster(&entry), path + name_start, name_end - name_start, &entry, &entry_offset);
         if (err)
             return err;
         // Exit if we're at the end of the path, otherwise start the next component after the separator
@@ -534,6 +701,8 @@ static err_t entry_from_path(const u8 *path, size_t path_length, DirEntry *entry
         name_start = name_end + 1;
     };
     *entry_ptr = entry;
+    if (entry_offset_ptr != NULL)
+        *entry_offset_ptr = entry_offset;
     return 0;
 }
 
@@ -570,9 +739,10 @@ typedef enum RequestTag {
     TAG_OPEN,
     TAG_READ,
     TAG_WRITE,
+    TAG_RESIZE,
 } RequestTag;
 
-static err_t entry_from_path_msg(handle_t msg, DirEntry *entry) {
+static err_t entry_from_path_msg(handle_t msg, DirEntry *entry, u32 *entry_offset) {
     err_t err;
     MessageLength msg_length;
     message_get_length(msg, &msg_length);
@@ -584,14 +754,14 @@ static err_t entry_from_path_msg(handle_t msg, DirEntry *entry) {
         free(path);
         return err;
     }
-    err = entry_from_path(path, msg_length.data, entry);
+    err = entry_from_path(path, msg_length.data, entry, entry_offset);
     free(path);
     return err;
 }
 
 typedef struct OpenFile {
-    u32 first_cluster;
-    u32 file_size;
+    DirEntry entry;
+    u32 entry_offset;
 } OpenFile;
 
 void main(void) {
@@ -636,7 +806,7 @@ void main(void) {
         switch (tag.data[0]) {
         case TAG_STAT: {
             DirEntry entry;
-            err = entry_from_path_msg(msg, &entry);
+            err = entry_from_path_msg(msg, &entry, NULL);
             if (err)
                 goto loop_fail;
             FileMetadata stat;
@@ -646,7 +816,7 @@ void main(void) {
         }
         case TAG_LIST: {
             DirEntry entry;
-            err = entry_from_path_msg(msg, &entry);
+            err = entry_from_path_msg(msg, &entry, NULL);
             if (err)
                 goto loop_fail;
             size_t file_list_length;
@@ -655,7 +825,7 @@ void main(void) {
                 err = ERR_NOT_DIR;
                 goto loop_fail;
             }
-            err = get_dir_list(entry_first_cluster(&entry), &file_list, &file_list_length);
+            err = get_dir_list(entry_get_first_cluster(&entry), &file_list, &file_list_length);
             if (err)
                 goto loop_fail;
             message_reply(msg, &(SendMessage){1, &(SendMessageData){file_list_length, file_list}, 0, NULL}, FLAG_FREE_MESSAGE);
@@ -664,7 +834,8 @@ void main(void) {
         }
         case TAG_OPEN: {
             DirEntry entry;
-            err = entry_from_path_msg(msg, &entry);
+            u32 entry_offset;
+            err = entry_from_path_msg(msg, &entry, &entry_offset);
             if (err)
                 goto loop_fail;
             OpenFile *open_file = malloc(sizeof(OpenFile));
@@ -674,24 +845,32 @@ void main(void) {
             }
             handle_t file_read_in, file_read_out;
             err = channel_create(&file_read_in, &file_read_out);
-            if (err) {
-                free(open_file);
-                goto loop_fail;
-            }
+            if (err)
+                goto file_read_alloc_fail;
             handle_t file_write_in, file_write_out;
             err = channel_create(&file_write_in, &file_write_out);
-            if (err) {
-                handle_free(file_read_in);
-                handle_free(file_read_out);
-                free(open_file);
-                goto loop_fail;
-            }
-            open_file->first_cluster = entry_first_cluster(&entry);
-            open_file->file_size = entry.file_size;
+            if (err)
+                goto file_write_alloc_fail;
+            handle_t file_resize_in, file_resize_out;
+            err = channel_create(&file_resize_in, &file_resize_out);
+            if (err)
+                goto file_resize_alloc_fail;
+            open_file->entry = entry;
+            open_file->entry_offset = entry_offset;
             mqueue_add_channel(mqueue, file_read_out, (MessageTag){TAG_READ, (uintptr_t)open_file});
             mqueue_add_channel(mqueue, file_write_out, (MessageTag){TAG_WRITE, (uintptr_t)open_file});
-            message_reply(msg, &(SendMessage){0, NULL, 1, &(SendMessageHandles){2, (SendAttachedHandle[]){{0, file_read_in}, {0, file_write_in}}}}, FLAG_FREE_MESSAGE);
+            mqueue_add_channel(mqueue, file_resize_out, (MessageTag){TAG_RESIZE, (uintptr_t)open_file});
+            message_reply(msg, &(SendMessage){0, NULL, 1, &(SendMessageHandles){3, (SendAttachedHandle[]){{0, file_read_in}, {0, file_write_in}, {0, file_resize_in}}}}, FLAG_FREE_MESSAGE);
             break;
+file_resize_alloc_fail:
+            handle_free(file_write_in);
+            handle_free(file_write_out);
+file_write_alloc_fail:
+            handle_free(file_read_in);
+            handle_free(file_read_out);
+file_read_alloc_fail:
+            free(open_file);
+            goto loop_fail;
         }
         case TAG_READ: {
             OpenFile *open_file = (OpenFile *)tag.data[1];
@@ -700,7 +879,7 @@ void main(void) {
             if (err)
                 goto loop_fail;
             // Verify range falls within file size
-            if (range.offset + range.length < range.offset || range.offset + range.length > open_file->file_size) {
+            if (range.offset + range.length < range.offset || range.offset + range.length > open_file->entry.file_size) {
                 err = ERR_EOF;
                 goto loop_fail;
             }
@@ -716,7 +895,7 @@ void main(void) {
                 err = ERR_NO_MEMORY;
                 goto loop_fail;
             }
-            err = read_file(open_file->first_cluster, range.offset, range.length, data_buf);
+            err = read_file(entry_get_first_cluster(&open_file->entry), range.offset, range.length, data_buf);
             if (err)
                 goto loop_fail;
             err = message_reply(msg, &(SendMessage){1, &(SendMessageData){range.length, data_buf}, 0, NULL}, FLAG_FREE_MESSAGE);
@@ -734,7 +913,7 @@ void main(void) {
             message_get_length(msg, &msg_length);
             u64 length = msg_length.data - sizeof(u64);
             // Verify range falls within file size
-            if (offset + length < offset || offset + length > open_file->file_size) {
+            if (offset + length < offset || offset + length > open_file->entry.file_size) {
                 err = ERR_EOF;
                 goto loop_fail;
             }
@@ -751,13 +930,30 @@ void main(void) {
                 goto loop_fail;
             }
             message_read(msg, &(ReceiveMessage){length, data_buf, 0, NULL}, &(MessageLength){sizeof(u64), 0}, NULL, 0, 0);
-            err = write_file(open_file->first_cluster, offset, length, data_buf);
+            err = write_file(entry_get_first_cluster(&open_file->entry), offset, length, data_buf);
             if (err)
                 goto loop_fail;
             err = message_reply(msg, NULL, FLAG_FREE_MESSAGE);
             if (err)
                 goto loop_fail;
             break;
+        }
+        case TAG_RESIZE: {
+            OpenFile *open_file = (OpenFile *)tag.data[1];
+            u64 new_size;
+            err = message_read(msg, &(ReceiveMessage){sizeof(u64), &new_size, 0, NULL}, NULL, NULL, 0, 0);
+            if (err)
+                goto loop_fail;
+            if (new_size > UINT32_MAX) {
+                err = ERR_NO_SPACE;
+                goto loop_fail;
+            }
+            err = resize_file(&open_file->entry, open_file->entry_offset, new_size);
+            if (err)
+                goto loop_fail;
+            err = message_reply(msg, NULL, FLAG_FREE_MESSAGE);
+            if (err)
+                goto loop_fail;
         }
         }
         continue;
