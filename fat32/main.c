@@ -304,6 +304,11 @@ static err_t free_clusters(u32 first_cluster) {
     }
 }
 
+#define FAT_BUFFER_LENGTH 1024
+
+// Buffer used to load parts of the FAT when searching for free clusters
+static u32 fat_buffer[FAT_BUFFER_LENGTH];
+
 // Allocate a chain containing the given number of clusters and return the address of the first one
 // The clusters' contents will be zeroed out.
 static err_t allocate_clusters(u32 target_count, u32 *first_cluster_ptr) {
@@ -311,12 +316,19 @@ static err_t allocate_clusters(u32 target_count, u32 *first_cluster_ptr) {
     u32 current_count = 0;
     u32 first_cluster;
     u32 last_cluster;
+    // Load FAT buffer with first block of FAT entries
+    err = drive_read(fat_offset, sizeof(fat_buffer), fat_buffer);
+    if (err)
+        return err;
     // Go through clusters on drive in order
     for (u32 cluster = 2; cluster < fat_length; cluster++) {
-        u32 entry;
-        err = fat_read_entry(cluster, &entry);
-        if (err)
-            return err;
+        // Refresh FAT buffer if we've reached its end
+        if (cluster % FAT_BUFFER_LENGTH == 0) {
+            err = drive_read(fat_offset + sizeof(u32) * cluster, sizeof(fat_buffer), fat_buffer);
+            if (err)
+                return err;
+        }
+        u32 entry = fat_buffer[cluster % FAT_BUFFER_LENGTH] & FAT_ENTRY_MASK;
         // If cluster is free, attach it to the chain
         if (entry == FAT_FREE) {
             if (current_count == 0) {
