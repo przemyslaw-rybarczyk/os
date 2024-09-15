@@ -310,8 +310,8 @@ static err_t free_clusters(u32 first_cluster) {
 static u32 fat_buffer[FAT_BUFFER_LENGTH];
 
 // Allocate a chain containing the given number of clusters and return the address of the first one
-// The clusters' contents will be zeroed out.
-static err_t allocate_clusters(u32 target_count, u32 *first_cluster_ptr) {
+// If `clear` is set, the clusters' contents will be zeroed out.
+static err_t allocate_clusters(u32 target_count, u32 *first_cluster_ptr, bool clear) {
     err_t err;
     u32 current_count = 0;
     u32 first_cluster;
@@ -341,9 +341,11 @@ static err_t allocate_clusters(u32 target_count, u32 *first_cluster_ptr) {
                 last_cluster = cluster;
             }
             // Zero out cluster
-            err = drive_write(fat_cluster_offset(cluster), cluster_size, blank_cluster);
-            if (err)
-                return err;
+            if (clear) {
+                err = drive_write(fat_cluster_offset(cluster), cluster_size, blank_cluster);
+                if (err)
+                    return err;
+            }
             // If we have reached the target number of clusters, return
             current_count++;
             if (current_count >= target_count) {
@@ -366,7 +368,8 @@ static err_t allocate_clusters(u32 target_count, u32 *first_cluster_ptr) {
 }
 
 // Resize a file to a given size
-static err_t resize_file(DirEntry *entry, u64 entry_offset, u32 new_size) {
+// If `clear` is set, the data added at the end will be zeroed out.
+static err_t resize_file(DirEntry *entry, u64 entry_offset, u32 new_size, bool clear) {
     err_t err;
     u32 first_cluster = entry_get_first_cluster(entry);
     u32 old_size = entry->file_size;
@@ -386,7 +389,7 @@ static err_t resize_file(DirEntry *entry, u64 entry_offset, u32 new_size) {
     // If expanding empty file, create new chain and set first cluster to its start
     if (first_cluster == 0) {
         u32 new_first_cluster;
-        err = allocate_clusters(new_cluster_count, &new_first_cluster);
+        err = allocate_clusters(new_cluster_count, &new_first_cluster, clear);
         if (err)
             return err;
         entry_set_first_cluster(entry, new_first_cluster);
@@ -396,11 +399,13 @@ static err_t resize_file(DirEntry *entry, u64 entry_offset, u32 new_size) {
     for (u32 i = 0; ; i++) {
         u32 next_cluster;
         // Clear part of cluster after the old end of the file
-        if (i * cluster_size > old_size) {
-            drive_write(fat_cluster_offset(cluster), cluster_size, blank_cluster);
-        } else if ((i + 1) * cluster_size > old_size) {
-            u64 bytes_to_clear = (i + 1) * cluster_size - old_size;
-            drive_write(fat_cluster_offset(cluster) + (cluster_size - bytes_to_clear), bytes_to_clear, blank_cluster);
+        if (clear) {
+            if (i * cluster_size > old_size) {
+                drive_write(fat_cluster_offset(cluster), cluster_size, blank_cluster);
+            } else if ((i + 1) * cluster_size > old_size) {
+                u64 bytes_to_clear = (i + 1) * cluster_size - old_size;
+                drive_write(fat_cluster_offset(cluster) + (cluster_size - bytes_to_clear), bytes_to_clear, blank_cluster);
+            }
         }
         // Get next cluster
         err = fat_read_entry_expect_allocated_or_eof(cluster, &next_cluster);
@@ -408,7 +413,7 @@ static err_t resize_file(DirEntry *entry, u64 entry_offset, u32 new_size) {
         if (err == ERR_EOF) {
             if (i == new_cluster_count - 1)
                 goto end;
-            err = allocate_clusters(new_cluster_count - i - 1, &next_cluster);
+            err = allocate_clusters(new_cluster_count - i - 1, &next_cluster, clear);
             if (err)
                 return err;
             err = fat_write_entry(cluster, next_cluster);
@@ -924,8 +929,8 @@ file_read_alloc_fail:
             MessageLength msg_length;
             message_get_length(msg, &msg_length);
             u64 length = msg_length.data - sizeof(u64);
-            // Verify range falls within file size
-            if (offset + length < offset || offset + length > open_file->entry.file_size) {
+            // Verify range falls within u32 range and offset falls within file size
+            if (offset + length < offset || offset + length > UINT32_MAX || offset > open_file->entry.file_size) {
                 err = ERR_EOF;
                 goto loop_fail;
             }
@@ -940,6 +945,12 @@ file_read_alloc_fail:
             if (data_buf == NULL) {
                 err = ERR_NO_MEMORY;
                 goto loop_fail;
+            }
+            // Resize if writing past end
+            if (offset + length > open_file->entry.file_size) {
+                err = resize_file(&open_file->entry, open_file->entry_offset, offset + length, false);
+                if (err)
+                    goto loop_fail;
             }
             message_read(msg, &(ReceiveMessage){length, data_buf, 0, NULL}, &(MessageLength){sizeof(u64), 0}, NULL, 0, 0);
             err = write_file(entry_get_first_cluster(&open_file->entry), offset, length, data_buf);
@@ -960,7 +971,7 @@ file_read_alloc_fail:
                 err = ERR_NO_SPACE;
                 goto loop_fail;
             }
-            err = resize_file(&open_file->entry, open_file->entry_offset, new_size);
+            err = resize_file(&open_file->entry, open_file->entry_offset, new_size, true);
             if (err)
                 goto loop_fail;
             err = message_reply(msg, NULL, FLAG_FREE_MESSAGE);
