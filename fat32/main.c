@@ -129,6 +129,14 @@ static u32 cluster_size;
 // Blank cluster to be used for write messages to clear regions of memory
 static u8* blank_cluster;
 
+// The maximum number of directory entries a file can occupy
+// Since the maximum long name length is 255 and each long name entry holds 13 characters,
+// at most 20 long name entries can be needed, plus one short name entry.
+#define MAX_FILE_DIR_ENTRY_COUNT 21
+
+// Array of empty directory entries used for deleting files
+static DirEntry empty_dir_entries[MAX_FILE_DIR_ENTRY_COUNT];
+
 // Parse and verify the BPB
 static err_t parse_bpb(BPB *bpb, u64 drive_size) {
     if (!((bpb->jump[0] == 0xEB && bpb->jump[2] == 0x90) || bpb->jump[0] == 0xE9))
@@ -174,6 +182,8 @@ static err_t parse_bpb(BPB *bpb, u64 drive_size) {
     if (blank_cluster == NULL)
         return ERR_NO_MEMORY;
     memset(blank_cluster, 0, cluster_size);
+    for (int i = 0; i < MAX_FILE_DIR_ENTRY_COUNT; i++)
+        empty_dir_entries[i].name[0] = 0xE5;
     return 0;
 }
 
@@ -489,16 +499,24 @@ typedef struct DirReadState {
     DirEntry *cluster_entries;
 } DirReadState;
 
+typedef struct DirEntryLocation {
+    u32 main_entry_offset;
+    u32 first_entry_cluster;
+    u32 first_entry_index;
+    u32 entry_count;
+} DirEntryLocation;
+
 // Get the next entry in a directory
 // After a successful return, the `state` is updated so that it can be used to get the next entry.
-static err_t get_next_dir_entry(DirReadState *state, u8 *name_buf, u32 *name_buf_length_ptr, DirEntry *entry_ptr, u32 *entry_offset_ptr) {
+static err_t get_next_dir_entry(DirReadState *state, u8 *name_buf, u32 *name_buf_length_ptr, DirEntry *entry_ptr, DirEntryLocation *location_ptr) {
     err_t err;
     bool reading_long_name = false;
     u8 next_long_name_ord;
     u8 long_name_checksum;
     u32 name_buf_length;
+    DirEntryLocation location;
     // Return early if there are no clusters
-    if (state->cluster >= FAT_EOF_MIN)
+    if (state->cluster == 0)
         return ERR_DOES_NOT_EXIST;
     // Go through each entry in the directory starting from the current one
     while (1) {
@@ -518,6 +536,11 @@ static err_t get_next_dir_entry(DirReadState *state, u8 *name_buf, u32 *name_buf
                 return err;
         }
         DirEntry *entry = &state->cluster_entries[state->entry_i];
+        // Check first character of short name for byte marking a free entry or end of directory
+        if (entry->name[0] == 0xE5)
+            goto skip_entry;
+        if (entry->name[0] == 0x00)
+            return ERR_DOES_NOT_EXIST;
         // Check if the entry is a long name entry
         if ((entry->attr & LONG_NAME_ATTR_MASK) == LONG_NAME_ATTR) {
             LongNameDirEntry *lne = (LongNameDirEntry *)entry;
@@ -534,8 +557,11 @@ static err_t get_next_dir_entry(DirReadState *state, u8 *name_buf, u32 *name_buf
                     reading_long_name = true;
                     next_long_name_ord = (lne->ord & LONG_NAME_ORD_MASK) - 1;
                     long_name_checksum = lne->checksum;
+                    location.first_entry_cluster = state->cluster;
+                    location.first_entry_index = state->entry_i;
+                    location.entry_count = (lne->ord & LONG_NAME_ORD_MASK) + 1;
                 }
-            } else if (!(lne->ord & LONG_NAME_ORD_LAST) && reading_long_name && (lne->ord & LONG_NAME_ORD_MASK) == next_long_name_ord && lne->checksum == long_name_checksum) {
+            } else if (!(lne->ord & LONG_NAME_ORD_LAST) && reading_long_name && (lne->ord & LONG_NAME_ORD_MASK) == next_long_name_ord && next_long_name_ord != 0 && lne->checksum == long_name_checksum) {
                 // If we're already reading a long name and the next one continues the sequence,
                 // copy its contents into the buffer
                 err = copy_name_from_long_name_entry(lne, name_buf, NULL);
@@ -551,10 +577,9 @@ static err_t get_next_dir_entry(DirReadState *state, u8 *name_buf, u32 *name_buf
             // If the entry was preceded by a valid sequence of long name entries then it has a long name
             bool has_long_name = reading_long_name && next_long_name_ord == 0;
             reading_long_name = false;
-            if (entry->name[0] == 0xE5 || entry->name[0] == ' ')
+            // If the short name starts with a space then it's invalid
+            if (entry->name[0] == ' ')
                 goto skip_entry;
-            if (entry->name[0] == 0x00)
-                return ERR_DOES_NOT_EXIST;
             // Verify checksum and ignore long name entry if it's not correct
             if (has_long_name) {
                 u8 checksum = 0;
@@ -586,12 +611,18 @@ static err_t get_next_dir_entry(DirReadState *state, u8 *name_buf, u32 *name_buf
                     name_buf[main_name_chars + 1 + i] = entry->name[8 + i];
                 }
                 name_buf_length = main_name_chars + extension_chars + (extension_chars > 0);
+                // Set entry location
+                location.first_entry_cluster = state->cluster;
+                location.first_entry_index = state->entry_i;
+                location.entry_count = 1;
             }
+            location.main_entry_offset = fat_cluster_offset(state->cluster) + state->entry_i * sizeof(DirEntry);
             // Return the entry
             *name_buf_length_ptr = name_buf_length;
-            *entry_ptr = *entry;
-            if (entry_offset_ptr != NULL)
-                *entry_offset_ptr = fat_cluster_offset(state->cluster) + state->entry_i * sizeof(DirEntry);
+            if (entry_ptr != NULL)
+                *entry_ptr = *entry;
+            if (location_ptr != NULL)
+                *location_ptr = location;
             state->entry_i++;
             return 0;
         }
@@ -603,7 +634,7 @@ skip_entry:
 static u8 name_buf[255];
 
 // Get a directory entry for a file, given the first cluster of its containing folder and its name
-static err_t find_entry_in_dir(u32 dir_first_cluster, const u8 *target_name, size_t target_name_length, DirEntry *entry_ptr, u32 *entry_offset_ptr) {
+static err_t find_entry_in_dir(u32 dir_first_cluster, const u8 *target_name, size_t target_name_length, DirEntry *entry_ptr, DirEntryLocation *location_ptr) {
     err_t err = 0;
     // Initialize directory reader state
     DirEntry *cluster_entries = malloc(cluster_size);
@@ -612,17 +643,16 @@ static err_t find_entry_in_dir(u32 dir_first_cluster, const u8 *target_name, siz
     DirReadState state = {dir_first_cluster, 0, cluster_entries};
     while (1) {
         DirEntry entry;
-        u32 entry_offset;
+        DirEntryLocation location;
         u32 name_buf_length;
         // Get the next directory entry
-        err = get_next_dir_entry(&state, name_buf, &name_buf_length, &entry, &entry_offset);
+        err = get_next_dir_entry(&state, name_buf, &name_buf_length, &entry, &location);
         if (err)
             goto exit;
         // If the name is equal to the one requested, return the entry
         if (target_name_length == name_buf_length && memcmp(target_name, name_buf, target_name_length) == 0) {
             *entry_ptr = entry;
-            if (entry_offset_ptr != NULL)
-                *entry_offset_ptr = entry_offset;
+            *location_ptr = location;
             err = 0;
             goto exit;
         }
@@ -686,20 +716,53 @@ exit:
     return err;
 }
 
+// Delete a file entry at a given location, replacing its entries with unallocated ones
+static err_t delete_file_entry(DirEntryLocation location) {
+    err_t err;
+    u32 cluster = location.first_entry_cluster;
+    // If all entries fit in one cluster clear them with one call
+    if (location.first_entry_index + location.entry_count <= cluster_size / sizeof(DirEntry))
+        return drive_write(fat_cluster_offset(cluster) + location.first_entry_index * sizeof(DirEntry), location.entry_count * sizeof(DirEntry), empty_dir_entries);
+    // Clear entries from first cluster
+    err = drive_write(fat_cluster_offset(cluster) + location.first_entry_index * sizeof(DirEntry), cluster_size - location.first_entry_index * sizeof(DirEntry), empty_dir_entries);
+    if (err)
+        return err;
+    // Clear remaining clusters
+    u32 entries_cleared = cluster_size / sizeof(DirEntry) - location.first_entry_index;
+    while (1) {
+        err = fat_read_entry_expect_allocated(cluster, &cluster);
+        if (err)
+            return err;
+        // If this is the final cluster, clear its beginning and return
+        if (entries_cleared + cluster_size / sizeof(DirEntry) >= location.entry_count)
+            return drive_write(fat_cluster_offset(cluster), (location.entry_count - entries_cleared) * sizeof(DirEntry), empty_dir_entries);
+        // Otherwise, clear entire cluster
+        err = drive_write(fat_cluster_offset(cluster), cluster_size, empty_dir_entries);
+        if (err)
+            return err;
+        entries_cleared += cluster_size / sizeof(DirEntry);
+    }
+}
+
 // Get a directory entry for a file given its path
 // If the requested folder is the root directory, a dummy entry with an offset of UINT32_MAX will be returned.
-static err_t entry_from_path(const u8 *path, size_t path_length, DirEntry *entry_ptr, u32 *entry_offset_ptr) {
+static err_t entry_from_path(const u8 *path, size_t path_length, DirEntry *entry_ptr, DirEntryLocation *location_ptr) {
     // Return root directory if string is empty
     if (path_length == 0) {
         *entry_ptr = root_dir_entry;
-        if (entry_offset_ptr != NULL)
-            *entry_offset_ptr = UINT32_MAX;
+        if (location_ptr != NULL)
+            *location_ptr = (DirEntryLocation){
+                .main_entry_offset = UINT32_MAX,
+                .first_entry_cluster = UINT32_MAX,
+                .first_entry_index = 0,
+                .entry_count = 0,
+            };
         return 0;
     }
     err_t err;
     // Start at root directory
     DirEntry entry = root_dir_entry;
-    u32 entry_offset;
+    DirEntryLocation location;
     size_t name_start = 0;
     while (1) {
         // Verify current entry is a folder
@@ -709,7 +772,7 @@ static err_t entry_from_path(const u8 *path, size_t path_length, DirEntry *entry
         void *next_separator = memchr(path + name_start, '/', path_length - name_start);
         size_t name_end = next_separator ? (const u8 *)next_separator - path : path_length;
         // Get entry for the name
-        err = find_entry_in_dir(entry_get_first_cluster(&entry), path + name_start, name_end - name_start, &entry, &entry_offset);
+        err = find_entry_in_dir(entry_get_first_cluster(&entry), path + name_start, name_end - name_start, &entry, &location);
         if (err)
             return err;
         // Exit if we're at the end of the path, otherwise start the next component after the separator
@@ -717,9 +780,10 @@ static err_t entry_from_path(const u8 *path, size_t path_length, DirEntry *entry
             break;
         name_start = name_end + 1;
     };
-    *entry_ptr = entry;
-    if (entry_offset_ptr != NULL)
-        *entry_offset_ptr = entry_offset;
+    if (entry_ptr != NULL)
+        *entry_ptr = entry;
+    if (location_ptr != NULL)
+        *location_ptr = location;
     return 0;
 }
 
@@ -753,13 +817,14 @@ static BPB bpb_buf;
 typedef enum RequestTag {
     TAG_STAT,
     TAG_LIST,
+    TAG_DELETE,
     TAG_OPEN,
     TAG_READ,
     TAG_WRITE,
     TAG_RESIZE,
 } RequestTag;
 
-static err_t entry_from_path_msg(handle_t msg, DirEntry *entry, u32 *entry_offset) {
+static err_t entry_from_path_msg(handle_t msg, DirEntry *entry, DirEntryLocation *location) {
     err_t err;
     MessageLength msg_length;
     message_get_length(msg, &msg_length);
@@ -771,7 +836,7 @@ static err_t entry_from_path_msg(handle_t msg, DirEntry *entry, u32 *entry_offse
         free(path);
         return err;
     }
-    err = entry_from_path(path, msg_length.data, entry, entry_offset);
+    err = entry_from_path(path, msg_length.data, entry, location);
     free(path);
     return err;
 }
@@ -816,6 +881,9 @@ void main(void) {
     err = mqueue_add_channel_resource(mqueue, &resource_name("file/open_r"), (MessageTag){TAG_OPEN, 0});
     if (err)
         return;
+    err = mqueue_add_channel_resource(mqueue, &resource_name("file/delete_r"), (MessageTag){TAG_DELETE, 0});
+    if (err)
+        return;
     while (1) {
         handle_t msg;
         MessageTag tag;
@@ -849,10 +917,25 @@ void main(void) {
             free(file_list);
             break;
         }
+        case TAG_DELETE: {
+            DirEntry entry;
+            DirEntryLocation location;
+            err = entry_from_path_msg(msg, &entry, &location);
+            if (err)
+                goto loop_fail;
+            err = delete_file_entry(location);
+            if (err)
+                goto loop_fail;
+            err = free_clusters(entry_get_first_cluster(&entry));
+            if (err)
+                goto loop_fail;
+            message_reply(msg, NULL, FLAG_FREE_MESSAGE);
+            break;
+        }
         case TAG_OPEN: {
             DirEntry entry;
-            u32 entry_offset;
-            err = entry_from_path_msg(msg, &entry, &entry_offset);
+            DirEntryLocation location;
+            err = entry_from_path_msg(msg, &entry, &location);
             if (err)
                 goto loop_fail;
             OpenFile *open_file = malloc(sizeof(OpenFile));
@@ -873,7 +956,7 @@ void main(void) {
             if (err)
                 goto file_resize_alloc_fail;
             open_file->entry = entry;
-            open_file->entry_offset = entry_offset;
+            open_file->entry_offset = location.main_entry_offset;
             mqueue_add_channel(mqueue, file_read_out, (MessageTag){TAG_READ, (uintptr_t)open_file});
             mqueue_add_channel(mqueue, file_write_out, (MessageTag){TAG_WRITE, (uintptr_t)open_file});
             mqueue_add_channel(mqueue, file_resize_out, (MessageTag){TAG_RESIZE, (uintptr_t)open_file});

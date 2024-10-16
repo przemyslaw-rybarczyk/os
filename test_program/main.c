@@ -63,6 +63,10 @@ void main(void) {
     err = channel_create(&file_open_in, &file_open_out);
     if (err)
         return;
+    handle_t file_delete_in, file_delete_out;
+    err = channel_create(&file_delete_in, &file_delete_out);
+    if (err)
+        return;
     ResourceName fs_resource_names[] = {
         resource_name("virt_drive/info"),
         resource_name("virt_drive/read"),
@@ -70,6 +74,7 @@ void main(void) {
         resource_name("file/stat_r"),
         resource_name("file/list_r"),
         resource_name("file/open_r"),
+        resource_name("file/delete_r"),
     };
     SendAttachedHandle fs_resource_handles[] = {
         {ATTACHED_HANDLE_FLAG_MOVE, drive_attached_handles[0].handle_i},
@@ -77,6 +82,7 @@ void main(void) {
         {ATTACHED_HANDLE_FLAG_MOVE, file_stat_out},
         {ATTACHED_HANDLE_FLAG_MOVE, file_list_out},
         {ATTACHED_HANDLE_FLAG_MOVE, file_open_out},
+        {ATTACHED_HANDLE_FLAG_MOVE, file_delete_out},
     };
     err = channel_call(process_spawn_channel, &(SendMessage){
         5, (SendMessageData[]){
@@ -94,38 +100,14 @@ void main(void) {
         if (scanf("%255[^\n]", path_buf) != 1)
             return;
         handle_t reply;
-        err = channel_call(file_open_in, &(SendMessage){1, &(SendMessageData){strlen(path_buf), path_buf}, 0, NULL}, &reply);
+        err = channel_call(file_delete_in, &(SendMessage){1, &(SendMessageData){strlen(path_buf), path_buf}, 0, NULL}, &reply);
         if (err == ERR_DOES_NOT_EXIST) {
-            printf("Error when opening: file does not exist\n");
+            printf("Error when deleting: file does not exist\n");
             continue;
         } else if (err) {
-            printf("Error when opening: %zX\n", err);
+            printf("Error when deleting: %zX\n", err);
             continue;
         }
-        ReceiveAttachedHandle file_attached_handles[] = {{ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}, {ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}, {ATTACHED_HANDLE_TYPE_CHANNEL_SEND, 0}};
-        err = message_read(reply, &(ReceiveMessage){0, NULL, 3, file_attached_handles}, NULL, NULL, 0, 0);
-        if (err)
-            return;
-        handle_t read_channel = file_attached_handles[0].handle_i;
-        handle_t write_channel = file_attached_handles[1].handle_i;
-        FileMetadata stat;
-        err = channel_call_read(file_stat_in, &(SendMessage){1, &(SendMessageData){strlen(path_buf), path_buf}, 0, NULL}, &(ReceiveMessage){sizeof(FileMetadata), &stat, 0, NULL}, NULL);
-        if (err) {
-            printf("Error when getting metadata: %zX\n", err);
-            continue;
-        }
-        u64 old_size = stat.size;
-        printf("Old size: %zu\n", old_size);
-        err = channel_call(write_channel, &(SendMessage){2, (SendMessageData[]){{sizeof(u64), &old_size}, {8, "abcdTEST"}}, 0, NULL}, NULL);
-        if (err) {
-            printf("Error when writing: %zX\n", err);
-            continue;
-        }
-        err = channel_call_read(file_stat_in, &(SendMessage){1, &(SendMessageData){strlen(path_buf), path_buf}, 0, NULL}, &(ReceiveMessage){sizeof(FileMetadata), &stat, 0, NULL}, NULL);
-        if (err) {
-            printf("Error when getting metadata: %zX\n", err);
-            continue;
-        }
-        printf("New size: %zu\n", stat.size);
+        printf("File deleted successfully\n");
     }
 }
