@@ -506,14 +506,15 @@ typedef struct DirEntryLocation {
     u32 entry_count;
 } DirEntryLocation;
 
-// Get the next entry in a directory
+// Get the next entry in a directory along with its long and short names and location
+// If no long name is found, *long_name_length_ptr is set to 0.
 // After a successful return, the `state` is updated so that it can be used to get the next entry.
-static err_t get_next_dir_entry(DirReadState *state, u8 *name_buf, u32 *name_buf_length_ptr, DirEntry *entry_ptr, DirEntryLocation *location_ptr) {
+static err_t get_next_dir_entry(DirReadState *state, u8 *long_name_buf, u32 *long_name_length_ptr, u8 *short_name_buf, u32 *short_name_length_ptr, DirEntry *entry_ptr, DirEntryLocation *location_ptr) {
     err_t err;
     bool reading_long_name = false;
     u8 next_long_name_ord;
     u8 long_name_checksum;
-    u32 name_buf_length;
+    u32 long_name_length;
     DirEntryLocation location;
     // Return early if there are no clusters
     if (state->cluster == 0)
@@ -552,7 +553,7 @@ static err_t get_next_dir_entry(DirReadState *state, u8 *name_buf, u32 *name_buf
             if ((lne->ord & LONG_NAME_ORD_LAST) && (lne->ord & LONG_NAME_ORD_MASK) != 0) {
                 // If the long name entry is marked as the last one, copy its contents into the name buffer
                 // and expect next entry to continue it
-                err = copy_name_from_long_name_entry(lne, name_buf, &name_buf_length);
+                err = copy_name_from_long_name_entry(lne, long_name_buf, &long_name_length);
                 if (!err) {
                     reading_long_name = true;
                     next_long_name_ord = (lne->ord & LONG_NAME_ORD_MASK) - 1;
@@ -564,7 +565,7 @@ static err_t get_next_dir_entry(DirReadState *state, u8 *name_buf, u32 *name_buf
             } else if (!(lne->ord & LONG_NAME_ORD_LAST) && reading_long_name && (lne->ord & LONG_NAME_ORD_MASK) == next_long_name_ord && next_long_name_ord != 0 && lne->checksum == long_name_checksum) {
                 // If we're already reading a long name and the next one continues the sequence,
                 // copy its contents into the buffer
-                err = copy_name_from_long_name_entry(lne, name_buf, NULL);
+                err = copy_name_from_long_name_entry(lne, long_name_buf, NULL);
                 if (err)
                     reading_long_name = false;
                 else
@@ -580,45 +581,48 @@ static err_t get_next_dir_entry(DirReadState *state, u8 *name_buf, u32 *name_buf
             // If the short name starts with a space then it's invalid
             if (entry->name[0] == ' ')
                 goto skip_entry;
-            // Verify checksum and ignore long name entry if it's not correct
             if (has_long_name) {
+                // Verify checksum and ignore long name entry if it's not correct
                 u8 checksum = 0;
                 for (int i = 0; i < 11; i++)
                     checksum = ((checksum << 7) | (checksum >> 1)) + entry->name[i];
                 if (long_name_checksum != checksum)
                     has_long_name = false;
+                // Ignore long name entry if it has zero length or has leading or trailing spaces or trailing periods
+                if (long_name_length == 0 || long_name_buf[0] == ' ' || long_name_buf[long_name_length - 1] == ' ' || long_name_buf[long_name_length - 1] == '.')
+                    has_long_name = false;
             }
-            // If there is no long name, get the short name from the entry
+            // Read the main part of the short name
+            int main_name_chars = 8;
+            while (main_name_chars > 0 && entry->name[main_name_chars - 1] == ' ')
+                main_name_chars--;
+            for (int i = 0; i < main_name_chars; i++) {
+                if (!char_allowed_in_short_name(entry->name[i]))
+                    goto skip_entry;
+                short_name_buf[i] = entry->name[i];
+            }
+            // Read the extension of the short name
+            int extension_chars = 3;
+            while (extension_chars > 0 && entry->name[7 + extension_chars] == ' ')
+                extension_chars--;
+            if (extension_chars > 0)
+                short_name_buf[main_name_chars] = '.';
+            for (int i = 0; i < extension_chars; i++) {
+                if (!char_allowed_in_short_name(entry->name[8 + i]))
+                    goto skip_entry;
+                short_name_buf[main_name_chars + 1 + i] = entry->name[8 + i];
+            }
+            // If there is no long name, set entry location to just the short name entry and set long name length to zero
             if (!has_long_name) {
-                // Read the main part of the name
-                int main_name_chars = 8;
-                while (main_name_chars > 0 && entry->name[main_name_chars - 1] == ' ')
-                    main_name_chars--;
-                for (int i = 0; i < main_name_chars; i++) {
-                    if (!char_allowed_in_short_name(entry->name[i]))
-                        goto skip_entry;
-                    name_buf[i] = entry->name[i];
-                }
-                // Read the extension
-                int extension_chars = 3;
-                while (extension_chars > 0 && entry->name[7 + extension_chars] == ' ')
-                    extension_chars--;
-                if (extension_chars > 0)
-                    name_buf[main_name_chars] = '.';
-                for (int i = 0; i < extension_chars; i++) {
-                    if (!char_allowed_in_short_name(entry->name[8 + i]))
-                        goto skip_entry;
-                    name_buf[main_name_chars + 1 + i] = entry->name[8 + i];
-                }
-                name_buf_length = main_name_chars + extension_chars + (extension_chars > 0);
-                // Set entry location
                 location.first_entry_cluster = state->cluster;
                 location.first_entry_index = state->entry_i;
                 location.entry_count = 1;
+                long_name_length = 0;
             }
             location.main_entry_offset = fat_cluster_offset(state->cluster) + state->entry_i * sizeof(DirEntry);
             // Return the entry
-            *name_buf_length_ptr = name_buf_length;
+            *long_name_length_ptr = long_name_length;
+            *short_name_length_ptr = main_name_chars + extension_chars + (extension_chars > 0);
             if (entry_ptr != NULL)
                 *entry_ptr = *entry;
             if (location_ptr != NULL)
@@ -631,11 +635,37 @@ skip_entry:
     }
 }
 
-static u8 name_buf[255];
+static u8 long_name_buf[255];
+static u8 short_name_buf[12];
+
+// Compare two strings ignoring case
+static bool equal_case_insensitive(const u8 *s1, size_t n1, const u8 *s2, size_t n2) {
+    if (n1 != n2)
+        return false;
+    for (size_t i = 0; i < n1; i++) {
+        u8 c1 = s1[i];
+        if ('a' <= c1 && c1 <= 'z')
+            c1 -= 'a' - 'A';
+        u8 c2 = s2[i];
+        if ('a' <= c2 && c2 <= 'z')
+            c2 -= 'a' - 'A';
+        if (c1 != c2)
+            return false;
+    }
+    return true;
+}
 
 // Get a directory entry for a file, given the first cluster of its containing folder and its name
 static err_t find_entry_in_dir(u32 dir_first_cluster, const u8 *target_name, size_t target_name_length, DirEntry *entry_ptr, DirEntryLocation *location_ptr) {
     err_t err = 0;
+    // Strip leading spaces
+    while (target_name_length != 0 && target_name[0] == ' ') {
+        target_name++;
+        target_name_length--;
+    }
+    // Strip trailing spaces and periods
+    while (target_name_length != 0 && (target_name[target_name_length - 1] == ' ' || target_name[target_name_length - 1] == '.'))
+        target_name_length--;
     // Initialize directory reader state
     DirEntry *cluster_entries = malloc(cluster_size);
     if (cluster_entries == NULL)
@@ -644,13 +674,15 @@ static err_t find_entry_in_dir(u32 dir_first_cluster, const u8 *target_name, siz
     while (1) {
         DirEntry entry;
         DirEntryLocation location;
-        u32 name_buf_length;
+        u32 long_name_length;
+        u32 short_name_buf_length;
         // Get the next directory entry
-        err = get_next_dir_entry(&state, name_buf, &name_buf_length, &entry, &location);
+        err = get_next_dir_entry(&state, long_name_buf, &long_name_length, short_name_buf, &short_name_buf_length, &entry, &location);
         if (err)
             goto exit;
-        // If the name is equal to the one requested, return the entry
-        if (target_name_length == name_buf_length && memcmp(target_name, name_buf, target_name_length) == 0) {
+        // If long or short name is equal to the one requested, return the entry
+        if ((long_name_length != 0 && equal_case_insensitive(target_name, target_name_length, long_name_buf, long_name_length))
+                || equal_case_insensitive(target_name, target_name_length, short_name_buf, short_name_buf_length)) {
             *entry_ptr = entry;
             *location_ptr = location;
             err = 0;
@@ -682,9 +714,10 @@ static err_t get_dir_list(u32 dir_first_cluster, u8 **list_ptr, size_t *len_ptr)
     DirReadState state = {dir_first_cluster, 0, cluster_entries};
     while (1) {
         DirEntry entry;
-        u32 name_buf_length;
+        u32 long_name_length;
+        u32 short_name_length;
         // Get the next directory entry
-        err = get_next_dir_entry(&state, name_buf, &name_buf_length, &entry, NULL);
+        err = get_next_dir_entry(&state, long_name_buf, &long_name_length, short_name_buf, &short_name_length, &entry, NULL);
         if (err) {
             if (err == ERR_DOES_NOT_EXIST) {
                 *list_ptr = list;
@@ -693,6 +726,9 @@ static err_t get_dir_list(u32 dir_first_cluster, u8 **list_ptr, size_t *len_ptr)
             }
             goto exit;
         }
+        // Use long name if one exists, short name otherwise
+        u32 name_buf_length = long_name_length != 0 ? long_name_length : short_name_length;
+        u8 *name_buf = long_name_length != 0 ? long_name_buf : short_name_buf;
         // Expand list if necessary
         if (list_capacity - list_len < name_buf_length + sizeof(u32)) {
             while (list_capacity - list_len < name_buf_length + sizeof(u32))
