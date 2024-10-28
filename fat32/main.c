@@ -28,6 +28,9 @@
 #define LONG_NAME_ORD_MASK 0x3F
 #define LONG_NAME_ORD_LAST 0x40
 
+#define NAME_0_FREE_ENTRY 0xE5
+#define NAME_0_END_OF_DIR 0x00
+
 typedef struct BPB {
     u8 jump[3];
     u8 oem_name[8];
@@ -183,7 +186,7 @@ static err_t parse_bpb(BPB *bpb, u64 drive_size) {
         return ERR_NO_MEMORY;
     memset(blank_cluster, 0, cluster_size);
     for (int i = 0; i < MAX_FILE_DIR_ENTRY_COUNT; i++)
-        empty_dir_entries[i].name[0] = 0xE5;
+        empty_dir_entries[i].name[0] = NAME_0_FREE_ENTRY;
     return 0;
 }
 
@@ -452,7 +455,7 @@ end:
 }
 
 // Table of characters allowed in short and long file names - bit is set if character allowed
-static u8 short_name_allowed_char_table[16] = {0x00, 0x00, 0x00, 0x00, 0xFB, 0x23, 0xFF, 0x03, 0xFF, 0xFF, 0xFF, 0xC7, 0x01, 0x00, 0x00, 0x68};
+static u8 short_name_allowed_char_table[16] = {0x00, 0x00, 0x00, 0x00, 0xFA, 0x23, 0xFF, 0x03, 0xFF, 0xFF, 0xFF, 0xC7, 0x01, 0x00, 0x00, 0x68};
 static u8 long_name_allowed_char_table[16] = {0x00, 0x00, 0x00, 0x00, 0xFB, 0x7B, 0xFF, 0x0B, 0xFF, 0xFF, 0xFF, 0xEF, 0xFF, 0xFF, 0xFF, 0x6F};
 
 static bool char_allowed_in_short_name(u8 c) {
@@ -493,6 +496,40 @@ static err_t copy_name_from_long_name_entry(LongNameDirEntry *lne, u8 *buf, u32 
     return 0;
 }
 
+// Convert short name from directory entry format to string
+static err_t convert_from_short_name(const u8 *entry_name, u8 *name_buf, u32 *name_length_ptr) {
+    // Read the main part of the short name
+    int main_name_chars = 8;
+    while (main_name_chars > 0 && entry_name[main_name_chars - 1] == ' ')
+        main_name_chars--;
+    for (int i = 0; i < main_name_chars; i++) {
+        if (!char_allowed_in_short_name(entry_name[i]))
+            return ERR_OTHER;
+        name_buf[i] = entry_name[i];
+    }
+    // Read the extension of the short name
+    int extension_chars = 3;
+    while (extension_chars > 0 && entry_name[7 + extension_chars] == ' ')
+        extension_chars--;
+    if (extension_chars > 0)
+        name_buf[main_name_chars] = '.';
+    for (int i = 0; i < extension_chars; i++) {
+        if (!char_allowed_in_short_name(entry_name[8 + i]))
+            return ERR_OTHER;
+        name_buf[main_name_chars + 1 + i] = entry_name[8 + i];
+    }
+    *name_length_ptr = main_name_chars + extension_chars + (extension_chars > 0);
+    return 0;
+}
+
+// Get the checksum of a short name
+static u8 get_short_name_checksum(const u8 *name) {
+    u8 checksum = 0;
+    for (int i = 0; i < 11; i++)
+        checksum = ((checksum << 7) | (checksum >> 1)) + name[i];
+    return checksum;
+}
+
 typedef struct DirReadState {
     u32 cluster;
     u32 entry_i;
@@ -506,10 +543,41 @@ typedef struct DirEntryLocation {
     u32 entry_count;
 } DirEntryLocation;
 
-// Get the next entry in a directory along with its long and short names and location
+// Initialize a DirReadState struct
+static err_t dir_read_state_init(DirReadState *state, u32 dir_first_cluster) {
+    DirEntry *cluster_entries = malloc(cluster_size);
+    if (cluster_entries == NULL)
+        return ERR_NO_MEMORY;
+    *state = (DirReadState){dir_first_cluster, 0, cluster_entries};
+    return 0;
+}
+
+// Get the entry (not necessary an allocated one) from a directory pointed to by DirReadState
+static err_t get_next_dir_entry(DirReadState *state, DirEntry **entry) {
+    err_t err;
+    // If we are past the last entry in a cluster, move to the next one
+    if (state->entry_i >= cluster_size / sizeof(DirEntry)) {
+        err = fat_read_entry_expect_allocated_or_eof(state->cluster, &state->cluster);
+        if (err == ERR_EOF)
+            return ERR_DOES_NOT_EXIST;
+        else if (err)
+            return err;
+        state->entry_i = 0;
+    }
+    // If this is the first entry in a cluster, load it
+    if (state->entry_i == 0) {
+        err = drive_read(fat_cluster_offset(state->cluster), cluster_size, state->cluster_entries);
+        if (err)
+            return err;
+    }
+    *entry = &state->cluster_entries[state->entry_i];
+    return 0;
+}
+
+// Get the next entry representing a file in a directory along with its long and short names and location
 // If no long name is found, *long_name_length_ptr is set to 0.
 // After a successful return, the `state` is updated so that it can be used to get the next entry.
-static err_t get_next_dir_entry(DirReadState *state, u8 *long_name_buf, u32 *long_name_length_ptr, u8 *short_name_buf, u32 *short_name_length_ptr, DirEntry *entry_ptr, DirEntryLocation *location_ptr) {
+static err_t get_next_full_dir_entry(DirReadState *state, u8 *long_name_buf, u32 *long_name_length_ptr, u8 *short_name_buf, u32 *short_name_length_ptr, DirEntry *entry_ptr, DirEntryLocation *location_ptr) {
     err_t err;
     bool reading_long_name = false;
     u8 next_long_name_ord;
@@ -521,26 +589,14 @@ static err_t get_next_dir_entry(DirReadState *state, u8 *long_name_buf, u32 *lon
         return ERR_DOES_NOT_EXIST;
     // Go through each entry in the directory starting from the current one
     while (1) {
-        // If we are past the last entry in a cluster, move to the next one
-        if (state->entry_i >= cluster_size / sizeof(DirEntry)) {
-            err = fat_read_entry_expect_allocated_or_eof(state->cluster, &state->cluster);
-            if (err == ERR_EOF)
-                return ERR_DOES_NOT_EXIST;
-            else if (err)
-                return err;
-            state->entry_i = 0;
-        }
-        // If this is the first entry in a cluster, load it
-        if (state->entry_i == 0) {
-            err = drive_read(fat_cluster_offset(state->cluster), cluster_size, state->cluster_entries);
-            if (err)
-                return err;
-        }
-        DirEntry *entry = &state->cluster_entries[state->entry_i];
+        DirEntry *entry;
+        err = get_next_dir_entry(state, &entry);
+        if (err)
+            return err;
         // Check first character of short name for byte marking a free entry or end of directory
-        if (entry->name[0] == 0xE5)
+        if (entry->name[0] == NAME_0_FREE_ENTRY)
             goto skip_entry;
-        if (entry->name[0] == 0x00)
+        if (entry->name[0] == NAME_0_END_OF_DIR)
             return ERR_DOES_NOT_EXIST;
         // Check if the entry is a long name entry
         if ((entry->attr & LONG_NAME_ATTR_MASK) == LONG_NAME_ATTR) {
@@ -583,35 +639,15 @@ static err_t get_next_dir_entry(DirReadState *state, u8 *long_name_buf, u32 *lon
                 goto skip_entry;
             if (has_long_name) {
                 // Verify checksum and ignore long name entry if it's not correct
-                u8 checksum = 0;
-                for (int i = 0; i < 11; i++)
-                    checksum = ((checksum << 7) | (checksum >> 1)) + entry->name[i];
-                if (long_name_checksum != checksum)
+                if (long_name_checksum != get_short_name_checksum(entry->name))
                     has_long_name = false;
                 // Ignore long name entry if it has zero length or has leading or trailing spaces or trailing periods
                 if (long_name_length == 0 || long_name_buf[0] == ' ' || long_name_buf[long_name_length - 1] == ' ' || long_name_buf[long_name_length - 1] == '.')
                     has_long_name = false;
             }
-            // Read the main part of the short name
-            int main_name_chars = 8;
-            while (main_name_chars > 0 && entry->name[main_name_chars - 1] == ' ')
-                main_name_chars--;
-            for (int i = 0; i < main_name_chars; i++) {
-                if (!char_allowed_in_short_name(entry->name[i]))
-                    goto skip_entry;
-                short_name_buf[i] = entry->name[i];
-            }
-            // Read the extension of the short name
-            int extension_chars = 3;
-            while (extension_chars > 0 && entry->name[7 + extension_chars] == ' ')
-                extension_chars--;
-            if (extension_chars > 0)
-                short_name_buf[main_name_chars] = '.';
-            for (int i = 0; i < extension_chars; i++) {
-                if (!char_allowed_in_short_name(entry->name[8 + i]))
-                    goto skip_entry;
-                short_name_buf[main_name_chars + 1 + i] = entry->name[8 + i];
-            }
+            err = convert_from_short_name(entry->name, short_name_buf, short_name_length_ptr);
+            if (err)
+                goto skip_entry;
             // If there is no long name, set entry location to just the short name entry and set long name length to zero
             if (!has_long_name) {
                 location.first_entry_cluster = state->cluster;
@@ -622,7 +658,6 @@ static err_t get_next_dir_entry(DirReadState *state, u8 *long_name_buf, u32 *lon
             location.main_entry_offset = fat_cluster_offset(state->cluster) + state->entry_i * sizeof(DirEntry);
             // Return the entry
             *long_name_length_ptr = long_name_length;
-            *short_name_length_ptr = main_name_chars + extension_chars + (extension_chars > 0);
             if (entry_ptr != NULL)
                 *entry_ptr = *entry;
             if (location_ptr != NULL)
@@ -633,6 +668,93 @@ static err_t get_next_dir_entry(DirReadState *state, u8 *long_name_buf, u32 *lon
 skip_entry:
         state->entry_i++;
     }
+}
+
+// Find a free chain of entries of a given length in a directory
+// May extend the directory by allocating additional clusters.
+static err_t find_free_entry_chain(u32 *dir_first_cluster, u32 needed_length, u32 *first_entry_cluster_ptr, u32 *first_entry_index_ptr) {
+    err_t err;
+    // If the directory has no clusters allocated, allocate however many are needed
+    if (*dir_first_cluster == 0) {
+        u32 cluster_alloc_count = (needed_length + cluster_size / sizeof(DirEntry) - 1) / (cluster_size / sizeof(DirEntry));
+        return allocate_clusters(cluster_alloc_count, dir_first_cluster, true);
+    }
+    // Initialize directory reader state
+    DirReadState state;
+    err = dir_read_state_init(&state, *dir_first_cluster);
+    if (err)
+        return err;
+    // Go through each entry in the directory
+    u32 current_chain_start_cluster;
+    u32 current_chain_start_index;
+    u32 current_chain_length = 0;
+    bool skip = false;
+    while (1) {
+        DirEntry *entry;
+        err = get_next_dir_entry(&state, &entry);
+        if (err == ERR_DOES_NOT_EXIST) {
+            // If we have not found a chain of sufficient length, extend the directory with new clusters
+            u32 cluster_alloc_count = (needed_length - current_chain_length + cluster_size / sizeof(DirEntry) - 1) / (cluster_size / sizeof(DirEntry));
+            u32 first_new_cluster;
+            err = allocate_clusters(cluster_alloc_count, &first_new_cluster, true);
+            if (err)
+                goto exit;
+            // Return the chain
+            if (current_chain_length != 0) {
+                *first_entry_cluster_ptr = current_chain_start_cluster;
+                *first_entry_index_ptr = current_chain_start_index;
+            } else {
+                *first_entry_cluster_ptr = first_new_cluster;
+                *first_entry_index_ptr = 0;
+            }
+            goto success;
+        } else if (err) {
+            goto exit;
+        }
+        // Check if entry is free
+        if (skip || entry->name[0] == NAME_0_FREE_ENTRY || entry->name[0] == NAME_0_END_OF_DIR) {
+            // If entry marked as end of directory, treat all further entries as free as well
+            if (entry->name[0] == NAME_0_END_OF_DIR)
+                skip = true;
+            // Initialize chain if this is the start
+            if (current_chain_length == 0) {
+                current_chain_start_cluster = state.cluster;
+                current_chain_start_index = state.entry_i;
+            }
+            // Increment chain length
+            current_chain_length++;
+            // If we've found a chain of sufficient length, return it
+            if (current_chain_length >= needed_length) {
+                *first_entry_cluster_ptr = current_chain_start_cluster;
+                *first_entry_index_ptr = current_chain_start_index;
+                goto success;
+            }
+        } else {
+            // Reset chain
+            current_chain_length = 0;
+        }
+        state.entry_i++;
+    }
+success:
+    // If one of the entries was marked as end of directory, we need to put the marking back after the allocated space
+    if (skip) {
+        if (state.entry_i >= cluster_size / sizeof(DirEntry)) {
+            err = fat_read_entry_expect_allocated_or_eof(state.cluster, &state.cluster);
+            if (err) {
+                if (err == ERR_EOF)
+                    err = 0;
+                goto exit;
+            }
+            state.entry_i = 0;
+        }
+        err = drive_write(fat_cluster_offset(state.cluster) + state.entry_i * sizeof(DirEntry), 1, &(u8){NAME_0_END_OF_DIR});
+        if (err)
+            return err;
+    }
+    err = 0;
+exit:
+    free(state.cluster_entries);
+    return err;
 }
 
 static u8 long_name_buf[255];
@@ -655,43 +777,224 @@ static bool equal_case_insensitive(const u8 *s1, size_t n1, const u8 *s2, size_t
     return true;
 }
 
+// Strip leading and trailing spaces and trailing periods from filename
+static void strip_filename(const u8 **name_ptr, size_t *name_length_ptr) {
+    const u8 *name = *name_ptr;
+    size_t name_length = *name_length_ptr;
+    // Strip leading spaces
+    while (name_length != 0 && name[0] == ' ') {
+        name++;
+        name_length--;
+    }
+    // Strip trailing spaces and periods
+    while (name_length != 0 && (name[name_length - 1] == ' ' || name[name_length - 1] == '.'))
+        name_length--;
+    *name_ptr = name;
+    *name_length_ptr = name_length;
+}
+
 // Get a directory entry for a file, given the first cluster of its containing folder and its name
 static err_t find_entry_in_dir(u32 dir_first_cluster, const u8 *target_name, size_t target_name_length, DirEntry *entry_ptr, DirEntryLocation *location_ptr) {
     err_t err = 0;
-    // Strip leading spaces
-    while (target_name_length != 0 && target_name[0] == ' ') {
-        target_name++;
-        target_name_length--;
-    }
-    // Strip trailing spaces and periods
-    while (target_name_length != 0 && (target_name[target_name_length - 1] == ' ' || target_name[target_name_length - 1] == '.'))
-        target_name_length--;
+    strip_filename(&target_name, &target_name_length);
     // Initialize directory reader state
-    DirEntry *cluster_entries = malloc(cluster_size);
-    if (cluster_entries == NULL)
-        return ERR_NO_MEMORY;
-    DirReadState state = {dir_first_cluster, 0, cluster_entries};
+    DirReadState state;
+    err = dir_read_state_init(&state, dir_first_cluster);
+    if (err)
+        return err;
     while (1) {
         DirEntry entry;
         DirEntryLocation location;
         u32 long_name_length;
         u32 short_name_buf_length;
         // Get the next directory entry
-        err = get_next_dir_entry(&state, long_name_buf, &long_name_length, short_name_buf, &short_name_buf_length, &entry, &location);
+        err = get_next_full_dir_entry(&state, long_name_buf, &long_name_length, short_name_buf, &short_name_buf_length, &entry, &location);
         if (err)
             goto exit;
         // If long or short name is equal to the one requested, return the entry
         if ((long_name_length != 0 && equal_case_insensitive(target_name, target_name_length, long_name_buf, long_name_length))
                 || equal_case_insensitive(target_name, target_name_length, short_name_buf, short_name_buf_length)) {
-            *entry_ptr = entry;
-            *location_ptr = location;
+            if (entry_ptr != NULL)
+                *entry_ptr = entry;
+            if (location_ptr != NULL)
+                *location_ptr = location;
             err = 0;
             goto exit;
         }
     }
 exit:
-    free(cluster_entries);
+    free(state.cluster_entries);
     return err;
+}
+
+// Tells how much information was lost when converting a long name to a short name by convert_to_short_name()
+typedef enum ShortNameConvLoss {
+    // The short name had to be truncated or have some characters replaced or removed.
+    // It should be mangled and must be stored together with long name entries.
+    SHORT_NAME_CONV_LOSSY,
+    // The short name is the same as the long name when ignoring case.
+    // The name must not be mangled, but will need to be stored together with long name entries.
+    SHORT_NAME_CONV_RECASED,
+    // The short name is exactly the same as the long name. No long name entries are needed.
+    SHORT_NAME_CONV_EXACT,
+} ShortNameConvLoss;
+
+// Convert a long name to a short name in the directory entry format (11 characters, implicit period, padded with spaces)
+// Assumes a long name already has trailing periods and leading and trailing spaces removed.
+// Return value informs how much information was lost in the conversion.
+static ShortNameConvLoss convert_to_short_name(const u8 *long_name, size_t long_name_length, u8 *short_name) {
+    bool lossy = false;
+    bool recased = false;
+    // Remove leading periods to avoid what's after them being interpreted as extension
+    while (long_name_length > 0 && long_name[0] == '.') {
+        lossy = true;
+        long_name++;
+        long_name_length--;
+    }
+    // Locate last period in name - if not present, set position to past the end of name
+    size_t last_period_pos = long_name_length;
+    for (size_t i = long_name_length; i-- > 0;) {
+        if (long_name[i] == '.') {
+            last_period_pos = i;
+            break;
+        }
+    }
+    // Copy characters from long name to short name
+    size_t short_name_i = 0;
+    for (size_t i = 0; i < long_name_length; i++) {
+        // After reaching the last period, pad the rest of main part of name with spaces
+        if (i == last_period_pos) {
+            for (; short_name_i < 8; short_name_i++)
+                short_name[short_name_i] = ' ';
+            continue;
+        }
+        // Don't copy any more characters if we're at the end
+        if ((i < last_period_pos && short_name_i >= 8) || short_name_i >= 11) {
+            lossy = true;
+            continue;
+        }
+        // Skip periods and spaces
+        if (long_name[i] == '.' || long_name[i] == ' ') {
+            lossy = true;
+            continue;
+        }
+        // Copy uppercased character to short name, replacing it with an underscore if it's not allowed there
+        if ('a' <= long_name[i] && long_name[i] <= 'z') {
+            recased = true;
+            short_name[short_name_i] = long_name[i] - ('a' - 'A');
+        } else if (char_allowed_in_short_name(long_name[i])) {
+            short_name[short_name_i] = long_name[i];
+        } else {
+            lossy = true;
+            short_name[short_name_i] = '_';
+        }
+        short_name_i++;
+    }
+    // Pad the rest of the name with spaces
+    for (; short_name_i < 11; short_name_i++)
+        short_name[short_name_i] = ' ';
+    return lossy ? SHORT_NAME_CONV_LOSSY : recased ? SHORT_NAME_CONV_RECASED : SHORT_NAME_CONV_EXACT;
+}
+
+// Create a file with a given name in a directory
+static err_t create_file(u32 *dir_first_cluster, const u8 *name, size_t name_length) {
+    err_t err;
+    strip_filename(&name, &name_length);
+    // Check if file with this name already exists
+    err = find_entry_in_dir(*dir_first_cluster, name, name_length, NULL, NULL);
+    if (err == 0)
+        return ERR_FILE_EXISTS;
+    else if (err != ERR_DOES_NOT_EXIST)
+        return err;
+    // Check if name is a valid long file name
+    if (name_length > 255)
+        return ERR_FILENAME_INVALID;
+    for (size_t i = 0; i < name_length; i++)
+        if (!char_allowed_in_long_name(name[i]))
+            return ERR_FILENAME_INVALID;
+    u8 entry_short_name[11];
+    u8 string_short_name[12];
+    // Convert the name to a short name
+    ShortNameConvLoss loss = convert_to_short_name(name, name_length, entry_short_name);
+    // If the conversion was lossy, mangle the short name
+    if (loss == SHORT_NAME_CONV_LOSSY) {
+        // Get length of main part of short name
+        size_t main_name_length = 8;
+        while (main_name_length > 0 && entry_short_name[main_name_length - 1] == ' ')
+            main_name_length--;
+        // Try attaching a numeric tail ranging from ~1 to ~99999
+        for (size_t digit_count = 1, range_start = 1; digit_count < 5; digit_count++, range_start *= 10) {
+            // Get position to start placing tail at
+            size_t tail_start_pos = main_name_length < 7 - digit_count ? main_name_length : 7 - digit_count;
+            // Place tilde
+            entry_short_name[tail_start_pos] = '~';
+            for (size_t n = range_start; n < 10 * range_start; n++) {
+                // Set numeric part of tail
+                for (size_t i = 0, m = n; i < digit_count; i++, m /= 10)
+                    entry_short_name[tail_start_pos + digit_count - i] = m % 10 + '0';
+                u32 short_name_length;
+                convert_from_short_name(entry_short_name, string_short_name, &short_name_length);
+                err = find_entry_in_dir(*dir_first_cluster, string_short_name, short_name_length, NULL, NULL);
+                if (err == ERR_DOES_NOT_EXIST)
+                    goto numeric_tail_found;
+                else if (err)
+                    return err;
+            }
+        }
+        return ERR_IO_INTERNAL;
+numeric_tail_found:
+        ;
+    }
+    // Allocate the necessary number of entries
+    u32 num_long_name_entries = loss == SHORT_NAME_CONV_EXACT ? 0 : (name_length + 12) / 13;
+    u32 cluster;
+    u32 index;
+    err = find_free_entry_chain(dir_first_cluster, num_long_name_entries + 1, &cluster, &index);
+    if (err)
+        return err;
+    // Write the entries to disk
+    LongNameDirEntry long_name_entry;
+    long_name_entry.attr = LONG_NAME_ATTR;
+    long_name_entry.type = 0;
+    long_name_entry.checksum = get_short_name_checksum(entry_short_name);
+    long_name_entry.reserved1 = 0;
+    // Write the long name entries
+    for (u32 ord = num_long_name_entries; ord > 0; ord--) {
+        size_t lne_base = 13 * (ord - 1);
+        // Fill the long name entry
+        long_name_entry.ord = ord | (ord == num_long_name_entries ? LONG_NAME_ORD_LAST : 0);
+        for (int lne_offset = 0; lne_offset < 13; lne_offset++) {
+            u16 c;
+            if (lne_base + lne_offset < name_length)
+                c = name[lne_base + lne_offset];
+            else if (lne_base + lne_offset == name_length)
+                c = 0;
+            else
+                c = 0xFFFF;
+            if (lne_offset < 5)
+                long_name_entry.name1[lne_offset] = c;
+            else if (lne_offset < 11)
+                long_name_entry.name2[lne_offset - 5] = c;
+            else
+                long_name_entry.name3[lne_offset - 11] = c;
+        }
+        // Write the entry to disk
+        drive_write(fat_cluster_offset(cluster) + index * sizeof(DirEntry), sizeof(DirEntry), &long_name_entry);
+        // Move to the next entry
+        index++;
+        if (index >= cluster_size / sizeof(DirEntry)) {
+            err = fat_read_entry_expect_allocated(cluster, &cluster);
+            if (err)
+                return err;
+            index = 0;
+        }
+    }
+    // Fill the short name entry
+    DirEntry entry;
+    memset(&entry, 0, sizeof(DirEntry));
+    memcpy(&entry.name, entry_short_name, 11);
+    // Write the entry to disk
+    return drive_write(fat_cluster_offset(cluster) + index * sizeof(DirEntry), sizeof(DirEntry), &entry);
 }
 
 #define DIR_LIST_INIT_CAPACITY 64
@@ -706,18 +1009,18 @@ static err_t get_dir_list(u32 dir_first_cluster, u8 **list_ptr, size_t *len_ptr)
     if (list == NULL)
         return ERR_NO_MEMORY;
     // Initialize directory reader state
-    DirEntry *cluster_entries = malloc(cluster_size);
-    if (cluster_entries == NULL) {
+    DirReadState state;
+    err = dir_read_state_init(&state, dir_first_cluster);
+    if (err) {
         free(list);
-        return ERR_NO_MEMORY;
+        return err;
     }
-    DirReadState state = {dir_first_cluster, 0, cluster_entries};
     while (1) {
         DirEntry entry;
         u32 long_name_length;
         u32 short_name_length;
         // Get the next directory entry
-        err = get_next_dir_entry(&state, long_name_buf, &long_name_length, short_name_buf, &short_name_length, &entry, NULL);
+        err = get_next_full_dir_entry(&state, long_name_buf, &long_name_length, short_name_buf, &short_name_length, &entry, NULL);
         if (err) {
             if (err == ERR_DOES_NOT_EXIST) {
                 *list_ptr = list;
@@ -746,7 +1049,7 @@ static err_t get_dir_list(u32 dir_first_cluster, u8 **list_ptr, size_t *len_ptr)
         list_len += name_buf_length;
     }
 exit:
-    free(cluster_entries);
+    free(state.cluster_entries);
     if (err)
         free(list);
     return err;
@@ -854,25 +1157,38 @@ typedef enum RequestTag {
     TAG_STAT,
     TAG_LIST,
     TAG_DELETE,
+    TAG_CREATE,
     TAG_OPEN,
     TAG_READ,
     TAG_WRITE,
     TAG_RESIZE,
 } RequestTag;
 
-static err_t entry_from_path_msg(handle_t msg, DirEntry *entry, DirEntryLocation *location) {
+static err_t get_message_data(handle_t msg, u8 **data_ptr, size_t *path_length_ptr) {
     err_t err;
     MessageLength msg_length;
     message_get_length(msg, &msg_length);
-    u8 *path = malloc(msg_length.data);
-    if (msg_length.data != 0 && path == NULL)
+    u8 *data = malloc(msg_length.data);
+    if (msg_length.data != 0 && data == NULL)
         return ERR_NO_MEMORY;
-    err = message_read(msg, &(ReceiveMessage){msg_length.data, path, 0, NULL}, NULL, NULL, 0, 0);
+    err = message_read(msg, &(ReceiveMessage){msg_length.data, data, 0, NULL}, NULL, NULL, 0, 0);
     if (err) {
-        free(path);
+        free(data);
         return err;
     }
-    err = entry_from_path(path, msg_length.data, entry, location);
+    *data_ptr = data;
+    *path_length_ptr = msg_length.data;
+    return 0;
+}
+
+static err_t entry_from_path_msg(handle_t msg, DirEntry *entry, DirEntryLocation *location) {
+    err_t err;
+    u8 *path;
+    size_t path_length;
+    err = get_message_data(msg, &path, &path_length);
+    if (err)
+        return err;
+    err = entry_from_path(path, path_length, entry, location);
     free(path);
     return err;
 }
@@ -914,10 +1230,13 @@ void main(void) {
     err = mqueue_add_channel_resource(mqueue, &resource_name("file/list_r"), (MessageTag){TAG_LIST, 0});
     if (err)
         return;
-    err = mqueue_add_channel_resource(mqueue, &resource_name("file/open_r"), (MessageTag){TAG_OPEN, 0});
+    err = mqueue_add_channel_resource(mqueue, &resource_name("file/delete_r"), (MessageTag){TAG_DELETE, 0});
     if (err)
         return;
-    err = mqueue_add_channel_resource(mqueue, &resource_name("file/delete_r"), (MessageTag){TAG_DELETE, 0});
+    err = mqueue_add_channel_resource(mqueue, &resource_name("file/create_r"), (MessageTag){TAG_CREATE, 0});
+    if (err)
+        return;
+    err = mqueue_add_channel_resource(mqueue, &resource_name("file/open_r"), (MessageTag){TAG_OPEN, 0});
     if (err)
         return;
     while (1) {
@@ -952,6 +1271,50 @@ void main(void) {
             message_reply(msg, &(SendMessage){1, &(SendMessageData){file_list_length, file_list}, 0, NULL}, FLAG_FREE_MESSAGE);
             free(file_list);
             break;
+        }
+        case TAG_CREATE: {
+            u8 *path;
+            size_t path_length;
+            err = get_message_data(msg, &path, &path_length);
+            if (err)
+                goto loop_fail;
+            // Fail early if trying to create root
+            if (path_length == 0) {
+                err = ERR_FILE_EXISTS;
+                goto create_fail;
+            }
+            // Find last slash in path
+            size_t parent_path_length = path_length;
+            while (parent_path_length > 0) {
+                parent_path_length--;
+                if (path[parent_path_length] == '/')
+                    break;
+            }
+            size_t filename_start = parent_path_length == 0 && path[0] != '/' ? 0 : parent_path_length + 1;
+            // Get entry of parent
+            DirEntry entry;
+            DirEntryLocation location;
+            err = entry_from_path(path, parent_path_length, &entry, &location);
+            if (err)
+                goto create_fail;
+            // Create the file
+            u32 dir_first_cluster = entry_get_first_cluster(&entry);
+            err = create_file(&dir_first_cluster, path + filename_start, path_length - filename_start);
+            if (err)
+                goto create_fail;
+            // Write back the entry with new starting cluster if creating file in directory and not in root
+            if (location.main_entry_offset != UINT32_MAX) {
+                entry_set_first_cluster(&entry, dir_first_cluster);
+                err = drive_write(location.main_entry_offset, sizeof(DirEntry), &entry);
+                if (err)
+                    goto create_fail;
+            }
+            message_reply(msg, NULL, FLAG_FREE_MESSAGE);
+            free(path);
+            break;
+create_fail:
+            free(path);
+            goto loop_fail;
         }
         case TAG_DELETE: {
             DirEntry entry;

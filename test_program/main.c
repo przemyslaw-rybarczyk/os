@@ -63,6 +63,10 @@ void main(void) {
     err = channel_create(&file_open_in, &file_open_out);
     if (err)
         return;
+    handle_t file_create_in, file_create_out;
+    err = channel_create(&file_create_in, &file_create_out);
+    if (err)
+        return;
     handle_t file_delete_in, file_delete_out;
     err = channel_create(&file_delete_in, &file_delete_out);
     if (err)
@@ -74,6 +78,7 @@ void main(void) {
         resource_name("file/stat_r"),
         resource_name("file/list_r"),
         resource_name("file/open_r"),
+        resource_name("file/create_r"),
         resource_name("file/delete_r"),
     };
     SendAttachedHandle fs_resource_handles[] = {
@@ -82,6 +87,7 @@ void main(void) {
         {ATTACHED_HANDLE_FLAG_MOVE, file_stat_out},
         {ATTACHED_HANDLE_FLAG_MOVE, file_list_out},
         {ATTACHED_HANDLE_FLAG_MOVE, file_open_out},
+        {ATTACHED_HANDLE_FLAG_MOVE, file_create_out},
         {ATTACHED_HANDLE_FLAG_MOVE, file_delete_out},
     };
     err = channel_call(process_spawn_channel, &(SendMessage){
@@ -100,14 +106,14 @@ void main(void) {
         if (scanf("%255[^\n]", path_buf) != 1)
             return;
         handle_t reply;
-        err = channel_call(file_delete_in, &(SendMessage){1, &(SendMessageData){strlen(path_buf), path_buf}, 0, NULL}, &reply);
-        if (err == ERR_DOES_NOT_EXIST) {
-            printf("Error when deleting: file does not exist\n");
+        err = channel_call(file_create_in, &(SendMessage){1, &(SendMessageData){strlen(path_buf), path_buf}, 0, NULL}, &reply);
+        if (err == ERR_FILE_EXISTS) {
+            printf("Error when creating: file already exists\n");
             continue;
         } else if (err) {
-            printf("Error when deleting: %zX\n", err);
+            printf("Error when creating: %zX\n", err);
             continue;
         }
-        printf("File deleted successfully\n");
+        printf("File created successfully\n");
     }
 }
