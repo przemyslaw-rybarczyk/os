@@ -31,3 +31,5 @@ typedef struct FileMetadata {
     i64 modify_time;
     i64 access_time;
 } FileMetadata;
+
+#define FLAG_CREATE_DIR (UINT64_C(1) << 0)

@@ -106,7 +106,11 @@ void main(void) {
         if (scanf("%255[^\n]", path_buf) != 1)
             return;
         handle_t reply;
-        err = channel_call(file_create_in, &(SendMessage){1, &(SendMessageData){strlen(path_buf), path_buf}, 0, NULL}, &reply);
+        err = channel_call(file_create_in, &(SendMessage){
+            2, (SendMessageData[]){
+                {sizeof(u64), &(u64){FLAG_CREATE_DIR}},
+                {strlen(path_buf), path_buf}},
+            0, NULL}, &reply);
         if (err == ERR_FILE_EXISTS) {
             printf("Error when creating: file already exists\n");
             continue;

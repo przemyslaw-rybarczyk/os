@@ -584,9 +584,6 @@ static err_t get_next_full_dir_entry(DirReadState *state, u8 *long_name_buf, u32
     u8 long_name_checksum;
     u32 long_name_length;
     DirEntryLocation location;
-    // Return early if there are no clusters
-    if (state->cluster == 0)
-        return ERR_DOES_NOT_EXIST;
     // Go through each entry in the directory starting from the current one
     while (1) {
         DirEntry *entry;
@@ -672,16 +669,11 @@ skip_entry:
 
 // Find a free chain of entries of a given length in a directory
 // May extend the directory by allocating additional clusters.
-static err_t find_free_entry_chain(u32 *dir_first_cluster, u32 needed_length, u32 *first_entry_cluster_ptr, u32 *first_entry_index_ptr) {
+static err_t find_free_entry_chain(u32 dir_first_cluster, u32 needed_length, u32 *first_entry_cluster_ptr, u32 *first_entry_index_ptr) {
     err_t err;
-    // If the directory has no clusters allocated, allocate however many are needed
-    if (*dir_first_cluster == 0) {
-        u32 cluster_alloc_count = (needed_length + cluster_size / sizeof(DirEntry) - 1) / (cluster_size / sizeof(DirEntry));
-        return allocate_clusters(cluster_alloc_count, dir_first_cluster, true);
-    }
     // Initialize directory reader state
     DirReadState state;
-    err = dir_read_state_init(&state, *dir_first_cluster);
+    err = dir_read_state_init(&state, dir_first_cluster);
     if (err)
         return err;
     // Go through each entry in the directory
@@ -896,12 +888,13 @@ static ShortNameConvLoss convert_to_short_name(const u8 *long_name, size_t long_
     return lossy ? SHORT_NAME_CONV_LOSSY : recased ? SHORT_NAME_CONV_RECASED : SHORT_NAME_CONV_EXACT;
 }
 
-// Create a file with a given name in a directory
-static err_t create_file(u32 *dir_first_cluster, const u8 *name, size_t name_length) {
+// Create an empty file or directory with a given name in a directory
+// If `directory` is set, will create a directory, otherwise a file.
+static err_t create_file(u32 parent_first_cluster, const u8 *name, size_t name_length, bool directory) {
     err_t err;
     strip_filename(&name, &name_length);
     // Check if file with this name already exists
-    err = find_entry_in_dir(*dir_first_cluster, name, name_length, NULL, NULL);
+    err = find_entry_in_dir(parent_first_cluster, name, name_length, NULL, NULL);
     if (err == 0)
         return ERR_FILE_EXISTS;
     else if (err != ERR_DOES_NOT_EXIST)
@@ -934,7 +927,7 @@ static err_t create_file(u32 *dir_first_cluster, const u8 *name, size_t name_len
                     entry_short_name[tail_start_pos + digit_count - i] = m % 10 + '0';
                 u32 short_name_length;
                 convert_from_short_name(entry_short_name, string_short_name, &short_name_length);
-                err = find_entry_in_dir(*dir_first_cluster, string_short_name, short_name_length, NULL, NULL);
+                err = find_entry_in_dir(parent_first_cluster, string_short_name, short_name_length, NULL, NULL);
                 if (err == ERR_DOES_NOT_EXIST)
                     goto numeric_tail_found;
                 else if (err)
@@ -949,7 +942,7 @@ numeric_tail_found:
     u32 num_long_name_entries = loss == SHORT_NAME_CONV_EXACT ? 0 : (name_length + 12) / 13;
     u32 cluster;
     u32 index;
-    err = find_free_entry_chain(dir_first_cluster, num_long_name_entries + 1, &cluster, &index);
+    err = find_free_entry_chain(parent_first_cluster, num_long_name_entries + 1, &cluster, &index);
     if (err)
         return err;
     // Write the entries to disk
@@ -992,7 +985,29 @@ numeric_tail_found:
     // Fill the short name entry
     DirEntry entry;
     memset(&entry, 0, sizeof(DirEntry));
-    memcpy(&entry.name, entry_short_name, 11);
+    memcpy(entry.name, entry_short_name, 11);
+    if (directory) {
+        entry.attr = DIR_ENTRY_ATTR_DIRECTORY;
+        // Allocate first cluster
+        u32 dir_first_cluster;
+        err = allocate_clusters(1, &dir_first_cluster, true);
+        if (err)
+            return err;
+        entry_set_first_cluster(&entry, dir_first_cluster);
+        // Insert . and .. entries at the beginning
+        DirEntry entries[2];
+        memset(&entries[0], 0, sizeof(DirEntry));
+        memset(entries[0].name, ' ', 11);
+        entries[0].name[0] = '.';
+        entries[0].attr = DIR_ENTRY_ATTR_DIRECTORY;
+        memcpy(&entries[1], &entries[0], sizeof(DirEntry));
+        entries[1].name[1] = '.';
+        entry_set_first_cluster(&entries[0], dir_first_cluster);
+        entry_set_first_cluster(&entries[1], parent_first_cluster == root_cluster ? 0 : parent_first_cluster);
+        err = drive_write(fat_cluster_offset(dir_first_cluster), 2 * sizeof(DirEntry), entries);
+        if (err)
+            return err;
+    }
     // Write the entry to disk
     return drive_write(fat_cluster_offset(cluster) + index * sizeof(DirEntry), sizeof(DirEntry), &entry);
 }
@@ -1273,11 +1288,26 @@ void main(void) {
             break;
         }
         case TAG_CREATE: {
-            u8 *path;
-            size_t path_length;
-            err = get_message_data(msg, &path, &path_length);
+            // Read message
+            u8 *msg_data;
+            size_t msg_data_length;
+            err = get_message_data(msg, &msg_data, &msg_data_length);
             if (err)
                 goto loop_fail;
+            // Get flags
+            if (msg_data_length < sizeof(u64)) {
+                err = ERR_INVALID_ARG;
+                goto create_fail;
+            }
+            u64 flags = *(u64 *)msg_data;
+            if (flags & ~FLAG_CREATE_DIR) {
+                err = ERR_INVALID_ARG;
+                goto create_fail;
+            }
+            bool directory = flags & FLAG_CREATE_DIR;
+            // Get path from message
+            u8 *path = msg_data + sizeof(u64);
+            size_t path_length = msg_data_length - sizeof(u64);
             // Fail early if trying to create root
             if (path_length == 0) {
                 err = ERR_FILE_EXISTS;
@@ -1298,22 +1328,14 @@ void main(void) {
             if (err)
                 goto create_fail;
             // Create the file
-            u32 dir_first_cluster = entry_get_first_cluster(&entry);
-            err = create_file(&dir_first_cluster, path + filename_start, path_length - filename_start);
+            err = create_file(entry_get_first_cluster(&entry), path + filename_start, path_length - filename_start, directory);
             if (err)
                 goto create_fail;
-            // Write back the entry with new starting cluster if creating file in directory and not in root
-            if (location.main_entry_offset != UINT32_MAX) {
-                entry_set_first_cluster(&entry, dir_first_cluster);
-                err = drive_write(location.main_entry_offset, sizeof(DirEntry), &entry);
-                if (err)
-                    goto create_fail;
-            }
             message_reply(msg, NULL, FLAG_FREE_MESSAGE);
-            free(path);
+            free(msg_data);
             break;
 create_fail:
-            free(path);
+            free(msg_data);
             goto loop_fail;
         }
         case TAG_DELETE: {
