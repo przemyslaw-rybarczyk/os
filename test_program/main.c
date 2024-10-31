@@ -13,7 +13,8 @@
 #include <zr/syscalls.h>
 #include <zr/time.h>
 
-static char path_buf[256];
+static char src_path_buf[256];
+static char dest_path_buf[256];
 
 void main(void) {
     err_t err;
@@ -71,6 +72,10 @@ void main(void) {
     err = channel_create(&file_delete_in, &file_delete_out);
     if (err)
         return;
+    handle_t file_move_in, file_move_out;
+    err = channel_create(&file_move_in, &file_move_out);
+    if (err)
+        return;
     ResourceName fs_resource_names[] = {
         resource_name("virt_drive/info"),
         resource_name("virt_drive/read"),
@@ -80,6 +85,7 @@ void main(void) {
         resource_name("file/open_r"),
         resource_name("file/create_r"),
         resource_name("file/delete_r"),
+        resource_name("file/move_r"),
     };
     SendAttachedHandle fs_resource_handles[] = {
         {ATTACHED_HANDLE_FLAG_MOVE, drive_attached_handles[0].handle_i},
@@ -89,6 +95,7 @@ void main(void) {
         {ATTACHED_HANDLE_FLAG_MOVE, file_open_out},
         {ATTACHED_HANDLE_FLAG_MOVE, file_create_out},
         {ATTACHED_HANDLE_FLAG_MOVE, file_delete_out},
+        {ATTACHED_HANDLE_FLAG_MOVE, file_move_out},
     };
     err = channel_call(process_spawn_channel, &(SendMessage){
         5, (SendMessageData[]){
@@ -102,22 +109,26 @@ void main(void) {
     if (err)
         return;
     while (1) {
-        printf("Path: \n");
-        if (scanf("%255[^\n]", path_buf) != 1)
+        printf("Source: \n");
+        if (scanf("%255[^\n]", src_path_buf) != 1)
+            return;
+        printf("Destination: \n");
+        if (scanf("%255[^\n]", dest_path_buf) != 1)
             return;
         handle_t reply;
-        err = channel_call(file_create_in, &(SendMessage){
-            2, (SendMessageData[]){
-                {sizeof(u64), &(u64){FLAG_CREATE_DIR}},
-                {strlen(path_buf), path_buf}},
+        err = channel_call(file_move_in, &(SendMessage){
+            3, (SendMessageData[]){
+                {sizeof(size_t), &(size_t){strlen(src_path_buf)}},
+                {strlen(src_path_buf), src_path_buf},
+                {strlen(dest_path_buf), dest_path_buf}},
             0, NULL}, &reply);
         if (err == ERR_FILE_EXISTS) {
-            printf("Error when creating: file already exists\n");
+            printf("Error when moving: file already exists\n");
             continue;
         } else if (err) {
-            printf("Error when creating: %zX\n", err);
+            printf("Error when moving: %zX\n", err);
             continue;
         }
-        printf("File created successfully\n");
+        printf("File moved successfully\n");
     }
 }

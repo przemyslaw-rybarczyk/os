@@ -889,8 +889,8 @@ static ShortNameConvLoss convert_to_short_name(const u8 *long_name, size_t long_
 }
 
 // Create an empty file or directory with a given name in a directory
-// If `directory` is set, will create a directory, otherwise a file.
-static err_t create_file(u32 parent_first_cluster, const u8 *name, size_t name_length, bool directory) {
+// The metadata and first cluster will be taken from the provided entry.
+static err_t create_dir_entry(u32 parent_first_cluster, const u8 *name, size_t name_length, DirEntry *entry) {
     err_t err;
     strip_filename(&name, &name_length);
     // Check if file with this name already exists
@@ -982,34 +982,36 @@ numeric_tail_found:
             index = 0;
         }
     }
-    // Fill the short name entry
-    DirEntry entry;
-    memset(&entry, 0, sizeof(DirEntry));
-    memcpy(entry.name, entry_short_name, 11);
-    if (directory) {
-        entry.attr = DIR_ENTRY_ATTR_DIRECTORY;
-        // Allocate first cluster
-        u32 dir_first_cluster;
-        err = allocate_clusters(1, &dir_first_cluster, true);
-        if (err)
-            return err;
-        entry_set_first_cluster(&entry, dir_first_cluster);
-        // Insert . and .. entries at the beginning
-        DirEntry entries[2];
-        memset(&entries[0], 0, sizeof(DirEntry));
-        memset(entries[0].name, ' ', 11);
-        entries[0].name[0] = '.';
-        entries[0].attr = DIR_ENTRY_ATTR_DIRECTORY;
-        memcpy(&entries[1], &entries[0], sizeof(DirEntry));
-        entries[1].name[1] = '.';
-        entry_set_first_cluster(&entries[0], dir_first_cluster);
-        entry_set_first_cluster(&entries[1], parent_first_cluster == root_cluster ? 0 : parent_first_cluster);
-        err = drive_write(fat_cluster_offset(dir_first_cluster), 2 * sizeof(DirEntry), entries);
-        if (err)
-            return err;
-    }
+    // Fill the name of the short name entry
+    memcpy(entry->name, entry_short_name, 11);
+    entry->reserved1 = 0;
     // Write the entry to disk
-    return drive_write(fat_cluster_offset(cluster) + index * sizeof(DirEntry), sizeof(DirEntry), &entry);
+    return drive_write(fat_cluster_offset(cluster) + index * sizeof(DirEntry), sizeof(DirEntry), entry);
+}
+
+// Allocate the initial first cluster for a directory along with . and .. entries
+static err_t allocate_first_dir_cluster(u32 *dir_first_cluster_ptr, u32 parent_first_cluster) {
+    err_t err;
+    // Allocate first cluster
+    u32 dir_first_cluster;
+    err = allocate_clusters(1, &dir_first_cluster, true);
+    if (err)
+        return err;
+    // Insert . and .. entries at the beginning
+    DirEntry entries[2];
+    memset(&entries[0], 0, sizeof(DirEntry));
+    memset(entries[0].name, ' ', 11);
+    entries[0].name[0] = '.';
+    entries[0].attr = DIR_ENTRY_ATTR_DIRECTORY;
+    memcpy(&entries[1], &entries[0], sizeof(DirEntry));
+    entries[1].name[1] = '.';
+    entry_set_first_cluster(&entries[0], dir_first_cluster);
+    entry_set_first_cluster(&entries[1], parent_first_cluster == root_cluster ? 0 : parent_first_cluster);
+    err = drive_write(fat_cluster_offset(dir_first_cluster), 2 * sizeof(DirEntry), entries);
+    if (err)
+        return err;
+    *dir_first_cluster_ptr = dir_first_cluster;
+    return 0;
 }
 
 #define DIR_LIST_INIT_CAPACITY 64
@@ -1173,6 +1175,7 @@ typedef enum RequestTag {
     TAG_LIST,
     TAG_DELETE,
     TAG_CREATE,
+    TAG_MOVE,
     TAG_OPEN,
     TAG_READ,
     TAG_WRITE,
@@ -1193,6 +1196,28 @@ static err_t get_message_data(handle_t msg, u8 **data_ptr, size_t *path_length_p
     }
     *data_ptr = data;
     *path_length_ptr = msg_length.data;
+    return 0;
+}
+
+// Split a path into a filename and the entry of the directory containing it
+// Returns ERR_FILE_EXISTS if provided path points to root.
+static err_t split_destination(const u8 *path, size_t path_length, DirEntry *parent_entry_ptr, size_t *filename_start_ptr) {
+    err_t err;
+    // Fail if path points to root
+    if (path_length == 0)
+        return ERR_FILE_EXISTS;
+    // Find last slash in path
+    size_t parent_path_length = path_length;
+    while (parent_path_length > 0) {
+        parent_path_length--;
+        if (path[parent_path_length] == '/')
+            break;
+    }
+    // Get entry of parent
+    err = entry_from_path(path, parent_path_length, parent_entry_ptr, NULL);
+    if (err)
+        return err;
+    *filename_start_ptr = parent_path_length == 0 && path[0] != '/' ? 0 : parent_path_length + 1;
     return 0;
 }
 
@@ -1249,6 +1274,9 @@ void main(void) {
     if (err)
         return;
     err = mqueue_add_channel_resource(mqueue, &resource_name("file/create_r"), (MessageTag){TAG_CREATE, 0});
+    if (err)
+        return;
+    err = mqueue_add_channel_resource(mqueue, &resource_name("file/move_r"), (MessageTag){TAG_MOVE, 0});
     if (err)
         return;
     err = mqueue_add_channel_resource(mqueue, &resource_name("file/open_r"), (MessageTag){TAG_OPEN, 0});
@@ -1308,29 +1336,29 @@ void main(void) {
             // Get path from message
             u8 *path = msg_data + sizeof(u64);
             size_t path_length = msg_data_length - sizeof(u64);
-            // Fail early if trying to create root
-            if (path_length == 0) {
-                err = ERR_FILE_EXISTS;
-                goto create_fail;
-            }
-            // Find last slash in path
-            size_t parent_path_length = path_length;
-            while (parent_path_length > 0) {
-                parent_path_length--;
-                if (path[parent_path_length] == '/')
-                    break;
-            }
-            size_t filename_start = parent_path_length == 0 && path[0] != '/' ? 0 : parent_path_length + 1;
-            // Get entry of parent
-            DirEntry entry;
-            DirEntryLocation location;
-            err = entry_from_path(path, parent_path_length, &entry, &location);
+            // Split destination
+            DirEntry parent_entry;
+            size_t filename_start;
+            err = split_destination(path, path_length, &parent_entry, &filename_start);
             if (err)
                 goto create_fail;
             // Create the file
-            err = create_file(entry_get_first_cluster(&entry), path + filename_start, path_length - filename_start, directory);
-            if (err)
+            DirEntry entry;
+            memset(&entry, 0, sizeof(DirEntry));
+            if (directory) {
+                u32 dir_first_cluster;
+                err = allocate_first_dir_cluster(&dir_first_cluster, entry_get_first_cluster(&parent_entry));
+                if (err)
+                    goto create_fail;
+                entry_set_first_cluster(&entry, dir_first_cluster);
+                entry.attr = DIR_ENTRY_ATTR_DIRECTORY;
+            }
+            err = create_dir_entry(entry_get_first_cluster(&parent_entry), path + filename_start, path_length - filename_start, &entry);
+            if (err) {
+                if (directory)
+                    free_clusters(entry_get_first_cluster(&entry));
                 goto create_fail;
+            }
             message_reply(msg, NULL, FLAG_FREE_MESSAGE);
             free(msg_data);
             break;
@@ -1352,6 +1380,54 @@ create_fail:
                 goto loop_fail;
             message_reply(msg, NULL, FLAG_FREE_MESSAGE);
             break;
+        }
+        case TAG_MOVE: {
+            // Read message
+            u8 *msg_data;
+            size_t msg_data_length;
+            err = get_message_data(msg, &msg_data, &msg_data_length);
+            if (err)
+                goto loop_fail;
+            // Get length of source path
+            if (msg_data_length < sizeof(size_t)) {
+                err = ERR_INVALID_ARG;
+                goto move_fail;
+            }
+            size_t src_path_length = *(size_t *)msg_data;
+            if (src_path_length > msg_data_length - sizeof(size_t)) {
+                err = ERR_INVALID_ARG;
+                goto move_fail;
+            }
+            // Get source and destination path from message
+            u8 *src_path = msg_data + sizeof(size_t);
+            u8 *dest_path = src_path + src_path_length;
+            size_t dest_path_length = msg_data_length - sizeof(size_t) - src_path_length;
+            // Split destination
+            DirEntry dest_parent_entry;
+            size_t dest_filename_start;
+            err = split_destination(dest_path, dest_path_length, &dest_parent_entry, &dest_filename_start);
+            if (err)
+                goto move_fail;
+            // Get source entry
+            DirEntry src_entry;
+            DirEntryLocation src_location;
+            err = entry_from_path(src_path, src_path_length, &src_entry, &src_location);
+            if (err)
+                goto move_fail;
+            // Create new entry in destination folder
+            err = create_dir_entry(entry_get_first_cluster(&dest_parent_entry), dest_path + dest_filename_start, dest_path_length - dest_filename_start, &src_entry);
+            if (err)
+                goto move_fail;
+            // Remove source entry
+            err = delete_file_entry(src_location);
+            if (err)
+                goto move_fail;
+            free(msg_data);
+            message_reply(msg, NULL, FLAG_FREE_MESSAGE);
+            break;
+move_fail:
+            free(msg_data);
+            goto loop_fail;
         }
         case TAG_OPEN: {
             DirEntry entry;
