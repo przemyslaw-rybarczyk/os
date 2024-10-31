@@ -1422,6 +1422,23 @@ create_fail:
             err = delete_file_entry(src_location);
             if (err)
                 goto move_fail;
+            // If the moved file is a directory, change its .. entry to point at the new parent
+            if (src_entry.attr & DIR_ENTRY_ATTR_DIRECTORY) {
+                // Read second entry of the directory, which should be the .. entry
+                DirEntry dotdot_entry;
+                err = drive_read(fat_cluster_offset(entry_get_first_cluster(&src_entry)) + sizeof(DirEntry), sizeof(DirEntry), &dotdot_entry);
+                if (err)
+                    goto move_fail;
+                // Verify entry is actually the .. entry
+                if (memcmp(&dotdot_entry.name, "..         ", 11) == 0) {
+                    // Change the first cluster of the entry
+                    u32 dest_parent_first_cluster = entry_get_first_cluster(&dest_parent_entry);
+                    entry_set_first_cluster(&dotdot_entry, dest_parent_first_cluster == root_cluster ? 0 : dest_parent_first_cluster);
+                    err = drive_write(fat_cluster_offset(entry_get_first_cluster(&src_entry)) + sizeof(DirEntry), sizeof(DirEntry), &dotdot_entry);
+                    if (err)
+                        goto move_fail;
+                }
+            }
             free(msg_data);
             message_reply(msg, NULL, FLAG_FREE_MESSAGE);
             break;
