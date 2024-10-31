@@ -537,7 +537,7 @@ typedef struct DirReadState {
 } DirReadState;
 
 typedef struct DirEntryLocation {
-    u32 main_entry_offset;
+    u64 main_entry_offset;
     u32 first_entry_cluster;
     u32 first_entry_index;
     u32 entry_count;
@@ -890,7 +890,7 @@ static ShortNameConvLoss convert_to_short_name(const u8 *long_name, size_t long_
 
 // Create an empty file or directory with a given name in a directory
 // The metadata and first cluster will be taken from the provided entry.
-static err_t create_dir_entry(u32 parent_first_cluster, const u8 *name, size_t name_length, DirEntry *entry, u32 src_entry_offset) {
+static err_t create_dir_entry(u32 parent_first_cluster, const u8 *name, size_t name_length, DirEntry *entry, u64 src_entry_offset) {
     err_t err;
     strip_filename(&name, &name_length);
     // Fail if a different file with this name already exists
@@ -1074,25 +1074,25 @@ exit:
 }
 
 // Delete a file entry at a given location, replacing its entries with unallocated ones
-static err_t delete_file_entry(DirEntryLocation location) {
+static err_t delete_file_entry(const DirEntryLocation *location) {
     err_t err;
-    u32 cluster = location.first_entry_cluster;
+    u32 cluster = location->first_entry_cluster;
     // If all entries fit in one cluster clear them with one call
-    if (location.first_entry_index + location.entry_count <= cluster_size / sizeof(DirEntry))
-        return drive_write(fat_cluster_offset(cluster) + location.first_entry_index * sizeof(DirEntry), location.entry_count * sizeof(DirEntry), empty_dir_entries);
+    if (location->first_entry_index + location->entry_count <= cluster_size / sizeof(DirEntry))
+        return drive_write(fat_cluster_offset(cluster) + location->first_entry_index * sizeof(DirEntry), location->entry_count * sizeof(DirEntry), empty_dir_entries);
     // Clear entries from first cluster
-    err = drive_write(fat_cluster_offset(cluster) + location.first_entry_index * sizeof(DirEntry), cluster_size - location.first_entry_index * sizeof(DirEntry), empty_dir_entries);
+    err = drive_write(fat_cluster_offset(cluster) + location->first_entry_index * sizeof(DirEntry), cluster_size - location->first_entry_index * sizeof(DirEntry), empty_dir_entries);
     if (err)
         return err;
     // Clear remaining clusters
-    u32 entries_cleared = cluster_size / sizeof(DirEntry) - location.first_entry_index;
+    u32 entries_cleared = cluster_size / sizeof(DirEntry) - location->first_entry_index;
     while (1) {
         err = fat_read_entry_expect_allocated(cluster, &cluster);
         if (err)
             return err;
         // If this is the final cluster, clear its beginning and return
-        if (entries_cleared + cluster_size / sizeof(DirEntry) >= location.entry_count)
-            return drive_write(fat_cluster_offset(cluster), (location.entry_count - entries_cleared) * sizeof(DirEntry), empty_dir_entries);
+        if (entries_cleared + cluster_size / sizeof(DirEntry) >= location->entry_count)
+            return drive_write(fat_cluster_offset(cluster), (location->entry_count - entries_cleared) * sizeof(DirEntry), empty_dir_entries);
         // Otherwise, clear entire cluster
         err = drive_write(fat_cluster_offset(cluster), cluster_size, empty_dir_entries);
         if (err)
@@ -1109,7 +1109,7 @@ static err_t entry_from_path(const u8 *path, size_t path_length, DirEntry *entry
         *entry_ptr = root_dir_entry;
         if (location_ptr != NULL)
             *location_ptr = (DirEntryLocation){
-                .main_entry_offset = UINT32_MAX,
+                .main_entry_offset = UINT64_MAX,
                 .first_entry_cluster = UINT32_MAX,
                 .first_entry_index = 0,
                 .entry_count = 0,
@@ -1236,7 +1236,7 @@ static err_t entry_from_path_msg(handle_t msg, DirEntry *entry, DirEntryLocation
 
 typedef struct OpenFile {
     DirEntry entry;
-    u32 entry_offset;
+    u64 entry_offset;
 } OpenFile;
 
 void main(void) {
@@ -1373,7 +1373,7 @@ create_fail:
             err = entry_from_path_msg(msg, &entry, &location);
             if (err)
                 goto loop_fail;
-            err = delete_file_entry(location);
+            err = delete_file_entry(&location);
             if (err)
                 goto loop_fail;
             err = free_clusters(entry_get_first_cluster(&entry));
@@ -1420,7 +1420,7 @@ create_fail:
             if (err)
                 goto move_fail;
             // Remove source entry
-            err = delete_file_entry(src_location);
+            err = delete_file_entry(&src_location);
             if (err)
                 goto move_fail;
             // If the moved file is a directory, change its .. entry to point at the new parent
