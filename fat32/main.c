@@ -890,14 +890,15 @@ static ShortNameConvLoss convert_to_short_name(const u8 *long_name, size_t long_
 
 // Create an empty file or directory with a given name in a directory
 // The metadata and first cluster will be taken from the provided entry.
-static err_t create_dir_entry(u32 parent_first_cluster, const u8 *name, size_t name_length, DirEntry *entry) {
+static err_t create_dir_entry(u32 parent_first_cluster, const u8 *name, size_t name_length, DirEntry *entry, u32 src_entry_offset) {
     err_t err;
     strip_filename(&name, &name_length);
-    // Check if file with this name already exists
-    err = find_entry_in_dir(parent_first_cluster, name, name_length, NULL, NULL);
-    if (err == 0)
+    // Fail if a different file with this name already exists
+    DirEntryLocation found_entry_location;
+    err = find_entry_in_dir(parent_first_cluster, name, name_length, NULL, &found_entry_location);
+    if (err == 0 && found_entry_location.main_entry_offset != src_entry_offset)
         return ERR_FILE_EXISTS;
-    else if (err != ERR_DOES_NOT_EXIST)
+    if (err != 0 && err != ERR_DOES_NOT_EXIST)
         return err;
     // Check if name is a valid long file name
     if (name_length > 255)
@@ -1353,7 +1354,7 @@ void main(void) {
                 entry_set_first_cluster(&entry, dir_first_cluster);
                 entry.attr = DIR_ENTRY_ATTR_DIRECTORY;
             }
-            err = create_dir_entry(entry_get_first_cluster(&parent_entry), path + filename_start, path_length - filename_start, &entry);
+            err = create_dir_entry(entry_get_first_cluster(&parent_entry), path + filename_start, path_length - filename_start, &entry, 0);
             if (err) {
                 if (directory)
                     free_clusters(entry_get_first_cluster(&entry));
@@ -1415,7 +1416,7 @@ create_fail:
             if (err)
                 goto move_fail;
             // Create new entry in destination folder
-            err = create_dir_entry(entry_get_first_cluster(&dest_parent_entry), dest_path + dest_filename_start, dest_path_length - dest_filename_start, &src_entry);
+            err = create_dir_entry(entry_get_first_cluster(&dest_parent_entry), dest_path + dest_filename_start, dest_path_length - dest_filename_start, &src_entry, src_location.main_entry_offset);
             if (err)
                 goto move_fail;
             // Remove source entry
