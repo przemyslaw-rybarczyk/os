@@ -1102,8 +1102,10 @@ static err_t delete_file_entry(const DirEntryLocation *location) {
 }
 
 // Get a directory entry for a file given its path
-// If the requested folder is the root directory, a dummy entry with an offset of UINT32_MAX will be returned.
-static err_t entry_from_path(const u8 *path, size_t path_length, DirEntry *entry_ptr, DirEntryLocation *location_ptr) {
+// If the requested directory is the root directory, a dummy entry will be returned.
+// If any directory along the path is the blocked directory, ERR_MOVE_INTO_ITSELF is returned.
+// This property is used to block an operation that would move a directory into itself.
+static err_t entry_from_path(const u8 *path, size_t path_length, DirEntry *entry_ptr, DirEntryLocation *location_ptr, u32 blocked_directory) {
     // Return root directory if string is empty
     if (path_length == 0) {
         *entry_ptr = root_dir_entry;
@@ -1132,6 +1134,8 @@ static err_t entry_from_path(const u8 *path, size_t path_length, DirEntry *entry
         err = find_entry_in_dir(entry_get_first_cluster(&entry), path + name_start, name_end - name_start, &entry, &location);
         if (err)
             return err;
+        if ((entry.attr & DIR_ENTRY_ATTR_DIRECTORY) && entry_get_first_cluster(&entry) == blocked_directory)
+            return ERR_MOVE_INTO_ITSELF;
         // Exit if we're at the end of the path, otherwise start the next component after the separator
         if (name_end >= path_length)
             break;
@@ -1202,7 +1206,7 @@ static err_t get_message_data(handle_t msg, u8 **data_ptr, size_t *path_length_p
 
 // Split a path into a filename and the entry of the directory containing it
 // Returns ERR_FILE_EXISTS if provided path points to root.
-static err_t split_destination(const u8 *path, size_t path_length, DirEntry *parent_entry_ptr, size_t *filename_start_ptr) {
+static err_t split_destination(const u8 *path, size_t path_length, DirEntry *parent_entry_ptr, size_t *filename_start_ptr, u32 blocked_directory) {
     err_t err;
     // Fail if path points to root
     if (path_length == 0)
@@ -1215,7 +1219,7 @@ static err_t split_destination(const u8 *path, size_t path_length, DirEntry *par
             break;
     }
     // Get entry of parent
-    err = entry_from_path(path, parent_path_length, parent_entry_ptr, NULL);
+    err = entry_from_path(path, parent_path_length, parent_entry_ptr, NULL, blocked_directory);
     if (err)
         return err;
     *filename_start_ptr = parent_path_length == 0 && path[0] != '/' ? 0 : parent_path_length + 1;
@@ -1229,7 +1233,7 @@ static err_t entry_from_path_msg(handle_t msg, DirEntry *entry, DirEntryLocation
     err = get_message_data(msg, &path, &path_length);
     if (err)
         return err;
-    err = entry_from_path(path, path_length, entry, location);
+    err = entry_from_path(path, path_length, entry, location, 0);
     free(path);
     return err;
 }
@@ -1340,7 +1344,7 @@ void main(void) {
             // Split destination
             DirEntry parent_entry;
             size_t filename_start;
-            err = split_destination(path, path_length, &parent_entry, &filename_start);
+            err = split_destination(path, path_length, &parent_entry, &filename_start, 0);
             if (err)
                 goto create_fail;
             // Create the file
@@ -1403,16 +1407,16 @@ create_fail:
             u8 *src_path = msg_data + sizeof(size_t);
             u8 *dest_path = src_path + src_path_length;
             size_t dest_path_length = msg_data_length - sizeof(size_t) - src_path_length;
-            // Split destination
-            DirEntry dest_parent_entry;
-            size_t dest_filename_start;
-            err = split_destination(dest_path, dest_path_length, &dest_parent_entry, &dest_filename_start);
-            if (err)
-                goto move_fail;
             // Get source entry
             DirEntry src_entry;
             DirEntryLocation src_location;
-            err = entry_from_path(src_path, src_path_length, &src_entry, &src_location);
+            err = entry_from_path(src_path, src_path_length, &src_entry, &src_location, 0);
+            if (err)
+                goto move_fail;
+            // Split destination
+            DirEntry dest_parent_entry;
+            size_t dest_filename_start;
+            err = split_destination(dest_path, dest_path_length, &dest_parent_entry, &dest_filename_start, entry_get_first_cluster(&src_entry));
             if (err)
                 goto move_fail;
             // Create new entry in destination folder
