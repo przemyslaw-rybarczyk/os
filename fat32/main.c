@@ -1299,7 +1299,7 @@ void main(void) {
                 goto loop_fail;
             FileMetadata stat;
             stat_from_entry(&entry, &stat);
-            message_reply(msg, &(SendMessage){1, &(SendMessageData){sizeof(FileMetadata), &stat}, 0, NULL}, FLAG_FREE_MESSAGE);
+            message_reply(msg, &(SendMessage){1, &(SendMessageData){sizeof(FileMetadata), &stat}, 0, NULL}, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
             break;
         }
         case TAG_LIST: {
@@ -1316,7 +1316,7 @@ void main(void) {
             err = get_dir_list(entry_get_first_cluster(&entry), &file_list, &file_list_length);
             if (err)
                 goto loop_fail;
-            message_reply(msg, &(SendMessage){1, &(SendMessageData){file_list_length, file_list}, 0, NULL}, FLAG_FREE_MESSAGE);
+            message_reply(msg, &(SendMessage){1, &(SendMessageData){file_list_length, file_list}, 0, NULL}, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
             free(file_list);
             break;
         }
@@ -1364,7 +1364,7 @@ void main(void) {
                     free_clusters(entry_get_first_cluster(&entry));
                 goto create_fail;
             }
-            message_reply(msg, NULL, FLAG_FREE_MESSAGE);
+            message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
             free(msg_data);
             break;
 create_fail:
@@ -1383,7 +1383,7 @@ create_fail:
             err = free_clusters(entry_get_first_cluster(&entry));
             if (err)
                 goto loop_fail;
-            message_reply(msg, NULL, FLAG_FREE_MESSAGE);
+            message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
             break;
         }
         case TAG_MOVE: {
@@ -1445,7 +1445,7 @@ create_fail:
                 }
             }
             free(msg_data);
-            message_reply(msg, NULL, FLAG_FREE_MESSAGE);
+            message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
             break;
 move_fail:
             free(msg_data);
@@ -1479,7 +1479,7 @@ move_fail:
             mqueue_add_channel(mqueue, file_read_out, (MessageTag){TAG_READ, (uintptr_t)open_file});
             mqueue_add_channel(mqueue, file_write_out, (MessageTag){TAG_WRITE, (uintptr_t)open_file});
             mqueue_add_channel(mqueue, file_resize_out, (MessageTag){TAG_RESIZE, (uintptr_t)open_file});
-            message_reply(msg, &(SendMessage){0, NULL, 1, &(SendMessageHandles){3, (SendAttachedHandle[]){{0, file_read_in}, {0, file_write_in}, {0, file_resize_in}}}}, FLAG_FREE_MESSAGE);
+            message_reply(msg, &(SendMessage){0, NULL, 1, &(SendMessageHandles){3, (SendAttachedHandle[]){{0, file_read_in}, {0, file_write_in}, {0, file_resize_in}}}}, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
             break;
 file_resize_alloc_fail:
             handle_free(file_write_in);
@@ -1504,9 +1504,7 @@ file_read_alloc_fail:
             }
             // Special case for zero length
             if (range.length == 0) {
-                err = message_reply(msg, NULL, FLAG_FREE_MESSAGE);
-                if (err)
-                    goto loop_fail;
+                message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
                 break;
             }
             u8 *data_buf = malloc(range.length);
@@ -1517,9 +1515,7 @@ file_read_alloc_fail:
             err = read_file(entry_get_first_cluster(&open_file->entry), range.offset, range.length, data_buf);
             if (err)
                 goto loop_fail;
-            err = message_reply(msg, &(SendMessage){1, &(SendMessageData){range.length, data_buf}, 0, NULL}, FLAG_FREE_MESSAGE);
-            if (err)
-                goto loop_fail;
+            message_reply(msg, &(SendMessage){1, &(SendMessageData){range.length, data_buf}, 0, NULL}, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
             break;
         }
         case TAG_WRITE: {
@@ -1538,9 +1534,7 @@ file_read_alloc_fail:
             }
             // Special case for zero length
             if (length == 0) {
-                err = message_reply(msg, NULL, FLAG_FREE_MESSAGE);
-                if (err)
-                    goto loop_fail;
+                message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
                 break;
             }
             u8 *data_buf = malloc(length);
@@ -1558,9 +1552,7 @@ file_read_alloc_fail:
             err = write_file(entry_get_first_cluster(&open_file->entry), offset, length, data_buf);
             if (err)
                 goto loop_fail;
-            err = message_reply(msg, NULL, FLAG_FREE_MESSAGE);
-            if (err)
-                goto loop_fail;
+            message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
             break;
         }
         case TAG_RESIZE: {
@@ -1576,9 +1568,7 @@ file_read_alloc_fail:
             err = resize_file(&open_file->entry, open_file->entry_offset, new_size, true);
             if (err)
                 goto loop_fail;
-            err = message_reply(msg, NULL, FLAG_FREE_MESSAGE);
-            if (err)
-                goto loop_fail;
+            message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
         }
         }
         continue;
