@@ -382,7 +382,7 @@ static err_t allocate_clusters(u32 target_count, u32 *first_cluster_ptr, bool cl
 
 // Resize a file to a given size
 // If `clear` is set, the data added at the end will be zeroed out.
-static err_t resize_file(DirEntry *entry, u64 entry_offset, u32 new_size, bool clear) {
+static err_t resize_file(DirEntry *entry, u32 new_size, bool clear) {
     err_t err;
     u32 first_cluster = entry_get_first_cluster(entry);
     u32 old_size = entry->file_size;
@@ -450,8 +450,7 @@ static err_t resize_file(DirEntry *entry, u64 entry_offset, u32 new_size, bool c
         cluster = next_cluster;
     }
 end:
-    // Write back new directory entry
-    return drive_write(entry_offset, sizeof(DirEntry), entry);
+    return 0;
 }
 
 // Table of characters allowed in short and long file names - bit is set if character allowed
@@ -888,6 +887,70 @@ static ShortNameConvLoss convert_to_short_name(const u8 *long_name, size_t long_
     return lossy ? SHORT_NAME_CONV_LOSSY : recased ? SHORT_NAME_CONV_RECASED : SHORT_NAME_CONV_EXACT;
 }
 
+// Convert timestamp from format used in directory entries to system format
+static i64 timestamp_from_fat_format(u16 date, u16 time, u8 time_tens) {
+    struct tm tm = (struct tm){
+        .tm_sec = (time & 0x1F) * 2,
+        .tm_min = (time >> 5) & 0x3F,
+        .tm_hour = time >> 11,
+        .tm_mday = date & 0x1F,
+        .tm_mon = ((date >> 5) & 0x0F) - 1,
+        .tm_year = (date >> 9) + 80,
+        .tm_isdst = -1,
+    };
+    i64 t = (i64)mktime_gmt(&tm) * TICKS_PER_SEC + time_tens * (TICKS_PER_SEC / 100);
+    return t;
+}
+
+// Get FileMetadata struct for a directory entry
+static err_t stat_from_entry(const DirEntry *entry, FileMetadata *stat) {
+    memset(stat, 0, sizeof(FileMetadata));
+    stat->size = entry->file_size;
+    stat->create_time = timestamp_from_fat_format(entry->creation_date, entry->creation_time, entry->creation_time_tens);
+    stat->modify_time = timestamp_from_fat_format(entry->write_date, entry->write_time, 0);
+    stat->access_time = timestamp_from_fat_format(entry->access_date, 0, 0);
+    return 0;
+}
+
+typedef enum TimestampUpdateTime {
+    // Update access time
+    UPDATE_READ,
+    // Update access and modification time
+    UPDATE_WRITE,
+    // Update access, modification and creation time
+    UPDATE_CREATE,
+} TimestampUpdateTime;
+
+// Set timestamps in a directory entry
+static err_t set_entry_timestamps(DirEntry *entry, i64 timestamp, TimestampUpdateTime type) {
+    time_t t = time_t_from_timestamp(timestamp);
+    u8 time_tens = (timestamp - (i64)t * TICKS_PER_SEC) / (TICKS_PER_SEC / 100);
+    struct tm tm;
+    if (!gmtime_r(&t, &tm))
+        return ERR_OTHER;
+    u16 year;
+    if (tm.tm_year < 80)
+        year = 0;
+    else if (tm.tm_year > 80 + 127)
+        year = 127;
+    else
+        year = tm.tm_year - 80;
+    u16 date = year << 9 | (u16)(tm.tm_mon + 1) << 5 | (u16)tm.tm_mday;
+    u16 time = (u16)tm.tm_hour << 11 | (u16)tm.tm_min << 5 | (u16)tm.tm_sec / 2;
+    switch (type) {
+    case UPDATE_CREATE:
+        entry->creation_date = date;
+        entry->creation_time = time;
+        entry->creation_time_tens = time_tens;
+    case UPDATE_WRITE:
+        entry->write_date = date;
+        entry->write_time = time;
+    case UPDATE_READ:
+        entry->access_date = date;
+    }
+    return 0;
+}
+
 // Create an empty file or directory with a given name in a directory
 // The metadata and first cluster will be taken from the provided entry.
 static err_t create_dir_entry(u32 parent_first_cluster, const u8 *name, size_t name_length, DirEntry *entry, u64 src_entry_offset) {
@@ -991,7 +1054,7 @@ numeric_tail_found:
 }
 
 // Allocate the initial first cluster for a directory along with . and .. entries
-static err_t allocate_first_dir_cluster(u32 *dir_first_cluster_ptr, u32 parent_first_cluster) {
+static err_t allocate_first_dir_cluster(u32 *dir_first_cluster_ptr, u32 parent_first_cluster, i64 time) {
     err_t err;
     // Allocate first cluster
     u32 dir_first_cluster;
@@ -1004,6 +1067,9 @@ static err_t allocate_first_dir_cluster(u32 *dir_first_cluster_ptr, u32 parent_f
     memset(entries[0].name, ' ', 11);
     entries[0].name[0] = '.';
     entries[0].attr = DIR_ENTRY_ATTR_DIRECTORY;
+    err = set_entry_timestamps(&entries[0], time, UPDATE_CREATE);
+    if (err)
+        return err;
     memcpy(&entries[1], &entries[0], sizeof(DirEntry));
     entries[1].name[1] = '.';
     entry_set_first_cluster(&entries[0], dir_first_cluster);
@@ -1141,36 +1207,21 @@ static err_t entry_from_path(const u8 *path, size_t path_length, DirEntry *entry
             break;
         name_start = name_end + 1;
     };
-    if (entry_ptr != NULL)
-        *entry_ptr = entry;
+    *entry_ptr = entry;
     if (location_ptr != NULL)
         *location_ptr = location;
     return 0;
 }
 
-// Convert timestamp from format used in directory entries to system format
-static i64 timestamp_from_fat_format(u16 date, u16 time, u8 time_tens) {
-    struct tm tm = (struct tm){
-        .tm_sec = (time & 0x1F) * 2,
-        .tm_min = (time >> 5) & 0x3F,
-        .tm_hour = time >> 11,
-        .tm_mday = date & 0x1F,
-        .tm_mon = ((date >> 5) & 0x0F) - 1,
-        .tm_year = (date >> 9) + 80,
-        .tm_isdst = -1,
-    };
-    time_t t = (i64)mktime_gmt(&tm) * TICKS_PER_SEC + time_tens * (TICKS_PER_SEC / 100);
-    return t;
-}
-
-// Get FileMetadata struct for a directory entry
-static err_t stat_from_entry(const DirEntry *entry, FileMetadata *stat) {
-    memset(stat, 0, sizeof(FileMetadata));
-    stat->size = entry->file_size;
-    stat->create_time = timestamp_from_fat_format(entry->creation_date, entry->creation_time, entry->creation_time_tens);
-    stat->modify_time = timestamp_from_fat_format(entry->write_date, entry->write_time, 0);
-    stat->access_time = timestamp_from_fat_format(entry->access_date, 0, 0);
-    return 0;
+// Write back entry with requested timestamps set to current time
+static err_t write_back_entry(DirEntry *entry, u64 entry_offset, TimestampUpdateTime type) {
+    err_t err;
+    i64 time;
+    time_get(&time);
+    err = set_entry_timestamps(entry, time, type);
+    if (err)
+        return err;
+    return drive_write(entry_offset, sizeof(DirEntry), entry);
 }
 
 static BPB bpb_buf;
@@ -1206,7 +1257,7 @@ static err_t get_message_data(handle_t msg, u8 **data_ptr, size_t *path_length_p
 
 // Split a path into a filename and the entry of the directory containing it
 // Returns ERR_FILE_EXISTS if provided path points to root.
-static err_t split_destination(const u8 *path, size_t path_length, DirEntry *parent_entry_ptr, size_t *filename_start_ptr, u32 blocked_directory) {
+static err_t split_path(const u8 *path, size_t path_length, DirEntry *parent_entry_ptr, DirEntryLocation *parent_entry_location_ptr, size_t *filename_start_ptr, u32 blocked_directory) {
     err_t err;
     // Fail if path points to root
     if (path_length == 0)
@@ -1219,7 +1270,7 @@ static err_t split_destination(const u8 *path, size_t path_length, DirEntry *par
             break;
     }
     // Get entry of parent
-    err = entry_from_path(path, parent_path_length, parent_entry_ptr, NULL, blocked_directory);
+    err = entry_from_path(path, parent_path_length, parent_entry_ptr, parent_entry_location_ptr, blocked_directory);
     if (err)
         return err;
     *filename_start_ptr = parent_path_length == 0 && path[0] != '/' ? 0 : parent_path_length + 1;
@@ -1304,7 +1355,8 @@ void main(void) {
         }
         case TAG_LIST: {
             DirEntry entry;
-            err = entry_from_path_msg(msg, &entry, NULL);
+            DirEntryLocation location;
+            err = entry_from_path_msg(msg, &entry, &location);
             if (err)
                 goto loop_fail;
             size_t file_list_length;
@@ -1316,6 +1368,11 @@ void main(void) {
             err = get_dir_list(entry_get_first_cluster(&entry), &file_list, &file_list_length);
             if (err)
                 goto loop_fail;
+            err = write_back_entry(&entry, location.main_entry_offset, UPDATE_READ);
+            if (err) {
+                free(file_list);
+                goto loop_fail;
+            }
             message_reply(msg, &(SendMessage){1, &(SendMessageData){file_list_length, file_list}, 0, NULL}, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
             free(file_list);
             break;
@@ -1343,27 +1400,37 @@ void main(void) {
             size_t path_length = msg_data_length - sizeof(u64);
             // Split destination
             DirEntry parent_entry;
+            DirEntryLocation parent_entry_location;
             size_t filename_start;
-            err = split_destination(path, path_length, &parent_entry, &filename_start, 0);
+            err = split_path(path, path_length, &parent_entry, &parent_entry_location, &filename_start, 0);
             if (err)
                 goto create_fail;
+            // Get current time
+            i64 time;
+            time_get(&time);
             // Create the file
             DirEntry entry;
             memset(&entry, 0, sizeof(DirEntry));
             if (directory) {
                 u32 dir_first_cluster;
-                err = allocate_first_dir_cluster(&dir_first_cluster, entry_get_first_cluster(&parent_entry));
+                err = allocate_first_dir_cluster(&dir_first_cluster, entry_get_first_cluster(&parent_entry), time);
                 if (err)
                     goto create_fail;
                 entry_set_first_cluster(&entry, dir_first_cluster);
                 entry.attr = DIR_ENTRY_ATTR_DIRECTORY;
             }
+            err = set_entry_timestamps(&entry, time, UPDATE_CREATE);
+            if (err)
+                goto create_fail;
             err = create_dir_entry(entry_get_first_cluster(&parent_entry), path + filename_start, path_length - filename_start, &entry, 0);
             if (err) {
                 if (directory)
                     free_clusters(entry_get_first_cluster(&entry));
                 goto create_fail;
             }
+            err = write_back_entry(&parent_entry, parent_entry_location.main_entry_offset, UPDATE_WRITE);
+            if (err)
+                goto create_fail;
             message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
             free(msg_data);
             break;
@@ -1372,19 +1439,43 @@ create_fail:
             goto loop_fail;
         }
         case TAG_DELETE: {
+            // Read path from message
+            u8 *path;
+            size_t path_length;
+            err = get_message_data(msg, &path, &path_length);
+            if (err)
+                goto loop_fail;
+            // Split path
+            DirEntry parent_entry;
+            DirEntryLocation parent_entry_location;
+            size_t filename_start;
+            err = split_path(path, path_length, &parent_entry, &parent_entry_location, &filename_start, 0);
+            if (err)
+                goto delete_fail;
+            // Get file entry
             DirEntry entry;
             DirEntryLocation location;
-            err = entry_from_path_msg(msg, &entry, &location);
+            err = find_entry_in_dir(entry_get_first_cluster(&parent_entry), path + filename_start, path_length - filename_start, &entry, &location);
             if (err)
-                goto loop_fail;
+                goto delete_fail;
+            // Delete entry
             err = delete_file_entry(&location);
             if (err)
-                goto loop_fail;
+                goto delete_fail;
+            // Free contents
             err = free_clusters(entry_get_first_cluster(&entry));
             if (err)
-                goto loop_fail;
+                goto delete_fail;
+            // Update parent entry
+            err = write_back_entry(&parent_entry, parent_entry_location.main_entry_offset, UPDATE_WRITE);
+            if (err)
+                goto delete_fail;
             message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
+            free(path);
             break;
+delete_fail:
+            free(path);
+            goto loop_fail;
         }
         case TAG_MOVE: {
             // Read message
@@ -1407,16 +1498,24 @@ create_fail:
             u8 *src_path = msg_data + sizeof(size_t);
             u8 *dest_path = src_path + src_path_length;
             size_t dest_path_length = msg_data_length - sizeof(size_t) - src_path_length;
+            // Split source
+            DirEntry src_parent_entry;
+            DirEntryLocation src_parent_entry_location;
+            size_t src_filename_start;
+            err = split_path(src_path, src_path_length, &src_parent_entry, &src_parent_entry_location, &src_filename_start, 0);
+            if (err)
+                goto move_fail;
             // Get source entry
             DirEntry src_entry;
             DirEntryLocation src_location;
-            err = entry_from_path(src_path, src_path_length, &src_entry, &src_location, 0);
+            err = find_entry_in_dir(entry_get_first_cluster(&src_parent_entry), src_path + src_filename_start, src_path_length - src_filename_start, &src_entry, &src_location);
             if (err)
                 goto move_fail;
             // Split destination
             DirEntry dest_parent_entry;
+            DirEntryLocation dest_parent_entry_location;
             size_t dest_filename_start;
-            err = split_destination(dest_path, dest_path_length, &dest_parent_entry, &dest_filename_start, entry_get_first_cluster(&src_entry));
+            err = split_path(dest_path, dest_path_length, &dest_parent_entry, &dest_parent_entry_location, &dest_filename_start, entry_get_first_cluster(&src_entry));
             if (err)
                 goto move_fail;
             // Create new entry in destination folder
@@ -1444,6 +1543,13 @@ create_fail:
                         goto move_fail;
                 }
             }
+            // Update old and new parent entry
+            err = write_back_entry(&src_parent_entry, src_parent_entry_location.main_entry_offset, UPDATE_WRITE);
+            if (err)
+                goto move_fail;
+            err = write_back_entry(&dest_parent_entry, dest_parent_entry_location.main_entry_offset, UPDATE_WRITE);
+            if (err)
+                goto move_fail;
             free(msg_data);
             message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
             break;
@@ -1502,17 +1608,19 @@ file_read_alloc_fail:
                 err = ERR_EOF;
                 goto loop_fail;
             }
-            // Special case for zero length
-            if (range.length == 0) {
-                message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
-                break;
-            }
+            // Skip reading if length is zero
+            if (range.length == 0)
+                goto skip_read;
             u8 *data_buf = malloc(range.length);
             if (data_buf == NULL) {
                 err = ERR_NO_MEMORY;
                 goto loop_fail;
             }
             err = read_file(entry_get_first_cluster(&open_file->entry), range.offset, range.length, data_buf);
+            if (err)
+                goto loop_fail;
+skip_read:
+            err = write_back_entry(&open_file->entry, open_file->entry_offset, UPDATE_READ);
             if (err)
                 goto loop_fail;
             message_reply(msg, &(SendMessage){1, &(SendMessageData){range.length, data_buf}, 0, NULL}, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
@@ -1532,11 +1640,9 @@ file_read_alloc_fail:
                 err = ERR_EOF;
                 goto loop_fail;
             }
-            // Special case for zero length
-            if (length == 0) {
-                message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
-                break;
-            }
+            // Skip writing if length is zero
+            if (length == 0)
+                goto skip_write;
             u8 *data_buf = malloc(length);
             if (data_buf == NULL) {
                 err = ERR_NO_MEMORY;
@@ -1544,12 +1650,16 @@ file_read_alloc_fail:
             }
             // Resize if writing past end
             if (offset + length > open_file->entry.file_size) {
-                err = resize_file(&open_file->entry, open_file->entry_offset, offset + length, false);
+                err = resize_file(&open_file->entry, offset + length, false);
                 if (err)
                     goto loop_fail;
             }
             message_read(msg, &(ReceiveMessage){length, data_buf, 0, NULL}, &(MessageLength){sizeof(u64), 0}, NULL, 0, 0);
             err = write_file(entry_get_first_cluster(&open_file->entry), offset, length, data_buf);
+            if (err)
+                goto loop_fail;
+skip_write:
+            err = write_back_entry(&open_file->entry, open_file->entry_offset, UPDATE_WRITE);
             if (err)
                 goto loop_fail;
             message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
@@ -1565,7 +1675,10 @@ file_read_alloc_fail:
                 err = ERR_NO_SPACE;
                 goto loop_fail;
             }
-            err = resize_file(&open_file->entry, open_file->entry_offset, new_size, true);
+            err = resize_file(&open_file->entry, new_size, true);
+            if (err)
+                goto loop_fail;
+            err = write_back_entry(&open_file->entry, open_file->entry_offset, UPDATE_WRITE);
             if (err)
                 goto loop_fail;
             message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
