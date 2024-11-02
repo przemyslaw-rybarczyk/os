@@ -166,8 +166,8 @@ static void timezone_shift(struct tm *tm, int shift) {
             tm->tm_wday = (tm->tm_wday + 1) % 7;
         }
         // Handle month and year overflow
-        if (tm->tm_mday > month_lengths[tm->tm_mon]) {
-            tm->tm_mday = 0;
+        if (tm->tm_mday > month_lengths[tm->tm_mon] + (tm->tm_mon == 1 && year_is_leap(tm->tm_year))) {
+            tm->tm_mday = 1;
             tm->tm_mon++;
             if (tm->tm_mon == 12) {
                 tm->tm_yday = 0;
