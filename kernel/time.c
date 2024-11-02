@@ -53,7 +53,7 @@ i64 convert_time_from_rtc(struct rtc_time rtc_time, u8 status_b) {
     i64 day =
         year * 365 + (year + 1) / 4
         + month_offset[rtc_time.month - 1]
-        + ((year % 4) == 0 && rtc_time.month > 2)
+        + ((year % 4) == 2 && rtc_time.month > 2)
         + rtc_time.day - 1;
     // Seconds since epoch
     i64 second = rtc_time.second + 60 * (rtc_time.minute + 60 * (rtc_time.hour + 24 * day));
