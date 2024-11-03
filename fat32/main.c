@@ -1256,12 +1256,12 @@ static err_t get_message_data(handle_t msg, u8 **data_ptr, size_t *path_length_p
 }
 
 // Split a path into a filename and the entry of the directory containing it
-// Returns ERR_FILE_EXISTS if provided path points to root.
+// Returns ERR_INVALID_OPERATION if provided path points to root.
 static err_t split_path(const u8 *path, size_t path_length, DirEntry *parent_entry_ptr, DirEntryLocation *parent_entry_location_ptr, size_t *filename_start_ptr, u32 blocked_directory) {
     err_t err;
     // Fail if path points to root
     if (path_length == 0)
-        return ERR_FILE_EXISTS;
+        return ERR_INVALID_OPERATION;
     // Find last slash in path
     size_t parent_path_length = path_length;
     while (parent_path_length > 0) {
