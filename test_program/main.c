@@ -13,8 +13,7 @@
 #include <zr/syscalls.h>
 #include <zr/time.h>
 
-static char src_path_buf[256];
-static char dest_path_buf[256];
+static char path_buf[256];
 
 void main(void) {
     err_t err;
@@ -109,26 +108,26 @@ void main(void) {
     if (err)
         return;
     while (1) {
-        printf("Source: \n");
-        if (scanf("%255[^\n]", src_path_buf) != 1)
+        printf("Path: \n");
+        if (scanf("%255[^\n]", path_buf) != 1)
             return;
-        printf("Destination: \n");
-        if (scanf("%255[^\n]", dest_path_buf) != 1)
-            return;
-        handle_t reply;
-        err = channel_call(file_move_in, &(SendMessage){
-            3, (SendMessageData[]){
-                {sizeof(size_t), &(size_t){strlen(src_path_buf)}},
-                {strlen(src_path_buf), src_path_buf},
-                {strlen(dest_path_buf), dest_path_buf}},
-            0, NULL}, &reply);
-        if (err == ERR_FILE_EXISTS) {
-            printf("Error when moving: file already exists\n");
-            continue;
-        } else if (err) {
-            printf("Error when moving: %zX\n", err);
+        ReceiveAttachedHandle received_handles[4];
+        for (int i = 0; i < 4; i++)
+            received_handles[i].type = ATTACHED_HANDLE_TYPE_CHANNEL_SEND;
+        err = channel_call_read(file_open_in, &(SendMessage){
+            1, (SendMessageData[]){
+                {strlen(path_buf), path_buf}},
+            0, NULL}, &(ReceiveMessage){0, NULL, 4, received_handles}, NULL);
+        if (err) {
+            printf("Error when opening: %zX\n", err);
             continue;
         }
-        printf("File moved successfully\n");
+        u64 file_size;
+        err = channel_call_read(received_handles[2].handle_i, NULL, &(ReceiveMessage){sizeof(u64), &file_size, 0, NULL}, NULL);
+        if (err) {
+            printf("Error when getting file size: %zX\n", err);
+            continue;
+        }
+        printf("File size: %zX\n", file_size);
     }
 }

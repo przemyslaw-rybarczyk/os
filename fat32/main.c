@@ -1235,6 +1235,7 @@ typedef enum RequestTag {
     TAG_OPEN,
     TAG_READ,
     TAG_WRITE,
+    TAG_GET_SIZE,
     TAG_RESIZE,
 } RequestTag;
 
@@ -1541,6 +1542,10 @@ void main(void) {
             err = channel_create(&file_write_in, &file_write_out);
             if (err)
                 goto file_write_alloc_fail;
+            handle_t file_get_size_in, file_get_size_out;
+            err = channel_create(&file_get_size_in, &file_get_size_out);
+            if (err)
+                goto file_get_size_alloc_fail;
             handle_t file_resize_in, file_resize_out;
             err = channel_create(&file_resize_in, &file_resize_out);
             if (err)
@@ -1549,10 +1554,14 @@ void main(void) {
             open_file->entry_offset = location.main_entry_offset;
             mqueue_add_channel(mqueue, file_read_out, (MessageTag){TAG_READ, (uintptr_t)open_file});
             mqueue_add_channel(mqueue, file_write_out, (MessageTag){TAG_WRITE, (uintptr_t)open_file});
+            mqueue_add_channel(mqueue, file_get_size_out, (MessageTag){TAG_GET_SIZE, (uintptr_t)open_file});
             mqueue_add_channel(mqueue, file_resize_out, (MessageTag){TAG_RESIZE, (uintptr_t)open_file});
-            message_reply(msg, &(SendMessage){0, NULL, 1, &(SendMessageHandles){3, (SendAttachedHandle[]){{0, file_read_in}, {0, file_write_in}, {0, file_resize_in}}}}, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
+            message_reply(msg, &(SendMessage){0, NULL, 1, &(SendMessageHandles){4, (SendAttachedHandle[]){{0, file_read_in}, {0, file_write_in}, {0, file_get_size_in}, {0, file_resize_in}}}}, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
             break;
 file_resize_alloc_fail:
+            handle_free(file_get_size_in);
+            handle_free(file_get_size_out);
+file_get_size_alloc_fail:
             handle_free(file_write_in);
             handle_free(file_write_out);
 file_write_alloc_fail:
@@ -1627,6 +1636,15 @@ read_fail:
                 goto loop_fail;
             message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
             break;
+        }
+        case TAG_GET_SIZE: {
+            OpenFile *open_file = (OpenFile *)tag.data[1];
+            if (msg_length != 0) {
+                err = ERR_INVALID_ARG;
+                goto loop_fail;
+            }
+            u64 file_size = (u64)open_file->entry.file_size;
+            message_reply(msg, &(SendMessage){1, &(SendMessageData){sizeof(u64), &file_size}, 0, NULL}, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
         }
         case TAG_RESIZE: {
             OpenFile *open_file = (OpenFile *)tag.data[1];
