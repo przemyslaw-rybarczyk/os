@@ -1277,18 +1277,6 @@ static err_t split_path(const u8 *path, size_t path_length, DirEntry *parent_ent
     return 0;
 }
 
-static err_t entry_from_path_msg(handle_t msg, DirEntry *entry, DirEntryLocation *location) {
-    err_t err;
-    u8 *path;
-    size_t path_length;
-    err = get_message_data(msg, &path, &path_length);
-    if (err)
-        return err;
-    err = entry_from_path(path, path_length, entry, location, 0);
-    free(path);
-    return err;
-}
-
 typedef struct OpenFile {
     DirEntry entry;
     u64 entry_offset;
@@ -1339,13 +1327,20 @@ void main(void) {
     if (err)
         return;
     while (1) {
+        // Get message from queue
         handle_t msg;
         MessageTag tag;
         mqueue_receive(mqueue, &tag, &msg, TIMEOUT_NONE, 0);
+        // Read message
+        u8 *msg_data;
+        size_t msg_length;
+        err = get_message_data(msg, &msg_data, &msg_length);
+        if (err)
+            goto loop_fail_noalloc;
         switch (tag.data[0]) {
         case TAG_STAT: {
             DirEntry entry;
-            err = entry_from_path_msg(msg, &entry, NULL);
+            err = entry_from_path(msg_data, msg_length, &entry, NULL, 0);
             if (err)
                 goto loop_fail;
             FileMetadata stat;
@@ -1356,7 +1351,7 @@ void main(void) {
         case TAG_LIST: {
             DirEntry entry;
             DirEntryLocation location;
-            err = entry_from_path_msg(msg, &entry, &location);
+            err = entry_from_path(msg_data, msg_length, &entry, &location, 0);
             if (err)
                 goto loop_fail;
             size_t file_list_length;
@@ -1378,33 +1373,27 @@ void main(void) {
             break;
         }
         case TAG_CREATE: {
-            // Read message
-            u8 *msg_data;
-            size_t msg_data_length;
-            err = get_message_data(msg, &msg_data, &msg_data_length);
-            if (err)
-                goto loop_fail;
             // Get flags
-            if (msg_data_length < sizeof(u64)) {
+            if (msg_length < sizeof(u64)) {
                 err = ERR_INVALID_ARG;
-                goto create_fail;
+                goto loop_fail;
             }
             u64 flags = *(u64 *)msg_data;
             if (flags & ~FLAG_CREATE_DIR) {
                 err = ERR_INVALID_ARG;
-                goto create_fail;
+                goto loop_fail;
             }
             bool directory = flags & FLAG_CREATE_DIR;
             // Get path from message
             u8 *path = msg_data + sizeof(u64);
-            size_t path_length = msg_data_length - sizeof(u64);
+            size_t path_length = msg_length - sizeof(u64);
             // Split destination
             DirEntry parent_entry;
             DirEntryLocation parent_entry_location;
             size_t filename_start;
             err = split_path(path, path_length, &parent_entry, &parent_entry_location, &filename_start, 0);
             if (err)
-                goto create_fail;
+                goto loop_fail;
             // Get current time
             i64 time;
             time_get(&time);
@@ -1415,124 +1404,104 @@ void main(void) {
                 u32 dir_first_cluster;
                 err = allocate_first_dir_cluster(&dir_first_cluster, entry_get_first_cluster(&parent_entry), time);
                 if (err)
-                    goto create_fail;
+                    goto loop_fail;
                 entry_set_first_cluster(&entry, dir_first_cluster);
                 entry.attr = DIR_ENTRY_ATTR_DIRECTORY;
             }
             err = set_entry_timestamps(&entry, time, UPDATE_CREATE);
             if (err)
-                goto create_fail;
+                goto loop_fail;
             err = create_dir_entry(entry_get_first_cluster(&parent_entry), path + filename_start, path_length - filename_start, &entry, 0);
             if (err) {
                 if (directory)
                     free_clusters(entry_get_first_cluster(&entry));
-                goto create_fail;
+                goto loop_fail;
             }
             err = write_back_entry(&parent_entry, parent_entry_location.main_entry_offset, UPDATE_WRITE);
             if (err)
-                goto create_fail;
+                goto loop_fail;
             message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
-            free(msg_data);
             break;
-create_fail:
-            free(msg_data);
-            goto loop_fail;
         }
         case TAG_DELETE: {
-            // Read path from message
-            u8 *path;
-            size_t path_length;
-            err = get_message_data(msg, &path, &path_length);
-            if (err)
-                goto loop_fail;
             // Split path
             DirEntry parent_entry;
             DirEntryLocation parent_entry_location;
             size_t filename_start;
-            err = split_path(path, path_length, &parent_entry, &parent_entry_location, &filename_start, 0);
+            err = split_path(msg_data, msg_length, &parent_entry, &parent_entry_location, &filename_start, 0);
             if (err)
-                goto delete_fail;
+                goto loop_fail;
             // Get file entry
             DirEntry entry;
             DirEntryLocation location;
-            err = find_entry_in_dir(entry_get_first_cluster(&parent_entry), path + filename_start, path_length - filename_start, &entry, &location);
+            err = find_entry_in_dir(entry_get_first_cluster(&parent_entry), msg_data + filename_start, msg_length - filename_start, &entry, &location);
             if (err)
-                goto delete_fail;
+                goto loop_fail;
             // Delete entry
             err = delete_file_entry(&location);
             if (err)
-                goto delete_fail;
+                goto loop_fail;
             // Free contents
             err = free_clusters(entry_get_first_cluster(&entry));
             if (err)
-                goto delete_fail;
+                goto loop_fail;
             // Update parent entry
             err = write_back_entry(&parent_entry, parent_entry_location.main_entry_offset, UPDATE_WRITE);
             if (err)
-                goto delete_fail;
+                goto loop_fail;
             message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
-            free(path);
             break;
-delete_fail:
-            free(path);
-            goto loop_fail;
         }
         case TAG_MOVE: {
-            // Read message
-            u8 *msg_data;
-            size_t msg_data_length;
-            err = get_message_data(msg, &msg_data, &msg_data_length);
-            if (err)
-                goto loop_fail;
             // Get length of source path
-            if (msg_data_length < sizeof(size_t)) {
+            if (msg_length < sizeof(size_t)) {
                 err = ERR_INVALID_ARG;
-                goto move_fail;
+                goto loop_fail;
             }
             size_t src_path_length = *(size_t *)msg_data;
-            if (src_path_length > msg_data_length - sizeof(size_t)) {
+            if (src_path_length > msg_length - sizeof(size_t)) {
                 err = ERR_INVALID_ARG;
-                goto move_fail;
+                goto loop_fail;
             }
             // Get source and destination path from message
             u8 *src_path = msg_data + sizeof(size_t);
             u8 *dest_path = src_path + src_path_length;
-            size_t dest_path_length = msg_data_length - sizeof(size_t) - src_path_length;
+            size_t dest_path_length = msg_length - sizeof(size_t) - src_path_length;
             // Split source
             DirEntry src_parent_entry;
             DirEntryLocation src_parent_entry_location;
             size_t src_filename_start;
             err = split_path(src_path, src_path_length, &src_parent_entry, &src_parent_entry_location, &src_filename_start, 0);
             if (err)
-                goto move_fail;
+                goto loop_fail;
             // Get source entry
             DirEntry src_entry;
             DirEntryLocation src_location;
             err = find_entry_in_dir(entry_get_first_cluster(&src_parent_entry), src_path + src_filename_start, src_path_length - src_filename_start, &src_entry, &src_location);
             if (err)
-                goto move_fail;
+                goto loop_fail;
             // Split destination
             DirEntry dest_parent_entry;
             DirEntryLocation dest_parent_entry_location;
             size_t dest_filename_start;
             err = split_path(dest_path, dest_path_length, &dest_parent_entry, &dest_parent_entry_location, &dest_filename_start, entry_get_first_cluster(&src_entry));
             if (err)
-                goto move_fail;
+                goto loop_fail;
             // Create new entry in destination folder
             err = create_dir_entry(entry_get_first_cluster(&dest_parent_entry), dest_path + dest_filename_start, dest_path_length - dest_filename_start, &src_entry, src_location.main_entry_offset);
             if (err)
-                goto move_fail;
+                goto loop_fail;
             // Remove source entry
             err = delete_file_entry(&src_location);
             if (err)
-                goto move_fail;
+                goto loop_fail;
             // If the moved file is a directory, change its .. entry to point at the new parent
             if (src_entry.attr & DIR_ENTRY_ATTR_DIRECTORY) {
                 // Read second entry of the directory, which should be the .. entry
                 DirEntry dotdot_entry;
                 err = drive_read(fat_cluster_offset(entry_get_first_cluster(&src_entry)) + sizeof(DirEntry), sizeof(DirEntry), &dotdot_entry);
                 if (err)
-                    goto move_fail;
+                    goto loop_fail;
                 // Verify entry is actually the .. entry
                 if (memcmp(&dotdot_entry.name, "..         ", 11) == 0) {
                     // Change the first cluster of the entry
@@ -1540,27 +1509,23 @@ delete_fail:
                     entry_set_first_cluster(&dotdot_entry, dest_parent_first_cluster == root_cluster ? 0 : dest_parent_first_cluster);
                     err = drive_write(fat_cluster_offset(entry_get_first_cluster(&src_entry)) + sizeof(DirEntry), sizeof(DirEntry), &dotdot_entry);
                     if (err)
-                        goto move_fail;
+                        goto loop_fail;
                 }
             }
             // Update old and new parent entry
             err = write_back_entry(&src_parent_entry, src_parent_entry_location.main_entry_offset, UPDATE_WRITE);
             if (err)
-                goto move_fail;
+                goto loop_fail;
             err = write_back_entry(&dest_parent_entry, dest_parent_entry_location.main_entry_offset, UPDATE_WRITE);
             if (err)
-                goto move_fail;
-            free(msg_data);
+                goto loop_fail;
             message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
             break;
-move_fail:
-            free(msg_data);
-            goto loop_fail;
         }
         case TAG_OPEN: {
             DirEntry entry;
             DirEntryLocation location;
-            err = entry_from_path_msg(msg, &entry, &location);
+            err = entry_from_path(msg_data, msg_length, &entry, &location, 0);
             if (err)
                 goto loop_fail;
             OpenFile *open_file = malloc(sizeof(OpenFile));
@@ -1599,53 +1564,50 @@ file_read_alloc_fail:
         }
         case TAG_READ: {
             OpenFile *open_file = (OpenFile *)tag.data[1];
-            FileRange range;
-            err = message_read(msg, &(ReceiveMessage){sizeof(FileRange), &range, 0, NULL}, NULL, NULL, 0, 0);
-            if (err)
+            if (msg_length != sizeof(FileRange)) {
+                err = ERR_INVALID_ARG;
                 goto loop_fail;
+            }
+            FileRange range = *(FileRange *)msg_data;
             // Verify range falls within file size
             if (range.offset + range.length < range.offset || range.offset + range.length > open_file->entry.file_size) {
                 err = ERR_EOF;
                 goto loop_fail;
             }
-            // Skip reading if length is zero
-            if (range.length == 0)
-                goto skip_read;
+            // Allocate buffer for read data
             u8 *data_buf = malloc(range.length);
-            if (data_buf == NULL) {
+            if (range.length != 0 && data_buf == NULL) {
                 err = ERR_NO_MEMORY;
                 goto loop_fail;
             }
-            err = read_file(entry_get_first_cluster(&open_file->entry), range.offset, range.length, data_buf);
-            if (err)
-                goto loop_fail;
-skip_read:
+            // Read data from file
+            if (range.length != 0) {
+                err = read_file(entry_get_first_cluster(&open_file->entry), range.offset, range.length, data_buf);
+                if (err)
+                    goto read_fail;
+            }
             err = write_back_entry(&open_file->entry, open_file->entry_offset, UPDATE_READ);
             if (err)
-                goto loop_fail;
+                goto read_fail;
             message_reply(msg, &(SendMessage){1, &(SendMessageData){range.length, data_buf}, 0, NULL}, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
+            free(data_buf);
             break;
+read_fail:
+            free(data_buf);
+            goto loop_fail;
         }
         case TAG_WRITE: {
             OpenFile *open_file = (OpenFile *)tag.data[1];
-            u64 offset;
-            err = message_read(msg, &(ReceiveMessage){sizeof(u64), &offset, 0, NULL}, NULL, NULL, 0, FLAG_ALLOW_PARTIAL_DATA_READ);
-            if (err)
+            if (msg_length < sizeof(u64)) {
+                err = ERR_INVALID_ARG;
                 goto loop_fail;
-            MessageLength msg_length;
-            message_get_length(msg, &msg_length);
-            u64 length = msg_length.data - sizeof(u64);
+            }
+            u64 offset = *(u64 *)msg_data;
+            u64 length = msg_length - sizeof(u64);
+            u8 *write_data = msg_data + sizeof(u64);
             // Verify range falls within u32 range and offset falls within file size
             if (offset + length < offset || offset + length > UINT32_MAX || offset > open_file->entry.file_size) {
                 err = ERR_EOF;
-                goto loop_fail;
-            }
-            // Skip writing if length is zero
-            if (length == 0)
-                goto skip_write;
-            u8 *data_buf = malloc(length);
-            if (data_buf == NULL) {
-                err = ERR_NO_MEMORY;
                 goto loop_fail;
             }
             // Resize if writing past end
@@ -1654,11 +1616,12 @@ skip_read:
                 if (err)
                     goto loop_fail;
             }
-            message_read(msg, &(ReceiveMessage){length, data_buf, 0, NULL}, &(MessageLength){sizeof(u64), 0}, NULL, 0, 0);
-            err = write_file(entry_get_first_cluster(&open_file->entry), offset, length, data_buf);
-            if (err)
-                goto loop_fail;
-skip_write:
+            // Write data to file
+            if (length != 0) {
+                err = write_file(entry_get_first_cluster(&open_file->entry), offset, length, write_data);
+                if (err)
+                    goto loop_fail;
+            }
             err = write_back_entry(&open_file->entry, open_file->entry_offset, UPDATE_WRITE);
             if (err)
                 goto loop_fail;
@@ -1667,10 +1630,11 @@ skip_write:
         }
         case TAG_RESIZE: {
             OpenFile *open_file = (OpenFile *)tag.data[1];
-            u64 new_size;
-            err = message_read(msg, &(ReceiveMessage){sizeof(u64), &new_size, 0, NULL}, NULL, NULL, 0, 0);
-            if (err)
+            if (msg_length != sizeof(u64)) {
+                err = ERR_INVALID_ARG;
                 goto loop_fail;
+            }
+            u64 new_size = *(u64 *)msg_data;
             if (new_size > UINT32_MAX) {
                 err = ERR_NO_SPACE;
                 goto loop_fail;
@@ -1684,8 +1648,11 @@ skip_write:
             message_reply(msg, NULL, FLAG_FREE_MESSAGE | FLAG_REPLY_ON_FAILURE);
         }
         }
+        free(msg_data);
         continue;
 loop_fail:
+        free(msg_data);
+loop_fail_noalloc:
         message_reply_error(msg, user_error_code(err), FLAG_FREE_MESSAGE);
     }
 }
